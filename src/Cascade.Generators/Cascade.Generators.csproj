@@ -9,7 +9,7 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <Description>Cascade UI source generators — reactivity inference, localization, icon packs, diagnostics</Description>
-    <PackageId>Cascade.Generators</PackageId>
+    <PackageId>Echostorm.Cascade.Generators</PackageId>
 
     <!-- Never publish this project. It is an analyzer that runs at compile time only.
          IsPublishable=false prevents `dotnet publish` from ever trying to evaluate

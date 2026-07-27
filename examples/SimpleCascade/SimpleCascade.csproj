@@ -21,6 +21,6 @@
     <ProjectReference Include="..\..\src\Cascade.UI.Installer\Cascade.UI.Installer.csproj" />
   </ItemGroup>
 
-  <Import Project="..\..\src\Cascade.UI\build\Cascade.UI.targets" />
+  <Import Project="..\..\src\Cascade.UI\build\Echostorm.Cascade.UI.targets" />
 
 </Project>

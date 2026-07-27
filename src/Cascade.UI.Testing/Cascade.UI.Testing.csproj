@@ -6,7 +6,7 @@
     <AssemblyName>Cascade.UI.Testing</AssemblyName>
     <IsAotCompatible>true</IsAotCompatible>
     <Description>Cascade UI test harness — utilities for testing Cascade components</Description>
-    <PackageId>Cascade.UI.Testing</PackageId>
+    <PackageId>Echostorm.Cascade.UI.Testing</PackageId>
   </PropertyGroup>
 
   <ItemGroup>

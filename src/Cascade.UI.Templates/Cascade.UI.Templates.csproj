@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <PackageType>Template</PackageType>
-    <PackageId>Cascade.UI.Templates</PackageId>
+    <PackageId>Echostorm.Cascade.UI.Templates</PackageId>
     <Description>Cascade UI project templates for dotnet new</Description>
     <TargetFramework>net10.0</TargetFramework>
     <IncludeContentInPack>true</IncludeContentInPack>

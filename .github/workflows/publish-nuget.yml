@@ -4,19 +4,20 @@
 # Triggered when a version tag (v*) is pushed. Uses NuGet Trusted Publishing
 # (GitHub Actions OIDC) — no API key stored in the repo. Same pattern as SharpImage.
 #
-# Publishes three packages, all at the tag version:
-#   • Cascade.UI            — the framework (depends on the Echostorm.Etch package)
-#   • Cascade.UI.Templates  — `dotnet new` project templates (content-only)
-#   • Cascade.UI.Tools      — the `cascade` CLI (dotnet tool)
+# Publishes three packages, all at the tag version (IDs live under the reserved Echostorm.*
+# prefix — the assemblies/namespaces stay Cascade.UI, exactly like Echostorm.Etch ships Etch.*):
+#   • Echostorm.Cascade.UI            — the framework (depends on the Echostorm.Etch package)
+#   • Echostorm.Cascade.UI.Templates  — `dotnet new` project templates (content-only)
+#   • Echostorm.Cascade.UI.Tools      — the `cascade` CLI (dotnet tool)
 #
-# Prerequisite — a NuGet Trusted Publishing policy is per-package, so create ONE for EACH
-# of the three package IDs above on nuget.org, all with the same coordinates:
+# Prerequisite — NuGet Trusted Publishing must authorize this repo/workflow to push these
+# Echostorm.Cascade.* IDs (same coordinates as the working Echostorm.Etch policy):
 #   Repository Owner  : Echostorm44
 #   Repository        : CascadeUI
 #   Workflow File     : publish-nuget.yml
 #   Environment       : nuget-publish
-# The OIDC login mints one temporary key scoped to whichever policies exist; a package
-# without a matching policy is rejected (403), so all three policies must be present.
+# A push for a package the policy doesn't cover is rejected — and this workflow no longer
+# passes --skip-duplicate, so that rejection fails the job instead of looking green.
 #
 # UseEtchPackage=true swaps Cascade.UI's local Etch *source* project references for a
 # dependency on the published Echostorm.Etch package — the CI runner has no Etch source
@@ -83,8 +84,10 @@ jobs:
         with:
           user: Echostorm
 
+      # No --skip-duplicate: a rejected push (e.g. an ID not under our reserved Echostorm
+      # prefix, or a genuine duplicate version) must FAIL the job loudly, not be masked as green.
       - name: Push to NuGet.org
-        run: dotnet nuget push ./artifacts/*.nupkg --api-key ${{ steps.nuget-login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+        run: dotnet nuget push ./artifacts/*.nupkg --api-key ${{ steps.nuget-login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json
 
       - name: Upload package artifacts
         uses: actions/upload-artifact@v4

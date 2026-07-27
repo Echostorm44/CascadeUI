@@ -10,7 +10,7 @@
          APIs guarded at runtime; the platform analyzer can't see those guards. -->
     <NoWarn>$(NoWarn);CA1416</NoWarn>
     <Description>Cascade UI — cross-platform, GPU-rendered, NativeAOT-first UI framework for .NET</Description>
-    <PackageId>Cascade.UI</PackageId>
+    <PackageId>Echostorm.Cascade.UI</PackageId>
     <Authors>Cascade UI Contributors</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <!-- NUGET-001: initial packaging. Version is a placeholder pre-1.0 alpha; a real

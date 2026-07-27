@@ -10,6 +10,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Cascade.UI\Cascade.UI.csproj" />
-  </ItemGroup>  <Import Project="..\..\src\Cascade.UI\build\Cascade.UI.targets" />
+  </ItemGroup>  <Import Project="..\..\src\Cascade.UI\build\Echostorm.Cascade.UI.targets" />
 
 </Project>

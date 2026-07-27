@@ -9,7 +9,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>cascade</ToolCommandName>
     <Description>Cascade UI CLI tool — cascade watch, cascade doctor, cascade new</Description>
-    <PackageId>Cascade.UI.Tools</PackageId>
+    <PackageId>Echostorm.Cascade.UI.Tools</PackageId>
     <!-- CLI help text is correctly hardcoded — not localizable -->
     <!-- CS0619: EmitBaseline.CreateInitialBaseline overloads deprecated without replacement in .NET 10 Roslyn -->
     <NoWarn>$(NoWarn);CA1303;CS0619</NoWarn>

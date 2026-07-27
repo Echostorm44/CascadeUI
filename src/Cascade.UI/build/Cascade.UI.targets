@@ -1,0 +1,273 @@
+<!-- Cascade.UI.targets — emits CascadeApi.generated.md and prints MCP reminder -->
+<Project>
+
+  <!--
+    Give every Cascade WinExe a Per-Monitor-V2 DPI manifest unless it supplies its
+    own. Without an OS-level manifest, a DPI-unaware launcher can lock the process's
+    awareness before managed code runs, so the runtime SetProcessDpiAwarenessContext
+    call no-ops and the window is rendered at logical size then bitmap-stretched by
+    the OS on a scaled display (blurry/blocky controls). See Cascade.UI.app.manifest.
+  -->
+  <PropertyGroup Condition="'$(OutputType)' == 'WinExe' and '$(ApplicationManifest)' == ''">
+    <ApplicationManifest>$(MSBuildThisFileDirectory)Cascade.UI.app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <!--
+    NUGET-001: deliver the bundled Inter fonts to a package consumer's output (Fonts/, where
+    the framework loads them). Only fires for NuGet consumers, where build/assets/ ships inside
+    the package (the Exists guard is false for the framework's own in-repo build, which gets the
+    fonts via the Fonts <Content> items). Native binaries are NOT Cascade.UI's concern — they
+    come from the Echostorm.Etch dependency's own build targets.
+  -->
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)assets')">
+    <None Include="$(MSBuildThisFileDirectory)assets\Fonts\*.ttf">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>Fonts\%(Filename)%(Extension)</Link>
+      <Visible>false</Visible>
+    </None>
+  </ItemGroup>
+
+  <!--
+    Runs after Compile to:
+    1. Write obj/CascadeApi.generated.md (MCP instructions + API index if available)
+    2. Print a build message reminding about MCP dev tools
+    3. Detect running instance via shared memory for dynamic connection info
+  -->
+  <Target Name="CascadeEmitApiIndex" AfterTargets="Compile">
+
+    <CascadeWriteApiMd
+      OutputFile="$(IntermediateOutputPath)CascadeApi.generated.md"
+      AssemblyName="$(AssemblyName)"
+      GeneratedDir="$(IntermediateOutputPath)generated" />
+
+  </Target>
+
+  <UsingTask TaskName="CascadeWriteApiMd" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <OutputFile ParameterType="System.String" Required="true" />
+      <AssemblyName ParameterType="System.String" Required="true" />
+      <GeneratedDir ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Code Type="Fragment" Language="cs">
+<![CDATA[
+// ── Detect running instance via shared memory ──
+string instancePort = "";
+string instancePid = "";
+string instanceTitle = "";
+bool instanceRunning = false;
+
+try
+{
+    string mmfName = "Cascade-" + AssemblyName;
+    using (var mmf = System.IO.MemoryMappedFiles.MemoryMappedFile.OpenExisting(mmfName))
+    {
+        bool mutexAcquired = false;
+        var mutex = new System.Threading.Mutex(false, mmfName + "-Lock");
+        try
+        {
+            mutexAcquired = mutex.WaitOne(100);
+            using (var accessor = mmf.CreateViewAccessor())
+            {
+                byte[] lenBytes = new byte[4];
+                accessor.ReadArray(0, lenBytes, 0, 4);
+                int jsonLen = System.BitConverter.ToInt32(lenBytes, 0);
+                if (jsonLen > 0 && jsonLen < 65536)
+                {
+                    byte[] jsonBytes = new byte[jsonLen];
+                    accessor.ReadArray(4, jsonBytes, 0, jsonLen);
+                    string json = System.Text.Encoding.UTF8.GetString(jsonBytes);
+                    // Simple JSON parsing — extract first port and pid
+                    // Property names are camelCase in the JSON
+                    int portIdx = json.IndexOf("\"port\":");
+                    if (portIdx >= 0)
+                    {
+                        int start = portIdx + 7;
+                        int end = json.IndexOfAny(new char[] { ',', '}' }, start);
+                        if (end > start)
+                        {
+                            instancePort = json.Substring(start, end - start).Trim();
+                        }
+                    }
+                    int pidIdx = json.IndexOf("\"pid\":");
+                    if (pidIdx >= 0)
+                    {
+                        int start = pidIdx + 6;
+                        int end = json.IndexOfAny(new char[] { ',', '}' }, start);
+                        if (end > start)
+                        {
+                            instancePid = json.Substring(start, end - start).Trim();
+                        }
+                    }
+                    int titleIdx = json.IndexOf("\"title\":\"");
+                    if (titleIdx >= 0)
+                    {
+                        int start = titleIdx + 9;
+                        int end = json.IndexOf("\"", start);
+                        if (end > start)
+                        {
+                            instanceTitle = json.Substring(start, end - start);
+                        }
+                    }
+                    instanceRunning = instancePort.Length > 0;
+                }
+            }
+        }
+        finally
+        {
+            if (mutexAcquired) mutex.ReleaseMutex();
+            mutex.Dispose();
+        }
+    }
+}
+catch
+{
+    // Shared memory doesn't exist or can't be read — app not running
+}
+
+// ── Build message ──
+string mcpStatus;
+if (instanceRunning)
+{
+    mcpStatus = "MCP active: localhost:" + instancePort + " (PID " + instancePid + ")";
+}
+else
+{
+    mcpStatus = "MCP: run " + AssemblyName + " --mcp | CLI: cascade mcp tree";
+}
+
+Log.LogMessage(
+    MessageImportance.High,
+    "Cascade UI: API index -> " + OutputFile + " | " + mcpStatus);
+
+// ── Generate CascadeApi.generated.md ──
+var sb = new System.Text.StringBuilder();
+
+// Section 1: MCP Dev Tools (most important for agents)
+sb.AppendLine("# Cascade UI — AI Agent Quick Reference");
+sb.AppendLine();
+sb.AppendLine("## MCP Dev Tools (Primary Interface)");
+sb.AppendLine();
+sb.AppendLine("The MCP server provides **26+ live inspection, interaction, and debugging tools**.");
+sb.AppendLine("This is the primary way AI agents should interact with running Cascade applications.");
+sb.AppendLine();
+sb.AppendLine("### Connection");
+sb.AppendLine();
+sb.AppendLine("```");
+sb.AppendLine(AssemblyName + " --mcp          # stdio MCP proxy (always works — headless fallback)");
+sb.AppendLine("```");
+sb.AppendLine();
+
+if (instanceRunning)
+{
+    sb.AppendLine("**Instance currently running:** localhost:" + instancePort + " (PID " + instancePid + ", " + instanceTitle + ")");
+    sb.AppendLine();
+}
+
+sb.AppendLine("The `--mcp` proxy runs in **headless mode** when no GUI instance is running.");
+sb.AppendLine("It provides tool schemas, prompts, and API index immediately, then **hot-switches**");
+sb.AppendLine("to the live instance when the app starts. Agents never need to wait.");
+sb.AppendLine();
+
+sb.AppendLine("### CLI Convenience Commands");
+sb.AppendLine();
+sb.AppendLine("For one-shot operations without a persistent MCP session:");
+sb.AppendLine();
+sb.AppendLine("```");
+sb.AppendLine("cascade mcp info                         # Show running instance");
+sb.AppendLine("cascade mcp tree --depth 3               # Component tree");
+sb.AppendLine("cascade mcp screenshot -o capture.png    # Save screenshot");
+sb.AppendLine("cascade mcp find Submit --by label       # Search nodes");
+sb.AppendLine("cascade mcp click Button:0               # Simulate click");
+sb.AppendLine("cascade mcp inspect Button:0             # Full node details");
+sb.AppendLine("cascade mcp scroll --delta-y -200        # Scroll viewport");
+sb.AppendLine("cascade mcp accessibility --validate     # WCAG audit");
+sb.AppendLine("```");
+sb.AppendLine();
+
+sb.AppendLine("### Key MCP Tools");
+sb.AppendLine();
+sb.AppendLine("| Tool | Purpose |");
+sb.AppendLine("|------|---------|");
+sb.AppendLine("| `cascade_tree` | Component tree with bounds |");
+sb.AppendLine("| `cascade_screenshot` | Visual capture (base64 PNG) |");
+sb.AppendLine("| `cascade_inspect_node` | Bounds, theme, signals, render stats |");
+sb.AppendLine("| `cascade_find_nodes` | Search by role, label, component |");
+sb.AppendLine("| `cascade_simulate_interaction` | click, hover, focus, blur |");
+sb.AppendLine("| `cascade_scroll` | Scroll by delta or to node |");
+sb.AppendLine("| `cascade_send_keys` | Type text, key combinations |");
+sb.AppendLine("| `cascade_get_signals` | Reactive state values |");
+sb.AppendLine("| `cascade_accessibility_tree` | A11y tree (works in release) |");
+sb.AppendLine("| `cascade_validate_accessibility` | WCAG violation audit |");
+sb.AppendLine("| `cascade_pixel_sample` | RGB at point or region |");
+sb.AppendLine("| `cascade_api_index` | Full API reference |");
+sb.AppendLine();
+
+// Section 2: Framework Prompts
+sb.AppendLine("## Framework Prompts");
+sb.AppendLine();
+sb.AppendLine("Use `prompts/get` with these guided debugging workflows:");
+sb.AppendLine();
+sb.AppendLine("| Prompt | When To Use |");
+sb.AppendLine("|--------|-------------|");
+sb.AppendLine("| `cascade-debug-rerenders` | Excessive re-renders |");
+sb.AppendLine("| `cascade-why-disabled` | Control unexpectedly disabled |");
+sb.AppendLine("| `cascade-accessibility-audit` | WCAG compliance check |");
+sb.AppendLine("| `cascade-explain-state` | Understand reactive signal state |");
+sb.AppendLine("| `cascade-layout-debug` | Layout overflow or sizing |");
+sb.AppendLine("| `cascade-signal-trace` | Trace signal dependency chains |");
+sb.AppendLine();
+
+// Section 3: API Index content
+string apiContent = "";
+
+string generatedFile = System.IO.Path.Combine(
+    GeneratedDir,
+    "Cascade.Generators",
+    "Cascade.Generators.ApiIndexGenerator",
+    "CascadeApiIndex.g.cs");
+
+if (System.IO.File.Exists(generatedFile))
+{
+    try
+    {
+        string source = System.IO.File.ReadAllText(generatedFile);
+        int startMarker = source.IndexOf("Content = @\"");
+        if (startMarker >= 0)
+        {
+            startMarker += "Content = @\"".Length;
+            int endMarker = source.LastIndexOf("\";");
+            if (endMarker > startMarker)
+            {
+                apiContent = source.Substring(startMarker, endMarker - startMarker);
+                apiContent = apiContent.Replace("\"\"", "\"");
+            }
+        }
+    }
+    catch (System.Exception ex)
+    {
+        Log.LogMessage(MessageImportance.Normal, "Cascade UI: Could not read API index: " + ex.Message);
+    }
+}
+
+if (apiContent.Length > 0)
+{
+    sb.AppendLine("## API Index");
+    sb.AppendLine();
+    sb.AppendLine(apiContent);
+}
+else
+{
+    sb.AppendLine("## API Index");
+    sb.AppendLine();
+    sb.AppendLine("The full API index is available via MCP. Call `cascade_api_index` for the complete reference.");
+    sb.AppendLine();
+}
+
+System.IO.File.WriteAllText(OutputFile, sb.ToString());
+]]>
+      </Code>
+    </Task>
+  </UsingTask>
+
+</Project>

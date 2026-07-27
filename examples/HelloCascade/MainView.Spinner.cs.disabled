@@ -1,0 +1,21 @@
+using Cascade.UI;
+
+namespace HelloCascade;
+
+/// <summary>
+/// AOT bisection: Spinner scenario (continuous animation).
+/// </summary>
+internal sealed class MainView : Component
+{
+    protected override Node Render()
+    {
+        return new Center(
+            child: new Column(
+                spacing: 16,
+                children: [
+                    new Spinner()
+                ]
+            )
+        );
+    }
+}

@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>CascadeLib</RootNamespace>
+    <IsAotCompatible>true</IsAotCompatible>
+    <Description>A Cascade UI shared library.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Cascade.UI" Version="0.1.*" />
+  </ItemGroup>
+
+</Project>

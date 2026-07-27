@@ -1,0 +1,53 @@
+# Build outputs
+bin/
+obj/
+publish/
+perf-runs/
+
+# NuGet
+*.nupkg
+nupkgs/
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# Rider
+*.sln.iml
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Rust
+native/cascade-vello/target/
+
+# Test results
+TestResults/
+*.trx
+coverage/
+*.ps1
+*.pid
+
+# Secrets — never commit
+*.env
+credentials.json
+appsettings.*.json
+!appsettings.json
+
+# Logs
+*.log
+debug-logs/
+
+# WP-3533 regenerable text-weight sample artifacts (run TextWeightSampleGenerator)
+Documents/
+AGENTS.md
+Status.md
+opencode.json
+.claude/
+# Benchmark output
+BenchmarkDotNet.Artifacts/

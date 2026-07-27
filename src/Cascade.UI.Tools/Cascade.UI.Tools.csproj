@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Cascade.UI.Tools</RootNamespace>
+    <AssemblyName>cascade</AssemblyName>
+    <IsAotCompatible>true</IsAotCompatible>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>cascade</ToolCommandName>
+    <Description>Cascade UI CLI tool — cascade watch, cascade doctor, cascade new</Description>
+    <PackageId>Cascade.UI.Tools</PackageId>
+    <!-- CLI help text is correctly hardcoded — not localizable -->
+    <!-- CS0619: EmitBaseline.CreateInitialBaseline overloads deprecated without replacement in .NET 10 Roslyn -->
+    <NoWarn>$(NoWarn);CA1303;CS0619</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.9.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cascade.UI\Cascade.UI.csproj" />
+    <ProjectReference Include="..\Cascade.UI.Updater.Core\Cascade.UI.Updater.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Cascade.UI.Tests" />
+  </ItemGroup>
+
+</Project>

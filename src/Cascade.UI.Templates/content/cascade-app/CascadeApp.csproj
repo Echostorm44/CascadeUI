@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AppId>cascade-app</AppId>
+    <AppDisplayName>CascadeApp</AppDisplayName>
+    <AppVersion>1.0.0</AppVersion>
+<!--#if (EnableAot) -->
+    <PublishAot>true</PublishAot>
+<!--#endif -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Cascade.UI" Version="1.0.0" />
+  </ItemGroup>
+</Project>

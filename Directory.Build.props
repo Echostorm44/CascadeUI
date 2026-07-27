@@ -1,0 +1,19 @@
+<Project>
+  <PropertyGroup>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <AnalysisLevel>latest-all</AnalysisLevel>
+    <!-- Two benign build-tooling warnings that must not fail CI's `-warnaserror` (they are not
+         code issues, and code warnings are still errors via TreatWarningsAsErrors above):
+         MSB3277 — an assembly-version conflict (Microsoft.CodeAnalysis 4.9 vs 5.3) inherent to
+           hosting a netstandard2.0 source generator (Cascade.Generators must target an older
+           Roslyn than the SDK); the generator works correctly.
+         ICU4N_IDE_0002 — an ICU4N advisory that it cannot locate NuGet.Build.Tasks.Pack to verify
+           3-letter-language satellite support; the SDK in use is newer than the 9.0.200 it
+           suggests, so the warning is a false positive. -->
+    <MSBuildWarningsNotAsErrors>MSB3277;ICU4N_IDE_0002</MSBuildWarningsNotAsErrors>
+  </PropertyGroup>
+</Project>

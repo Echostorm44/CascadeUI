@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "Cascade UI",
+  "classifications": [ "Desktop", "UI", "Cascade" ],
+  "identity": "Cascade.UI.Control",
+  "name": "Cascade Control",
+  "shortName": "cascade-control",
+  "description": "A reusable Cascade UI control (Node subclass) with fluent extensions.",
+  "tags": {
+    "language": "C#",
+    "type": "item"
+  },
+  "sourceName": "CascadeControl",
+  "symbols": {
+    "namespace": {
+      "type": "parameter",
+      "datatype": "string",
+      "defaultValue": "MyApp.Controls",
+      "description": "The namespace for the control.",
+      "replaces": "CascadeControl.Namespace"
+    }
+  },
+  "primaryOutputs": [
+    { "path": "CascadeControl.cs" }
+  ]
+}

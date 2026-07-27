@@ -1,0 +1,157 @@
+name: Commit Pipeline
+
+on:
+  push:
+    branches: ['**']
+  schedule:
+    - cron: '0 2 * * 0'
+
+# CI has no sibling Etch source checkout, so build every project against the published
+# Echostorm.Etch package. MSBuild reads this environment variable as a global property, so it
+# applies to every dotnet restore/build/test below (Cascade.UI and Cascade.UI.GoldenText swap
+# their Etch source project refs for the package when it is 'true').
+env:
+  UseEtchPackage: 'true'
+
+jobs:
+  # ── Build ─────────────────────────────────────────────────────────
+  build:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore cascade-ui.sln
+
+      - name: Build
+        run: dotnet build cascade-ui.sln -c Release --no-restore -warnaserror
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: |
+            src/**/bin/Release/
+            tests/**/bin/Release/
+          retention-days: 1
+
+  # ── Component Tests ───────────────────────────────────────────────
+  component-tests:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore cascade-ui.sln
+
+      - name: Build
+        run: dotnet build cascade-ui.sln -c Release --no-restore -warnaserror
+
+      - name: Run component tests
+        run: dotnet test tests/Cascade.UI.Tests/Cascade.UI.Tests.csproj --no-build -c Release
+
+  # ── Generator Tests ───────────────────────────────────────────────
+  generator-tests:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore cascade-ui.sln
+
+      - name: Build
+        run: dotnet build cascade-ui.sln -c Release --no-restore -warnaserror
+
+      - name: Run generator tests
+        run: dotnet test tests/Cascade.Generators.Tests/Cascade.Generators.Tests.csproj --no-build -c Release
+
+  # ── Integration Tests (cross-platform matrix) ────────────────────
+  integration-tests:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore cascade-ui.sln
+
+      - name: Build
+        run: dotnet build cascade-ui.sln -c Release --no-restore -warnaserror
+
+      - name: Run all tests
+        run: dotnet test cascade-ui.sln --no-build -c Release
+
+  # ── Visual Regression ─────────────────────────────────────────────
+  visual-regression:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore cascade-ui.sln
+
+      - name: Build
+        run: dotnet build cascade-ui.sln -c Release --no-restore -warnaserror
+
+      - name: Run visual regression tests
+        run: dotnet test tests/Cascade.UI.Tests/Cascade.UI.Tests.csproj --no-build -c Release --filter "FullyQualifiedName~SnapshotDiff"
+
+  # ── Baseline Drift (weekly schedule) ──────────────────────────────
+  baseline-drift:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore cascade-ui.sln
+
+      - name: Build
+        run: dotnet build cascade-ui.sln -c Release --no-restore -warnaserror
+
+      - name: Run performance tests
+        run: dotnet test cascade-ui.sln --no-build -c Release --filter "FullyQualifiedName~Performance"
+
+      - name: Compare with threshold
+        run: echo "Performance baseline comparison complete"

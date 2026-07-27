@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "Cascade UI",
+  "classifications": [ "Desktop", "UI", "Cascade" ],
+  "identity": "Cascade.UI.Window",
+  "name": "Cascade Window",
+  "shortName": "cascade-window",
+  "description": "A Cascade UI component to use as a standalone window.",
+  "tags": {
+    "language": "C#",
+    "type": "item"
+  },
+  "sourceName": "CascadeWindow",
+  "symbols": {
+    "namespace": {
+      "type": "parameter",
+      "datatype": "string",
+      "defaultValue": "MyApp",
+      "description": "The namespace for the window.",
+      "replaces": "CascadeWindow.Namespace"
+    }
+  },
+  "primaryOutputs": [
+    { "path": "CascadeWindow.cs" }
+  ]
+}

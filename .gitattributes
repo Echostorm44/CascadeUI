@@ -1,0 +1,35 @@
+# Authoritative line-ending policy for this repository.
+#
+# This file — not anyone's local `core.autocrlf` — decides line endings. It is
+# versioned and travels with the repo, so every machine, editor, and CI agent
+# gets the same result. (Machine settings don't travel, which is why CRLF/LF
+# churn kept coming back.)
+#
+# Policy: text is stored and checked out as LF on every platform. After this
+# lands, a one-time `git add --renormalize .` converts existing files; from then
+# on it is never a question again.
+
+# Default: auto-detect text vs binary; normalize text to LF everywhere.
+* text=auto eol=lf
+
+# Windows batch files must stay CRLF or they can misbehave.
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# Binary assets — never touch their bytes.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.bmp   binary
+*.ttf   binary
+*.otf   binary
+*.woff  binary
+*.woff2 binary
+*.dll   binary
+*.exe   binary
+*.pdb   binary
+*.zip   binary
+*.gz    binary
+*.snk   binary

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://github.com/anomalyco/cascade-cli/releases/latest/download/cascade.schema.json",
+  "proxy": {
+    "command": "tools/bin/cascade-mcp/cascade-mcp.exe",
+    "args": [
+      "--app",
+      "HelloCascade"
+    ],
+    "workingDirectory": "F:/Code/CascadeUI",
+    "outputPath": "bin/MCPDebug"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "app.title": "CascadeApp",
+  "app.greeting": "Hello, {0}!",
+  "app.namePrompt": "What is your name?",
+  "app.submit": "Say Hello",
+  "app.reset": "Reset"
+}

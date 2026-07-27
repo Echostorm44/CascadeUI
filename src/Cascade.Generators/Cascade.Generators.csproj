@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>Cascade.Generators</RootNamespace>
+    <AssemblyName>Cascade.Generators</AssemblyName>
+    <IsRoslynComponent>true</IsRoslynComponent>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <Description>Cascade UI source generators — reactivity inference, localization, icon packs, diagnostics</Description>
+    <PackageId>Cascade.Generators</PackageId>
+
+    <!-- Never publish this project. It is an analyzer that runs at compile time only.
+         IsPublishable=false prevents `dotnet publish` from ever trying to evaluate
+         AOT/trim compatibility on this project, belt-and-braces alongside the
+         UndefineProperties on the consuming ProjectReference. -->
+    <IsPublishable>false</IsPublishable>
+    <PublishAot>false</PublishAot>
+
+    <!-- Source generators must target netstandard2.0 for Roslyn compatibility.
+         Suppress warnings about APIs unavailable in netstandard2.0 that we
+         polyfill or avoid. -->
+    <NoWarn>$(NoWarn);NU5128;RS2008</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" Version="3.3.4">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.12.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Cascade.Generators.Tests" />
+  </ItemGroup>
+
+</Project>

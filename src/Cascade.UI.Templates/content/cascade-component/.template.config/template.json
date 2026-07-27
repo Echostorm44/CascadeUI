@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "Cascade UI",
+  "classifications": [ "Desktop", "UI", "Cascade" ],
+  "identity": "Cascade.UI.Component",
+  "name": "Cascade Component",
+  "shortName": "cascade-component",
+  "description": "A Cascade UI component with a Render() method.",
+  "tags": {
+    "language": "C#",
+    "type": "item"
+  },
+  "sourceName": "CascadeComponent",
+  "symbols": {
+    "namespace": {
+      "type": "parameter",
+      "datatype": "string",
+      "defaultValue": "MyApp.Components",
+      "description": "The namespace for the component.",
+      "replaces": "CascadeComponent.Namespace"
+    }
+  },
+  "primaryOutputs": [
+    { "path": "CascadeComponent.cs" }
+  ]
+}

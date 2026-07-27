@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Cascade.UI.Updater.Shim</RootNamespace>
+    <AssemblyName>cascade-update</AssemblyName>
+    <IsAotCompatible>true</IsAotCompatible>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Kept tiny on purpose: references only the zero-dependency updater core. -->
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Cascade.UI.Updater.Core\Cascade.UI.Updater.Core.csproj" />
+  </ItemGroup>
+</Project>

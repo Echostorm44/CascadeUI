@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Cascade.UI.GoldenText</RootNamespace>
+    <AssemblyName>Cascade.UI.GoldenText</AssemblyName>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="TUnit" Version="0.6.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Junction probes drive the production glyph rasterization path
+         (EtchBackend.GetOrCreateFontFace → GlyphRasterizer) headlessly. WP-3530
+         merged the Etch backend into Cascade.UI, so reference core directly. -->
+    <ProjectReference Include="..\..\src\Cascade.UI\Cascade.UI.csproj" />
+    <!-- PixelDiff / ImageReader / ImageWriter / PixelDiffPngWriter.
+         Mirrors Cascade.UI: local Etch source ref for dev, the published Echostorm.Etch
+         package (which bundles Etch.Testing) when UseEtchPackage=true — CI has no Etch checkout. -->
+    <ProjectReference Include="..\..\..\Etch\src\Etch.Testing\Etch.Testing.csproj" Condition="'$(UseEtchPackage)' != 'true'" />
+    <PackageReference Include="Echostorm.Etch" Version="0.1.0-alpha.5" Condition="'$(UseEtchPackage)' == 'true'" />
+    <!-- Build-order dependencies only: the golden tests launch these as
+         external processes (real CLI exe, real specimen app). -->
+    <ProjectReference Include="..\..\src\Cascade.UI.Tools\Cascade.UI.Tools.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\Cascade.UI.GoldenTextFixture\Cascade.UI.GoldenTextFixture.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>

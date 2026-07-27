@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "Cascade UI",
+  "classifications": [ "Desktop", "UI", "Cascade" ],
+  "identity": "Cascade.UI.AiSurface",
+  "name": "Cascade AI Surface",
+  "shortName": "cascade-ai-surface",
+  "description": "An AI-accessible Cascade UI surface with tools and context for AI agents.",
+  "tags": {
+    "language": "C#",
+    "type": "item"
+  },
+  "sourceName": "CascadeAiSurface",
+  "symbols": {
+    "namespace": {
+      "type": "parameter",
+      "datatype": "string",
+      "defaultValue": "MyApp.Surfaces",
+      "description": "The namespace for the AI surface.",
+      "replaces": "CascadeAiSurface.Namespace"
+    }
+  },
+  "primaryOutputs": [
+    { "path": "CascadeAiSurface.cs" }
+  ]
+}

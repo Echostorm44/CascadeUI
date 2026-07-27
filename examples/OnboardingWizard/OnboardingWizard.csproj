@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>OnboardingWizard</AssemblyName>
+    <RootNamespace>OnboardingWizard</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Cascade.UI\Cascade.UI.csproj" />
+  </ItemGroup>  <Import Project="..\..\src\Cascade.UI\build\Cascade.UI.targets" />
+
+</Project>

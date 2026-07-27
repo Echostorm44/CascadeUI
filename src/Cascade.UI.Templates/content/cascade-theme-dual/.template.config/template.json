@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "Cascade UI",
+  "classifications": [ "Desktop", "UI", "Cascade" ],
+  "identity": "Cascade.UI.Theme.Dual",
+  "name": "Cascade Theme (Dual Mode)",
+  "shortName": "cascade-theme-dual",
+  "description": "A dual-mode Cascade UI theme with light and dark color sets.",
+  "tags": {
+    "language": "C#",
+    "type": "item"
+  },
+  "sourceName": "CascadeThemeDual",
+  "symbols": {
+    "namespace": {
+      "type": "parameter",
+      "datatype": "string",
+      "defaultValue": "MyApp.Themes",
+      "description": "The namespace for the theme.",
+      "replaces": "CascadeThemeDual.Namespace"
+    }
+  },
+  "primaryOutputs": [
+    { "path": "CascadeThemeDual.cs" }
+  ]
+}

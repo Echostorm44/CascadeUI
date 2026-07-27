@@ -54,12 +54,12 @@ public class PrWorkflowTests
     }
 
     [Test]
-    public async Task PrYml_ContainsPlatformMatrix()
+    public async Task PrYml_ContainsWindowsMatrix()
     {
+        // CI is Windows-only for now (Cascade.UI is Windows-first); revisit ubuntu/macOS
+        // when the framework supports them.
         await Assert.That(workflowContent.Contains("matrix", StringComparison.Ordinal)).IsTrue();
-        await Assert.That(workflowContent.Contains("ubuntu-latest", StringComparison.Ordinal)).IsTrue();
         await Assert.That(workflowContent.Contains("windows-latest", StringComparison.Ordinal)).IsTrue();
-        await Assert.That(workflowContent.Contains("macos-latest", StringComparison.Ordinal)).IsTrue();
     }
 
     private static string FindRepoRoot()

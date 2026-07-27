@@ -7,7 +7,7 @@ namespace CascadeAiSurface.Namespace;
 /// The [AiSurface] attribute makes this component discoverable via MCP.
 /// </summary>
 [AiSurface("CascadeAiSurface provides an AI-accessible interface for managing application data and user interactions.")]
-public class CascadeAiSurface : Component
+public partial class CascadeAiSurface : Component
 {
     private string query = "";
 
@@ -26,7 +26,7 @@ public class CascadeAiSurface : Component
             children: new Node[]
             {
                 TextInput(
-                    value: Bind(query),
+                    value: Bind(query, v => query = v),
                     label:  "Search",
                     placeholder: "Enter search query..."
                 ),

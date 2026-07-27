@@ -201,11 +201,6 @@ internal sealed partial class EventSchedulerPage : Component
     string newPassword = "";
     string newPin = "";
 
-    Bindable<T> Bind<T>(T value, Action<T> setter)
-    {
-        return new Bindable<T>(value, v => { setter(v); Invalidate(); });
-    }
-
     protected override Node Render()
     {
 #pragma warning disable CA2000 // Nodes are disposed by the framework

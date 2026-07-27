@@ -5,7 +5,7 @@ namespace CascadeApp;
 /// <summary>
 /// A minimal counter demonstrating reactive state.
 /// </summary>
-public class CounterPage : Component
+public partial class CounterPage : Component
 {
     private int count;
 

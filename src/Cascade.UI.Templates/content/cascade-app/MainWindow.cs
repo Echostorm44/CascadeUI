@@ -2,7 +2,7 @@ using Cascade.UI;
 
 namespace CascadeApp;
 
-public class MainWindow : Component
+public partial class MainWindow : Component
 {
 //#if (UseSample)
     protected override Node Render() => new SamplePage();

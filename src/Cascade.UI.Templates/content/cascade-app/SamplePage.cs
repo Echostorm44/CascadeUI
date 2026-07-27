@@ -6,7 +6,7 @@ namespace CascadeApp;
 /// A sample page demonstrating reactive state, two-way binding,
 /// and basic Cascade UI patterns.
 /// </summary>
-public class SamplePage : Component
+public partial class SamplePage : Component
 {
     private string name = "";
     private bool submitted;
@@ -33,7 +33,7 @@ public class SamplePage : Component
             [
                 new Label("What is your name?")
                     .FontSize(18),
-                new TextInput(Bind(ref name))
+                new TextInput(Bind(name, v => name = v))
                     .Placeholder("Enter your name"),
                 new Button("Say Hello", () => { submitted = true; })
                     .Disabled(name.Length == 0)

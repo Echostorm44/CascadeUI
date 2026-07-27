@@ -105,12 +105,6 @@ internal sealed class SettingsPage : Component
     private int  cacheLimitMb  = 512;
     private bool developerMode;
 
-    // ── Helpers ──
-    private Bindable<T> Bind<T>(T value, Action<T> setter)
-    {
-        return new Bindable<T>(value, v => { setter(v); Invalidate(); });
-    }
-
     protected override Node Render()
     {
         return new SplitView(

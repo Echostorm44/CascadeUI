@@ -181,6 +181,20 @@ public abstract class Component : Node, IDisposable
     }
 
     /// <summary>
+    /// Creates a two-way <see cref="Bindable{T}"/> for a control's <c>value:</c> parameter.
+    /// Pass the field's current value and a setter; the setter runs and then the component
+    /// re-renders automatically:
+    /// <code>
+    /// new TextInput(Bind(name, v => name = v))
+    /// </code>
+    /// </summary>
+    protected Bindable<T> Bind<T>(T value, Action<T> setter)
+    {
+        ArgumentNullException.ThrowIfNull(setter);
+        return new Bindable<T>(value, v => { setter(v); Invalidate(); });
+    }
+
+    /// <summary>
     /// Invokes the <see cref="Render"/> method. Called by <see cref="ComponentHost"/>.
     /// </summary>
     internal Node InvokeRender()

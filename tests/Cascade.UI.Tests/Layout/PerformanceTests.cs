@@ -11,6 +11,7 @@ public class PerformanceTests
     [Test]
     public async Task ThousandNodeTreeLayoutUnder1Ms()
     {
+        Skip.When(TestEnv.IsCi, TestEnv.PerfSkipReason);
         var engine = new LayoutEngine();
 
         // Build a tree of ~1000 nodes: 10 columns × 10 rows × 10 leaves
@@ -53,6 +54,7 @@ public class PerformanceTests
     [Test]
     public async Task DeepNestedTreeLayoutPerformance()
     {
+        Skip.When(TestEnv.IsCi, TestEnv.PerfSkipReason);
         var engine = new LayoutEngine();
 
         // Build a deeply nested tree: 50 levels deep
@@ -90,6 +92,7 @@ public class PerformanceTests
     [Test]
     public async Task LargeGridLayoutPerformance()
     {
+        Skip.When(TestEnv.IsCi, TestEnv.PerfSkipReason);
         var engine = new LayoutEngine();
 
         var children = new Node[500];

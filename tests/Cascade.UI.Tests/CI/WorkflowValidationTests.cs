@@ -71,24 +71,16 @@ public class WorkflowValidationTests
     }
 
     [Test]
-    public async Task CommitWorkflow_ContainsIntegrationTestsJob()
+    public async Task CommitWorkflow_RunsOnWindows()
     {
         string content = GetWorkflowContent();
 
+        // CI is Windows-only: Cascade.UI is Windows-first (Win32 platform layer, Windows
+        // installer). The headless-safe unit tests run here; the E2E GUI suites (GoldenText/
+        // Integration/McpBridge) need a desktop and run off-CI, so there is no whole-solution
+        // integration-tests job.
         await Assert.That(content.Length > 0).IsTrue();
-        await Assert.That(content.Contains("integration-tests:", StringComparison.Ordinal)).IsTrue();
-    }
-
-    [Test]
-    public async Task CommitWorkflow_ContainsMatrixStrategy()
-    {
-        string content = GetWorkflowContent();
-
-        await Assert.That(content.Length > 0).IsTrue();
-        await Assert.That(content.Contains("matrix:", StringComparison.Ordinal)).IsTrue();
-        await Assert.That(content.Contains("ubuntu-latest", StringComparison.Ordinal)).IsTrue();
         await Assert.That(content.Contains("windows-latest", StringComparison.Ordinal)).IsTrue();
-        await Assert.That(content.Contains("macos-latest", StringComparison.Ordinal)).IsTrue();
     }
 
     [Test]

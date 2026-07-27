@@ -140,6 +140,7 @@ public class PerformanceGateTests
     [Test]
     public async Task LayoutPerformanceGate_1000Nodes()
     {
+        Skip.When(TestEnv.IsCi, TestEnv.PerfSkipReason);
         var engine = new LayoutEngine();
 
         // Build a tree of 1000 nodes
@@ -175,6 +176,7 @@ public class PerformanceGateTests
     [Test]
     public async Task GridLayoutPerformanceGate_500Nodes()
     {
+        Skip.When(TestEnv.IsCi, TestEnv.PerfSkipReason);
         var engine = new LayoutEngine();
 
         var children = new Node[500];

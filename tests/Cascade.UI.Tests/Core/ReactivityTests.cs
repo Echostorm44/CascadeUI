@@ -435,4 +435,38 @@ public class ReactivityTests
             return Node.Empty;
         }
     }
+
+    // ── Component.Bind (two-way binding helper) ───────────────────
+
+    [Test]
+    public async Task ComponentBind_CarriesTheCurrentFieldValue()
+    {
+        var page = new BindTestComponent();
+        var bind = page.MakeNameBind();
+        await Assert.That(bind.Value).IsEqualTo("start");
+    }
+
+    [Test]
+    public async Task ComponentBind_OnChange_WritesFieldThenInvalidates()
+    {
+        var page = new BindTestComponent();
+        int invalidations = 0;
+        page.InvalidateCallback = () => invalidations++;
+
+        var bind = page.MakeNameBind();
+        bind.OnChange("changed");
+
+        // The setter ran (field updated) and the component was scheduled to re-render.
+        await Assert.That(page.NameValue).IsEqualTo("changed");
+        await Assert.That(invalidations).IsEqualTo(1);
+    }
+
+    // Exercises the framework-level Bind() promoted to Component (Bind(value, setter)).
+    private sealed class BindTestComponent : Component
+    {
+        private string name = "start";
+        public string NameValue => name;
+        public Bindable<string> MakeNameBind() => Bind(name, v => name = v);
+        protected override Node Render() => Node.Empty;
+    }
 }

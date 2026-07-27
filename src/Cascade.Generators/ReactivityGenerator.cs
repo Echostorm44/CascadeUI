@@ -45,6 +45,18 @@ internal static class ReactivityGenerator
                 return;
             }
 
+            // The class needs a generated partial. If the user didn't declare it `partial`,
+            // emitting our partial would collide (CS0260) and bury the real cause. Instead
+            // report CASCADE003 pointing at the class and skip generation for this component.
+            if (!model.IsPartial)
+            {
+                spc.ReportDiagnostic(Diagnostic.Create(
+                    ReactivityDiagnostics.ComponentMustBePartial,
+                    CreateLocation(model.ClassFilePath, model.ClassLineNumber),
+                    model.ClassName));
+                return;
+            }
+
             var source = GenerateReactivePartialClass(model);
             var hintName = $"{model.FileName}.Reactive.g.cs";
             spc.AddSource(hintName, source);

@@ -402,6 +402,65 @@ namespace TestApp
         await TUnit.Assertions.Assert.That(perfDiag.Count).IsGreaterThan(0);
     }
 
+    [TUnit.Core.Test]
+    public async Task NonPartialReactiveComponent_ReportsMustBePartial()
+    {
+        // A Component with reactive state (count is written in a handler) that is NOT declared
+        // partial. The generator must report CASCADE003 pointing at the class AND skip emitting
+        // the reactive partial — otherwise the user just sees a confusing CS0260 collision.
+        string source = StubTypes + @"
+namespace TestApp
+{
+    public class MyPage : Cascade.UI.Component
+    {
+        int count;
+        static Cascade.UI.Node Button(string label, System.Action onClick) => Cascade.UI.Node.Empty;
+
+        protected override Cascade.UI.Node Render()
+        {
+            var x = count;
+            return Button(""Increment"", () => { count++; });
+        }
+    }
+}
+";
+        var result = RunGenerator(source);
+
+        var cascade003 = result.Diagnostics.Where(d => d.Id == "CASCADE003").ToList();
+        await TUnit.Assertions.Assert.That(cascade003.Count).IsGreaterThan(0);
+        await TUnit.Assertions.Assert.That(Has(cascade003[0].GetMessage(), "MyPage")).IsTrue();
+
+        // The conflicting partial must NOT be emitted (that would cause CS0260).
+        await TUnit.Assertions.Assert.That(GetGeneratedSource(result)).IsNull();
+    }
+
+    [TUnit.Core.Test]
+    public async Task PartialReactiveComponent_DoesNotReportMustBePartial()
+    {
+        // The same component, correctly declared partial: no CASCADE003, generation proceeds.
+        string source = StubTypes + @"
+namespace TestApp
+{
+    public partial class MyPage : Cascade.UI.Component
+    {
+        int count;
+        static Cascade.UI.Node Button(string label, System.Action onClick) => Cascade.UI.Node.Empty;
+
+        protected override Cascade.UI.Node Render()
+        {
+            var x = count;
+            return Button(""Increment"", () => { count++; });
+        }
+    }
+}
+";
+        var result = RunGenerator(source);
+
+        var cascade003 = result.Diagnostics.Where(d => d.Id == "CASCADE003").ToList();
+        await TUnit.Assertions.Assert.That(cascade003.Count).IsEqualTo(0);
+        await TUnit.Assertions.Assert.That(GetGeneratedSource(result)).IsNotNull();
+    }
+
     // ── Edge cases ────────────────────────────────────────────────────
 
     [TUnit.Core.Test]

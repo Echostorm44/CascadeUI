@@ -226,6 +226,15 @@ internal sealed class ComponentReactivityModel : IEquatable<ComponentReactivityM
     public EquatableArray<RenderWriteInfo> RenderWrites { get; }
     public EquatableArray<RenderAllocationInfo> RenderAllocations { get; }
 
+    /// <summary>Whether the user's class declaration has the <c>partial</c> modifier.</summary>
+    public bool IsPartial { get; }
+
+    /// <summary>File path of the class declaration, for the "must be partial" diagnostic.</summary>
+    public string ClassFilePath { get; }
+
+    /// <summary>1-based line of the class declaration, for the "must be partial" diagnostic.</summary>
+    public int ClassLineNumber { get; }
+
     public ComponentReactivityModel(
         string? ns,
         string className,
@@ -234,7 +243,10 @@ internal sealed class ComponentReactivityModel : IEquatable<ComponentReactivityM
         EquatableArray<ComputedPropertyInfo> computedProperties,
         EquatableArray<BindCallInfo> bindCalls,
         EquatableArray<RenderWriteInfo> renderWrites,
-        EquatableArray<RenderAllocationInfo> renderAllocations)
+        EquatableArray<RenderAllocationInfo> renderAllocations,
+        bool isPartial,
+        string classFilePath,
+        int classLineNumber)
     {
         Namespace = ns;
         ClassName = className;
@@ -244,6 +256,9 @@ internal sealed class ComponentReactivityModel : IEquatable<ComponentReactivityM
         BindCalls = bindCalls;
         RenderWrites = renderWrites;
         RenderAllocations = renderAllocations;
+        IsPartial = isPartial;
+        ClassFilePath = classFilePath;
+        ClassLineNumber = classLineNumber;
     }
 
     public bool Equals(ComponentReactivityModel? other)
@@ -255,6 +270,9 @@ internal sealed class ComponentReactivityModel : IEquatable<ComponentReactivityM
         return Namespace == other.Namespace
             && ClassName == other.ClassName
             && FileName == other.FileName
+            && IsPartial == other.IsPartial
+            && ClassFilePath == other.ClassFilePath
+            && ClassLineNumber == other.ClassLineNumber
             && ReactiveFields.Equals(other.ReactiveFields)
             && ComputedProperties.Equals(other.ComputedProperties)
             && BindCalls.Equals(other.BindCalls)
@@ -274,6 +292,9 @@ internal sealed class ComponentReactivityModel : IEquatable<ComponentReactivityM
             int hash = Namespace?.GetHashCode() ?? 0;
             hash = hash * 397 + ClassName.GetHashCode();
             hash = hash * 397 + FileName.GetHashCode();
+            hash = hash * 397 + IsPartial.GetHashCode();
+            hash = hash * 397 + ClassFilePath.GetHashCode();
+            hash = hash * 397 + ClassLineNumber;
             hash = hash * 397 + ReactiveFields.GetHashCode();
             hash = hash * 397 + ComputedProperties.GetHashCode();
             hash = hash * 397 + BindCalls.GetHashCode();
@@ -320,6 +341,14 @@ internal static class SignalFieldRewriter
     {
         var classDecl = (ClassDeclarationSyntax)context.Node;
         var semanticModel = context.SemanticModel;
+
+        // Capture whether the user declared the class `partial` and where — the reactivity
+        // pipeline augments the class with a generated partial, so a non-partial declaration
+        // must produce a clear diagnostic (CS-CASCADE-003) rather than a CS0260 collision.
+        bool isPartial = classDecl.Modifiers.Any(SyntaxKind.PartialKeyword);
+        var classLineSpan = classDecl.Identifier.GetLocation().GetLineSpan();
+        string classFilePath = classLineSpan.Path ?? string.Empty;
+        int classLineNumber = classLineSpan.StartLinePosition.Line + 1;
 
         var classSymbol = semanticModel.GetDeclaredSymbol(classDecl, ct);
         if (classSymbol is null)
@@ -451,7 +480,10 @@ internal static class SignalFieldRewriter
             new EquatableArray<ComputedPropertyInfo>(computedProperties),
             new EquatableArray<BindCallInfo>(bindCalls),
             new EquatableArray<RenderWriteInfo>(renderWrites),
-            new EquatableArray<RenderAllocationInfo>(renderAllocs));
+            new EquatableArray<RenderAllocationInfo>(renderAllocs),
+            isPartial,
+            classFilePath,
+            classLineNumber);
     }
 
     // ── Helpers ────────────────────────────────────────────────────────

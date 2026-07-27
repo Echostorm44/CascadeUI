@@ -37,6 +37,20 @@ internal static class ReactivityDiagnostics
         isEnabledByDefault: true);
 
     /// <summary>
+    /// CS-CASCADE-003: a Component with reactive state must be declared <c>partial</c>.
+    /// The reactivity pipeline augments the class with a generated partial (reactive setters,
+    /// __ScheduleReactiveRender, Bind helpers); without <c>partial</c> the compiler reports a
+    /// confusing CS0260 collision instead. This diagnostic points at the real fix.
+    /// </summary>
+    internal static readonly DiagnosticDescriptor ComponentMustBePartial = new(
+        id: "CASCADE003",
+        title: "Reactive Component must be partial",
+        messageFormat: "Component '{0}' has reactive state (fields, computed properties, or Bind()), so it must be declared 'partial' — the Cascade generator adds a partial class with the reactive plumbing. Add the 'partial' modifier to '{0}'.",
+        category: ReactivityCategory,
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    /// <summary>
     /// CS-CASCADE-PERF-001: Allocation detected inside Render() body.
     /// Render() is called on every state change and should be allocation-free
     /// on the hot path.

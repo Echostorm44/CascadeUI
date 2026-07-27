@@ -85,30 +85,12 @@ jobs:
       - name: Run generator tests
         run: dotnet test tests/Cascade.Generators.Tests/Cascade.Generators.Tests.csproj --no-build -c Release
 
-  # ── Integration Tests (cross-platform matrix) ────────────────────
-  integration-tests:
-    if: github.event_name == 'push'
-    needs: build
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    strategy:
-      matrix:
-        os: [windows-latest]
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-
-      - name: Restore
-        run: dotnet restore cascade-ui.sln
-
-      - name: Build
-        run: dotnet build cascade-ui.sln -c Release --no-restore -warnaserror
-
-      - name: Run all tests
-        run: dotnet test cascade-ui.sln --no-build -c Release
+  # NOTE: a whole-solution "integration-tests" job used to run here. It ran
+  # `dotnet test cascade-ui.sln`, which pulls in the E2E projects (GoldenText,
+  # Integration, McpBridge.Tests) that launch a windowed GUI app and need an
+  # interactive desktop — impossible on a headless CI runner. Those E2E suites
+  # run on a developer desktop (or a future self-hosted desktop runner); CI
+  # covers the headless-safe unit tests via component-tests + generator-tests.
 
   # ── Visual Regression ─────────────────────────────────────────────
   visual-regression:
@@ -150,8 +132,11 @@ jobs:
       - name: Build
         run: dotnet build cascade-ui.sln -c Release --no-restore -warnaserror
 
+      # Unit-test project only (not the whole solution — the E2E projects need a desktop).
+      # The wall-clock perf tests self-skip on CI runners (see TestEnv.IsCi); this lane is a
+      # placeholder until performance runs on dedicated/self-hosted benchmark hardware.
       - name: Run performance tests
-        run: dotnet test cascade-ui.sln --no-build -c Release --filter "FullyQualifiedName~Performance"
+        run: dotnet test tests/Cascade.UI.Tests/Cascade.UI.Tests.csproj --no-build -c Release --filter "FullyQualifiedName~Performance"
 
       - name: Compare with threshold
         run: echo "Performance baseline comparison complete"

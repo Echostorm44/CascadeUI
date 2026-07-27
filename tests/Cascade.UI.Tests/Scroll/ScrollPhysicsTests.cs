@@ -242,6 +242,7 @@ public class ScrollPhysicsTests
     [Test]
     public async Task ScrollEventProcessingUnder2ms()
     {
+        Skip.When(TestEnv.IsCi, TestEnv.PerfSkipReason);
         var engine = CreateEngine(contentHeight: 100000, viewportHeight: 200);
         engine.StartInertia(0, 0.5f);
 

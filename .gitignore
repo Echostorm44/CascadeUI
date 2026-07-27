@@ -46,6 +46,9 @@ debug-logs/
 # WP-3533 regenerable text-weight sample artifacts (run TextWeightSampleGenerator)
 Documents/
 AGENTS.md
+# …but the project templates SHIP an AGENTS.md as template content (packed into
+# Cascade.UI.Templates and materialised into generated apps), so it must be tracked.
+!src/Cascade.UI.Templates/content/**/AGENTS.md
 Status.md
 opencode.json
 .claude/

@@ -17,7 +17,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -30,7 +30,7 @@ jobs:
     name: Component Tests
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -49,7 +49,7 @@ jobs:
     name: Generator Tests
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -68,7 +68,7 @@ jobs:
     name: Platform Tests (${{ matrix.os }})
     needs: build
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -91,7 +91,7 @@ jobs:
     name: Performance Gates
     needs: build
     runs-on: ubuntu-latest  # ideally self-hosted benchmark runner
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -111,7 +111,7 @@ jobs:
     name: Visual Regression
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4

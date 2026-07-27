@@ -171,6 +171,7 @@ public class SpringTests
     [Test]
     public async Task ThousandSpringsUnder2ms()
     {
+        Skip.When(TestEnv.IsCi, TestEnv.PerfSkipReason);
         var solvers = new SpringSolver[1000];
         for (int i = 0; i < 1000; i++)
         {

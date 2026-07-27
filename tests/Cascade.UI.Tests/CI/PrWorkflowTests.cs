@@ -54,11 +54,10 @@ public class PrWorkflowTests
     }
 
     [Test]
-    public async Task PrYml_ContainsWindowsMatrix()
+    public async Task PrYml_RunsOnWindows()
     {
-        // CI is Windows-only for now (Cascade.UI is Windows-first); revisit ubuntu/macOS
-        // when the framework supports them.
-        await Assert.That(workflowContent.Contains("matrix", StringComparison.Ordinal)).IsTrue();
+        // CI is Windows-only (Cascade.UI is Windows-first). The E2E GUI suites run off-CI,
+        // so there is no whole-solution platform-tests job.
         await Assert.That(workflowContent.Contains("windows-latest", StringComparison.Ordinal)).IsTrue();
     }
 

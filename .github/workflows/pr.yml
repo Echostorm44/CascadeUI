@@ -64,28 +64,12 @@ jobs:
           name: generator-test-results
           path: '**/generator-results.trx'
 
-  platform-tests:
-    name: Platform Tests (${{ matrix.os }})
-    needs: build
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-      - run: dotnet restore cascade-ui.sln
-      - run: dotnet build cascade-ui.sln -c Release --no-restore
-      - run: dotnet test cascade-ui.sln -c Release --no-build --logger "trx;LogFileName=platform-results.trx"
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: platform-test-results-${{ matrix.os }}
-          path: '**/platform-results.trx'
+  # NOTE: a whole-solution "platform-tests" job used to run here. It ran
+  # `dotnet test cascade-ui.sln`, which pulls in the E2E projects (GoldenText,
+  # Integration, McpBridge.Tests) that launch a windowed GUI app and need an
+  # interactive desktop — impossible on a headless CI runner. Those E2E suites
+  # run on a developer desktop; CI covers the headless-safe unit tests via
+  # component-tests + generator-tests.
 
   performance-gates:
     name: Performance Gates
@@ -129,7 +113,7 @@ jobs:
 
   merge-gate:
     name: Merge Gate
-    needs: [component-tests, generator-tests, platform-tests, performance-gates, visual-regression]
+    needs: [component-tests, generator-tests, performance-gates, visual-regression]
     runs-on: windows-latest
     timeout-minutes: 1
     steps:

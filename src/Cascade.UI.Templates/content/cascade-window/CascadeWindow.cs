@@ -2,7 +2,7 @@ using Cascade.UI;
 
 namespace CascadeWindow.Namespace;
 
-public class CascadeWindow : Component
+public partial class CascadeWindow : Component
 {
     protected override Node Render() =>
         new Center(

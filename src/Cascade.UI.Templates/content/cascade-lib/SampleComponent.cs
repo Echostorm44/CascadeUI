@@ -5,7 +5,7 @@ namespace CascadeLib;
 /// <summary>
 /// A sample reusable component. Replace with your own components.
 /// </summary>
-public class SampleComponent : Component
+public partial class SampleComponent : Component
 {
     private string message = "Hello from CascadeLib";
 

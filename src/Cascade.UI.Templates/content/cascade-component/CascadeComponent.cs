@@ -7,7 +7,7 @@ namespace CascadeComponent.Namespace;
 /// the component's visual tree. Fields are automatically reactive —
 /// use <c>readonly</c> to opt out.
 /// </summary>
-public class CascadeComponent : Component
+public partial class CascadeComponent : Component
 {
     protected override Node Render() =>
         Label("CascadeComponent");

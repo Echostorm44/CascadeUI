@@ -2,7 +2,7 @@ using Cascade.UI;
 
 namespace CascadeAppBlank;
 
-public class MainWindow : Component
+public partial class MainWindow : Component
 {
     protected override Node Render() =>
         new Center(

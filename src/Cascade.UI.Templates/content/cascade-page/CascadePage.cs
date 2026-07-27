@@ -3,7 +3,7 @@ using Cascade.UI;
 namespace CascadePage.Namespace;
 
 [Route("/cascade-page")]
-public class CascadePage : Component
+public partial class CascadePage : Component
 {
     protected override Node Render() =>
         Column(

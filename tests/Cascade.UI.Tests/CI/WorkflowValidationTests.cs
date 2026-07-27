@@ -80,15 +80,16 @@ public class WorkflowValidationTests
     }
 
     [Test]
-    public async Task CommitWorkflow_ContainsMatrixStrategy()
+    public async Task CommitWorkflow_ContainsWindowsMatrixStrategy()
     {
         string content = GetWorkflowContent();
 
+        // CI is Windows-only for now: Cascade.UI is Windows-first (Win32 platform layer,
+        // Windows installer), so the matrix targets windows-latest. Revisit ubuntu/macOS
+        // when the framework actually supports them.
         await Assert.That(content.Length > 0).IsTrue();
         await Assert.That(content.Contains("matrix:", StringComparison.Ordinal)).IsTrue();
-        await Assert.That(content.Contains("ubuntu-latest", StringComparison.Ordinal)).IsTrue();
         await Assert.That(content.Contains("windows-latest", StringComparison.Ordinal)).IsTrue();
-        await Assert.That(content.Contains("macos-latest", StringComparison.Ordinal)).IsTrue();
     }
 
     [Test]

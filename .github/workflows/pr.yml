@@ -16,7 +16,7 @@ env:
 jobs:
   build:
     name: Build
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -29,7 +29,7 @@ jobs:
   component-tests:
     name: Component Tests
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -48,7 +48,7 @@ jobs:
   generator-tests:
     name: Generator Tests
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -72,7 +72,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -90,7 +90,7 @@ jobs:
   performance-gates:
     name: Performance Gates
     needs: build
-    runs-on: ubuntu-latest  # ideally self-hosted benchmark runner
+    runs-on: windows-latest  # ideally self-hosted benchmark runner
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -110,7 +110,7 @@ jobs:
   visual-regression:
     name: Visual Regression
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -130,7 +130,7 @@ jobs:
   merge-gate:
     name: Merge Gate
     needs: [component-tests, generator-tests, platform-tests, performance-gates, visual-regression]
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     timeout-minutes: 1
     steps:
       - run: echo "All checks passed — PR is ready to merge."

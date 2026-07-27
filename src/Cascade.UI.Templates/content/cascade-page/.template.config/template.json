@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "Cascade UI",
+  "classifications": [ "Desktop", "UI", "Cascade" ],
+  "identity": "Cascade.UI.Page",
+  "name": "Cascade Page",
+  "shortName": "cascade-page",
+  "description": "A Cascade UI page component with an optional [Route] attribute.",
+  "tags": {
+    "language": "C#",
+    "type": "item"
+  },
+  "sourceName": "CascadePage",
+  "symbols": {
+    "namespace": {
+      "type": "parameter",
+      "datatype": "string",
+      "defaultValue": "MyApp.Pages",
+      "description": "The namespace for the page.",
+      "replaces": "CascadePage.Namespace"
+    },
+    "route": {
+      "type": "parameter",
+      "datatype": "string",
+      "defaultValue": "",
+      "description": "The optional route path for the page.",
+      "replaces": "/cascade-page"
+    }
+  },
+  "primaryOutputs": [
+    { "path": "CascadePage.cs" }
+  ]
+}

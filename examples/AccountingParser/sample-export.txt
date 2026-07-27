@@ -1,0 +1,21 @@
+HEADER Acme Corp — Q4 2024 Invoice Export
+HEADER Generated 2024-12-15 14:30:00 UTC
+
+ITEM 2024-10-03 Cloud hosting (October) $2,450.00
+ITEM 2024-10-03 SSL certificate renewal $149.99
+ITEM 2024-10-15 Consulting — architecture review $8,500.00
+DISCOUNT Early payment — 2% on consulting -$170.00
+ITEM 2024-11-01 Cloud hosting (November) $2,450.00
+ITEM 2024-11-12 Additional storage (500 GB) $75.00
+NOTE Client requested NET-30 terms starting November
+ITEM 2024-11-20 Emergency support — incident response $3,200.00
+ITEM 2024-12-01 Cloud hosting (December) $2,450.00
+ITEM 2024-12-05 Domain registration (3 years) $89.97
+DISCOUNT Volume discount — 8+ line items -$245.00
+
+TOTAL Subtotal $19,364.96
+TOTAL Tax (8.25%) $1,597.61
+TOTAL Amount due $20,962.57
+
+NOTE Payment terms: NET-30 from invoice date
+NOTE Remit to: Acme Corp, PO Box 1234, Austin TX 78701

@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Cascade.UI.Tests</RootNamespace>
+    <AssemblyName>Cascade.UI.Tests</AssemblyName>
+    <IsTestProject>true</IsTestProject>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="TUnit" Version="0.6.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="IDE\IdeSharedFakes.cs" />
+  </ItemGroup>
+
+  <!-- The DevTools symbols in Cascade.UI only compile when CASCADE_DEVTOOLS is defined
+       (Debug, or Release with -p:CascadeDevTools=true), so the DevTools tests only compile
+       there too. Exclude them in plain Release — matching Cascade.UI's own conditional
+       DevTools sources — otherwise the whole solution fails to build in the CI Release config. -->
+  <ItemGroup Condition="'$(Configuration)' != 'Debug' AND '$(CascadeDevTools)' != 'true'">
+    <Compile Remove="DevTools\**\*.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- UAX #9 conformance corpus (UCD BidiCharacterTest.txt) for WP-3521a. -->
+    <Content Include="TestData\BidiCharacterTest.txt" CopyToOutputDirectory="PreserveNewest" LinkBase="TestData" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Cascade.UI\Cascade.UI.csproj" />
+    <ProjectReference Include="..\..\src\Cascade.UI.Installer\Cascade.UI.Installer.csproj" />
+    <ProjectReference Include="..\..\src\Cascade.UI.Installer.Sqlite\Cascade.UI.Installer.Sqlite.csproj" />
+    <ProjectReference Include="..\..\src\Cascade.UI.Updater.Core\Cascade.UI.Updater.Core.csproj" />
+    <ProjectReference Include="..\..\src\Cascade.UI.Testing\Cascade.UI.Testing.csproj" />
+    <ProjectReference Include="..\..\src\Cascade.UI.Tools\Cascade.UI.Tools.csproj" />
+    <ProjectReference Include="..\..\src\Cascade.IDE.Shared\Cascade.IDE.Shared.csproj" />
+    <ProjectReference Include="..\..\tools\perf-drift\PerfDrift.csproj" />
+    <ProjectReference Include="..\..\tools\changelog-gen\ChangelogGen.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\extensions\Cascade.VS\CascadeVsPackage.cs" Link="IDE\VS\CascadeVsPackage.cs" />
+    <Compile Include="..\..\extensions\Cascade.VS\NewProjectWizard.cs" Link="IDE\VS\NewProjectWizard.cs" />
+    <Compile Include="..\..\extensions\Cascade.VS\LivePreviewPanel.cs" Link="IDE\VS\LivePreviewPanel.cs" />
+    <Compile Include="..\..\extensions\Cascade.VS\ItemTemplateHandler.cs" Link="IDE\VS\ItemTemplateHandler.cs" />
+  </ItemGroup>
+
+</Project>

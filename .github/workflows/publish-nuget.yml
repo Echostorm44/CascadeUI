@@ -1,0 +1,94 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# publish-nuget.yml — publish the Cascade.UI packages to NuGet.org
+# ─────────────────────────────────────────────────────────────────────────────
+# Triggered when a version tag (v*) is pushed. Uses NuGet Trusted Publishing
+# (GitHub Actions OIDC) — no API key stored in the repo. Same pattern as SharpImage.
+#
+# Publishes three packages, all at the tag version:
+#   • Cascade.UI            — the framework (depends on the Echostorm.Etch package)
+#   • Cascade.UI.Templates  — `dotnet new` project templates (content-only)
+#   • Cascade.UI.Tools      — the `cascade` CLI (dotnet tool)
+#
+# Prerequisite — a NuGet Trusted Publishing policy is per-package, so create ONE for EACH
+# of the three package IDs above on nuget.org, all with the same coordinates:
+#   Repository Owner  : Echostorm44
+#   Repository        : CascadeUI
+#   Workflow File     : publish-nuget.yml
+#   Environment       : nuget-publish
+# The OIDC login mints one temporary key scoped to whichever policies exist; a package
+# without a matching policy is rejected (403), so all three policies must be present.
+#
+# UseEtchPackage=true swaps Cascade.UI's local Etch *source* project references for a
+# dependency on the published Echostorm.Etch package — the CI runner has no Etch source
+# checkout, so this is required. Echostorm.Etch must already be published on NuGet at the
+# version Cascade.UI references (see the Echostorm.Etch PackageReference in Cascade.UI.csproj).
+# (Cascade.UI.Templates is content-only and ignores the flag; Cascade.UI.Tools needs it
+# because it references Cascade.UI.)
+#
+# Pre-release: tag with the suffix, e.g.  git tag v0.1.0-alpha.2 && git push --tags
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Publish to NuGet
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  CONFIGURATION: Release
+  UseEtchPackage: 'true'
+
+jobs:
+  publish:
+    name: Pack & Publish (Cascade.UI, Templates, Tools)
+    runs-on: ubuntu-latest
+    environment: nuget-publish
+    permissions:
+      id-token: write   # required for OIDC token issuance
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Derive version from tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          echo "VERSION=$TAG" >> "$GITHUB_OUTPUT"
+          echo "📦 Cascade.UI $TAG"
+
+      # Pack each package to ./artifacts. UseEtchPackage=true (workflow env) makes the build
+      # depend on the published Echostorm.Etch package instead of Etch source (not on the runner).
+      - name: Pack Cascade.UI
+        run: dotnet pack src/Cascade.UI/Cascade.UI.csproj -c ${{ env.CONFIGURATION }} -p:Version=${{ steps.version.outputs.VERSION }} -o ./artifacts
+
+      - name: Pack Cascade.UI.Templates
+        run: dotnet pack src/Cascade.UI.Templates/Cascade.UI.Templates.csproj -c ${{ env.CONFIGURATION }} -p:Version=${{ steps.version.outputs.VERSION }} -o ./artifacts
+
+      - name: Pack Cascade.UI.Tools
+        run: dotnet pack src/Cascade.UI.Tools/Cascade.UI.Tools.csproj -c ${{ env.CONFIGURATION }} -p:Version=${{ steps.version.outputs.VERSION }} -o ./artifacts
+
+      - name: NuGet login (OIDC Trusted Publishing)
+        uses: NuGet/login@v1
+        id: nuget-login
+        with:
+          user: Echostorm
+
+      - name: Push to NuGet.org
+        run: dotnet nuget push ./artifacts/*.nupkg --api-key ${{ steps.nuget-login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuget-packages
+          path: ./artifacts/*.nupkg
+          retention-days: 30

@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "Cascade UI",
+  "classifications": [ "Desktop", "UI", "Cascade" ],
+  "identity": "Cascade.UI.Theme",
+  "name": "Cascade Theme",
+  "shortName": "cascade-theme",
+  "description": "A custom Cascade UI theme with brand colors, typography, and spacing.",
+  "tags": {
+    "language": "C#",
+    "type": "item"
+  },
+  "sourceName": "CascadeThemeItem",
+  "symbols": {
+    "namespace": {
+      "type": "parameter",
+      "datatype": "string",
+      "defaultValue": "MyApp.Themes",
+      "description": "The namespace for the theme.",
+      "replaces": "CascadeThemeItem.Namespace"
+    }
+  },
+  "primaryOutputs": [
+    { "path": "CascadeThemeItem.cs" }
+  ]
+}

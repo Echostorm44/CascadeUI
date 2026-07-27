@@ -1,0 +1,158 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Cascade.UI</RootNamespace>
+    <AssemblyName>Cascade.UI</AssemblyName>
+    <IsAotCompatible>true</IsAotCompatible>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- CA1416: the Etch render backend (merged in WP-3530) calls Windows-only GPU/GDI
+         APIs guarded at runtime; the platform analyzer can't see those guards. -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+    <Description>Cascade UI — cross-platform, GPU-rendered, NativeAOT-first UI framework for .NET</Description>
+    <PackageId>Cascade.UI</PackageId>
+    <Authors>Cascade UI Contributors</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <!-- NUGET-001: initial packaging. Version is a placeholder pre-1.0 alpha; a real
+         version/CI pack story comes later. See [[distribution-readiness-audit]]. -->
+    <Version Condition="'$(Version)' == ''">0.1.0-alpha.1</Version>
+  </PropertyGroup>
+
+  <!--
+    NUGET-001 — package layout.
+    Cascade.UI ships: its own assembly (lib/), the source generator + analyzers (analyzers/),
+    and the Inter fonts (build/assets + Cascade.UI.targets). The Etch rendering engine is a
+    SEPARATE package dependency — Echostorm.Etch — which carries the Etch assemblies + the
+    cross-platform native binaries (wgpu/FreeType/HarfBuzz). SharpImage is a normal dependency;
+    ICU4N / Microsoft.Extensions / System.IO.Hashing arrive transitively through Echostorm.Etch.
+    See [[distribution-readiness-audit]].
+
+    Local development builds against Etch SOURCE via project references (the default). Packing
+    for release sets UseEtchPackage=true, which swaps those for a dependency on Echostorm.Etch —
+    so the published package pulls Etch from NuGet instead of emitting refs to non-existent
+    Etch.* packages. The two are mutually exclusive (both would double-supply the Etch DLLs).
+  -->
+  <PropertyGroup>
+    <!-- NU5100: the Inter fonts ride under build/ (not lib/), intentionally. -->
+    <NoWarn>$(NoWarn);NU5100</NoWarn>
+  </PropertyGroup>
+
+  <!-- Ship the source generator + analyzers so a consumer that references this package
+       gets reactivity inference, the S/Icons/theme generators, and the CASCADE* diagnostics
+       automatically — no separate analyzer package to add. -->
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)..\Cascade.Generators\bin\$(Configuration)\netstandard2.0\Cascade.Generators.dll"
+          Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+  </ItemGroup>
+
+  <!-- Release: depend on the Etch bundle package instead of the Etch source project refs.
+       Set by the pack/publish step; the repo's normal build leaves it unset → project refs.
+       PrivateAssets=none so Echostorm.Etch's build/ targets (which deliver the native binaries
+       to the app output) flow transitively through Cascade.UI to the final consumer — the
+       default would privatize Build and the natives would never reach the app. -->
+  <ItemGroup Condition="'$(UseEtchPackage)' == 'true'">
+    <PackageReference Include="Echostorm.Etch" Version="0.1.0-alpha.5" PrivateAssets="none" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+
+  <!--
+    CASCADE_DEVTOOLS compile symbol. Enables the full MCP inspection surface
+    (NodeTreeWalker, per-tool handlers in McpTools, panel DTOs) in Release
+    builds so agents can inspect a performance-representative binary.
+
+    - Debug: always defined (developer experience unchanged).
+    - Release: opt-in via `-p:CascadeDevTools=true`. Off by default so
+      end-user published apps ship without the DevTools surface and the
+      trimmer removes it completely.
+
+    Runtime gate (CASCADE_MCP=1 env var) layered on top for network
+    exposure control — see McpHost.Start().
+  -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+    <DefineConstants>$(DefineConstants);CASCADE_DEVTOOLS</DefineConstants>
+    <!-- Workaround: .NET 10 preview SDK NetAnalyzers hang on Cascade.UI
+         (16k+ line NodePainter.cs). Debug builds disable them so iteration
+         works; Release still runs the analyzers. -->
+    <EnableNETAnalyzers>false</EnableNETAnalyzers>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Release' AND '$(CascadeDevTools)' == 'true'">
+    <DefineConstants>$(DefineConstants);CASCADE_DEVTOOLS</DefineConstants>
+  </PropertyGroup>
+
+  <!--
+    Trimmer root descriptor for the DevTools reflection surface. Only applied
+    when CASCADE_DEVTOOLS is defined (Debug or Release+CascadeDevTools).
+    Preserves Component subclass fields/properties so NodeTreeWalker can walk
+    user-authored reactive state at runtime. Not applied to end-user AOT
+    publishes so they pay zero size cost.
+  -->
+  <ItemGroup Condition="'$(Configuration)' == 'Debug' OR '$(CascadeDevTools)' == 'true'">
+    <TrimmerRootDescriptor Include="$(MSBuildThisFileDirectory)DevTools\TrimmerRoots.xml" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Source generators must not inherit publish properties (PublishAot, PublishTrimmed,
+         RuntimeIdentifier, SelfContained) from consuming projects. The generator targets
+         netstandard2.0 and depends on Roslyn, which is not AOT-compatible. UndefineProperties
+         isolates the generator project from the parent's publish graph so a consuming app
+         can PublishAot=true without MSBuild attempting to validate the generator for AOT.
+         This is the canonical pattern used by Avalonia, Mapperly, and Microsoft's own samples. -->
+    <ProjectReference Include="..\Cascade.Generators\Cascade.Generators.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false"
+                      UndefineProperties="TargetFramework;RuntimeIdentifier;SelfContained;PublishAot;PublishTrimmed;PublishSingleFile;PublishReadyToRun" />
+  </ItemGroup>
+
+  <!-- Etch is the sole, owned rendering/text engine. WP-3530 merged the former
+       Cascade.UI.Backend.Etch project into core (one rendering assembly, no IRenderBackend
+       seam), so core references the full Etch stack directly. LOCAL DEV ONLY: when packing
+       for release (UseEtchPackage=true) these are replaced by the Echostorm.Etch package
+       dependency above — the two are mutually exclusive. -->
+  <ItemGroup Condition="'$(UseEtchPackage)' != 'true'">
+    <ProjectReference Include="..\..\..\Etch\src\Etch.Text\Etch.Text.csproj" />
+    <ProjectReference Include="..\..\..\Etch\src\Etch.Scene\Etch.Scene.csproj" />
+    <ProjectReference Include="..\..\..\Etch\src\Etch.Geometry\Etch.Geometry.csproj" />
+    <ProjectReference Include="..\..\..\Etch\src\Etch.Testing\Etch.Testing.csproj" />
+    <ProjectReference Include="..\..\..\Etch\src\Etch.Gpu\Etch.Gpu.csproj" />
+    <ProjectReference Include="..\..\..\Etch\src\Etch.Raster.Cpu\Etch.Raster.Cpu.csproj" />
+    <ProjectReference Include="..\..\..\Etch\src\Etch.Gpu.Compositor\Etch.Gpu.Compositor.csproj" />
+    <ProjectReference Include="..\..\..\Etch\src\Etch.Tiling\Etch.Tiling.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AdditionalFiles Include="strings\*.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- HarfBuzz is now the owned Etch.Text.HarfBuzz interop (RENDER-005); no managed package. -->
+    <PackageReference Include="Echostorm.SharpImage" Version="1.0.3" />
+  </ItemGroup>
+
+  <!-- Bundle Inter as the framework default font. One Content item serves both worlds:
+       CopyToOutputDirectory (transitive through ProjectReference) puts the fonts in a
+       project-reference consumer's output; Pack + PackagePath ships them under build/assets
+       so Cascade.UI.targets copies them into a NuGet consumer's output at Fonts/. -->
+  <ItemGroup>
+    <Content Include="Fonts\*.ttf" CopyToOutputDirectory="PreserveNewest" LinkBase="Fonts"
+             Pack="true" PackagePath="build\assets\Fonts" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Cascade.UI.Tests" />
+    <InternalsVisibleTo Include="cascade" />
+    <InternalsVisibleTo Include="cascade-mcp" />
+    <InternalsVisibleTo Include="Cascade.UI.GoldenText" />
+    <InternalsVisibleTo Include="Cascade.UI.Testing" />
+    <InternalsVisibleTo Include="Cascade.UI.McpBridge.Tests" />
+  </ItemGroup>
+
+  <!-- Include .targets for NuGet consumers (auto-imported from build/) -->
+  <ItemGroup>
+    <None Include="build\**" Pack="true" PackagePath="build" />
+  </ItemGroup>
+
+</Project>

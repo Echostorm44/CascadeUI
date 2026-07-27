@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "Cascade UI",
+  "classifications": [ "Desktop", "UI", "Cascade" ],
+  "identity": "Cascade.UI.App.Blank",
+  "name": "Cascade App (Blank)",
+  "shortName": "cascade-app-blank",
+  "description": "A minimal Cascade UI application with an empty window.",
+  "tags": {
+    "language": "C#",
+    "type": "project"
+  },
+  "sourceName": "CascadeAppBlank",
+  "preferNameDirectory": true,
+  "symbols": {
+    "theme": {
+      "type": "parameter",
+      "datatype": "choice",
+      "defaultValue": "AppleTheme",
+      "description": "The default theme to use.",
+      "replaces": "AppleTheme",
+      "choices": [
+        { "choice": "AppleTheme", "description": "Apple HIG-inspired theme" },
+        { "choice": "FluentTheme", "description": "Microsoft Fluent 2 theme" }
+      ]
+    },
+    "mode": {
+      "type": "parameter",
+      "datatype": "choice",
+      "defaultValue": "System",
+      "description": "The initial theme mode.",
+      "replaces": "__THEMEMODE__",
+      "choices": [
+        { "choice": "System", "description": "Follow the OS setting" },
+        { "choice": "Light", "description": "Always light mode" },
+        { "choice": "Dark", "description": "Always dark mode" }
+      ]
+    }
+  },
+  "primaryOutputs": [ { "path": "CascadeAppBlank.csproj" } ]
+}

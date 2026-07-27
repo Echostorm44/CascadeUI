@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Cascade.UI.Testing</RootNamespace>
+    <AssemblyName>Cascade.UI.Testing</AssemblyName>
+    <IsAotCompatible>true</IsAotCompatible>
+    <Description>Cascade UI test harness — utilities for testing Cascade components</Description>
+    <PackageId>Cascade.UI.Testing</PackageId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cascade.UI\Cascade.UI.csproj" />
+    <ProjectReference Include="..\..\tools\snapshot-diff\SnapshotDiff.csproj" />
+  </ItemGroup>
+
+</Project>

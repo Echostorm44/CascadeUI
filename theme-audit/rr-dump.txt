@@ -1,0 +1,7 @@
+frame instances=48 device=1922x1083
+st=5 min=(798.00,397.36) sz=(30.00x30.00) radius=6.000 stroke=0.000 expand=0.000
+st=6 min=(798.00,397.36) sz=(30.00x30.00) radius=6.000 stroke=2.250 expand=0.000
+st=5 min=(1054.59,397.36) sz=(30.00x30.00) radius=6.000 stroke=0.000 expand=0.000
+st=5 min=(798.00,450.52) sz=(30.00x30.00) radius=6.000 stroke=0.000 expand=0.000
+st=6 min=(798.00,450.52) sz=(30.00x30.00) radius=6.000 stroke=2.250 expand=0.000
+st=5 min=(1203.69,450.52) sz=(30.00x30.00) radius=6.000 stroke=0.000 expand=0.000

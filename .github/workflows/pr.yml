@@ -1,0 +1,136 @@
+name: PR Pipeline
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# CI has no sibling Etch source checkout, so build against the published Echostorm.Etch package.
+# MSBuild reads this environment variable as a global property for every dotnet command below.
+env:
+  UseEtchPackage: 'true'
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet restore cascade-ui.sln
+      - run: dotnet build cascade-ui.sln -c Release --no-restore -warnaserror
+
+  component-tests:
+    name: Component Tests
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet restore cascade-ui.sln
+      - run: dotnet build cascade-ui.sln -c Release --no-restore
+      - run: dotnet test tests/Cascade.UI.Tests/Cascade.UI.Tests.csproj -c Release --no-build --logger "trx;LogFileName=component-results.trx"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: component-test-results
+          path: '**/component-results.trx'
+
+  generator-tests:
+    name: Generator Tests
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet restore cascade-ui.sln
+      - run: dotnet build cascade-ui.sln -c Release --no-restore
+      - run: dotnet test tests/Cascade.Generators.Tests/Cascade.Generators.Tests.csproj -c Release --no-build --logger "trx;LogFileName=generator-results.trx"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: generator-test-results
+          path: '**/generator-results.trx'
+
+  platform-tests:
+    name: Platform Tests (${{ matrix.os }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet restore cascade-ui.sln
+      - run: dotnet build cascade-ui.sln -c Release --no-restore
+      - run: dotnet test cascade-ui.sln -c Release --no-build --logger "trx;LogFileName=platform-results.trx"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: platform-test-results-${{ matrix.os }}
+          path: '**/platform-results.trx'
+
+  performance-gates:
+    name: Performance Gates
+    needs: build
+    runs-on: ubuntu-latest  # ideally self-hosted benchmark runner
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet restore cascade-ui.sln
+      - run: dotnet build cascade-ui.sln -c Release --no-restore
+      - name: Run performance benchmarks
+        run: dotnet test tests/Cascade.UI.Tests/Cascade.UI.Tests.csproj -c Release --no-build --filter "FullyQualifiedName~Performance" --logger "trx;LogFileName=perf-results.trx"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: performance-results
+          path: '**/perf-results.trx'
+
+  visual-regression:
+    name: Visual Regression
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet restore cascade-ui.sln
+      - run: dotnet build cascade-ui.sln -c Release --no-restore
+      - name: Run visual regression tests
+        run: dotnet test tests/Cascade.UI.Tests/Cascade.UI.Tests.csproj -c Release --no-build --filter "FullyQualifiedName~VisualRegression" --logger "trx;LogFileName=visual-results.trx"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: visual-regression-results
+          path: '**/visual-results.trx'
+
+  merge-gate:
+    name: Merge Gate
+    needs: [component-tests, generator-tests, platform-tests, performance-gates, visual-regression]
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - run: echo "All checks passed — PR is ready to merge."

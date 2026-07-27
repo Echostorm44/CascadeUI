@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "Cascade UI",
+  "classifications": [ "Desktop", "UI", "Cascade", "Controls" ],
+  "identity": "Cascade.UI.Controls",
+  "name": "Cascade Controls Library",
+  "shortName": "cascade-controls",
+  "description": "A pre-configured Cascade UI control library for distribution.",
+  "tags": {
+    "language": "C#",
+    "type": "project"
+  },
+  "sourceName": "CascadeControls",
+  "preferNameDirectory": true,
+  "primaryOutputs": [ { "path": "CascadeControls.csproj" } ]
+}

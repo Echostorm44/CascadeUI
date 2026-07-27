@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cascade UI DevTools trimmer roots.
+
+  Applied ONLY when building with -p:CascadeDevTools=true (the "agent" config).
+  This preserves the reflection surface that NodeTreeWalker needs to walk
+  user-authored Component subclasses for the MCP tool set.
+
+  End-user AOT publishes (plain Release, no CascadeDevTools flag) do NOT
+  reference this descriptor and therefore pay zero size/perf cost from it.
+
+  Semantics:
+    * On Cascade.UI.Component and every type derived from it, keep ALL
+      instance fields and properties so GetFields/GetProperties can enumerate
+      the reactive state surface.
+    * On the DevTools bridge itself, keep all public/internal methods so the
+      MCP protocol surface is reachable.
+-->
+<linker>
+  <assembly fullname="Cascade.UI">
+    <!-- Component base: everything reflection-accessible must survive trimming -->
+    <type fullname="Cascade.UI.Component" preserve="all" />
+
+    <!-- DevTools bridge: agents call into these via the MCP protocol -->
+    <type fullname="Cascade.UI.DevTools.NodeTreeWalker" preserve="all" />
+  </assembly>
+
+  <!--
+    Derived Component types live in user assemblies (HelloCascade etc.).
+    We cannot name them here. The ILC-compatible way to preserve derived
+    types is the DynamicDependency attribute on the reflection methods
+    themselves, which is applied via source in NodeTreeWalker.cs using
+    [DynamicallyAccessedMembers(All)] on the 'object' parameters.
+  -->
+</linker>

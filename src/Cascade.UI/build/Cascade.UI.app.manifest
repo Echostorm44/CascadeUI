@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <!--
+    Default application manifest for Cascade UI apps.
+
+    Declares Per-Monitor-V2 DPI awareness. This MUST be set in the manifest (read
+    by the OS at process creation, before any managed code runs) rather than relying
+    solely on the runtime SetProcessDpiAwarenessContext call: that call silently fails
+    if the process already inherited a DPI-awareness context from a DPI-unaware
+    launcher (e.g. a terminal), leaving the GPU surface rendered at logical size and
+    bitmap-stretched by the OS on a scaled display — i.e. blurry/blocky controls.
+
+    Apps can override by setting their own <ApplicationManifest> in the csproj.
+  -->
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2, PerMonitor</dpiAwareness>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/PM</dpiAware>
+    </windowsSettings>
+  </application>
+</assembly>

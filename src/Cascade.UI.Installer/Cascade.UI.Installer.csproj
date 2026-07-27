@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Cascade.UI.Installer</RootNamespace>
+    <IsAotCompatible>true</IsAotCompatible>
+    <!-- Source-generated COM (IShellLink) + P/Invoke require unsafe code. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Cascade.UI\Cascade.UI.csproj" />
+    <ProjectReference Include="..\Cascade.UI.Updater.Core\Cascade.UI.Updater.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Cascade.UI.Tests" />
+  </ItemGroup>
+</Project>

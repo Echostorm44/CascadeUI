@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "Cascade UI",
+  "classifications": [ "Desktop", "UI", "Cascade", "Library" ],
+  "identity": "Cascade.UI.Library",
+  "name": "Cascade Library",
+  "shortName": "cascade-lib",
+  "description": "A shared Cascade UI component, theme, and control library.",
+  "tags": {
+    "language": "C#",
+    "type": "project"
+  },
+  "sourceName": "CascadeLib",
+  "preferNameDirectory": true,
+  "primaryOutputs": [ { "path": "CascadeLib.csproj" } ]
+}

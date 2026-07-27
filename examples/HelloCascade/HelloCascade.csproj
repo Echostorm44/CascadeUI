@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>HelloCascade</AssemblyName>
+    <RootNamespace>HelloCascade</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!-- AOT publish configuration. Set as LOCAL properties (not global via -p:)
+         so they do not propagate to ProjectReferences. The Cascade.Generators
+         analyzer targets netstandard2.0 and must not see PublishAot=true during
+         its own evaluation. Combined with UndefineProperties on the generator
+         ProjectReference in Cascade.UI.csproj, this gives full isolation.
+         Publish with: dotnet publish -c Release -r win-x64 (no -p:PublishAot). -->
+    <PublishAot Condition="'$(Configuration)' == 'Release'">true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <StripSymbols>true</StripSymbols>
+
+    <!-- Emit source-generator output to disk for inspection during AOT debugging. -->
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)Generated</CompilerGeneratedFilesOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Cascade.UI\Cascade.UI.csproj" />
+    <ProjectReference Include="..\..\src\Cascade.UI.Installer\Cascade.UI.Installer.csproj" />
+  </ItemGroup>
+
+  <Import Project="..\..\src\Cascade.UI\build\Cascade.UI.targets" />
+
+</Project>

@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Cascade.UI.Integration</RootNamespace>
+    <AssemblyName>Cascade.UI.Integration</AssemblyName>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="TUnit" Version="0.6.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Cascade.UI\Cascade.UI.csproj" />
+    <ProjectReference Include="..\..\src\Cascade.UI.Testing\Cascade.UI.Testing.csproj" />
+    <!-- Build-order dependencies only: the CLI suite launches these as
+         external processes (real CLI exe, real fixture app). -->
+    <ProjectReference Include="..\..\src\Cascade.UI.Tools\Cascade.UI.Tools.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\Cascade.UI.CliFixture\Cascade.UI.CliFixture.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>

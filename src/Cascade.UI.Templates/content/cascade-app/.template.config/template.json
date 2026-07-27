@@ -1,0 +1,94 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "Cascade UI",
+  "classifications": [ "Desktop", "UI", "Cascade" ],
+  "identity": "Cascade.UI.App",
+  "name": "Cascade App",
+  "shortName": "cascade-app",
+  "description": "A Cascade UI application with window, page, and theme selection.",
+  "tags": {
+    "language": "C#",
+    "type": "project"
+  },
+  "sourceName": "CascadeApp",
+  "preferNameDirectory": true,
+  "symbols": {
+    "theme": {
+      "type": "parameter",
+      "datatype": "choice",
+      "defaultValue": "AppleTheme",
+      "description": "The default theme to use.",
+      "replaces": "AppleTheme",
+      "choices": [
+        { "choice": "AppleTheme", "description": "Apple HIG-inspired theme" },
+        { "choice": "FluentTheme", "description": "Microsoft Fluent 2 theme" }
+      ]
+    },
+    "mode": {
+      "type": "parameter",
+      "datatype": "choice",
+      "defaultValue": "System",
+      "description": "The initial theme mode.",
+      "replaces": "__THEMEMODE__",
+      "choices": [
+        { "choice": "System", "description": "Follow the OS setting" },
+        { "choice": "Light", "description": "Always light mode" },
+        { "choice": "Dark", "description": "Always dark mode" }
+      ]
+    },
+    "starter": {
+      "type": "parameter",
+      "datatype": "choice",
+      "defaultValue": "Sample",
+      "description": "Which starter page to generate.",
+      "choices": [
+        { "choice": "Sample", "description": "A sample page with a form" },
+        { "choice": "Counter", "description": "A minimal counter demo" },
+        { "choice": "Blank", "description": "An empty page" }
+      ]
+    },
+    "no-nativeaot": {
+      "type": "parameter",
+      "datatype": "bool",
+      "defaultValue": "false",
+      "description": "Disable NativeAOT publishing."
+    },
+    "UseSample": {
+      "type": "computed",
+      "value": "(starter == \"Sample\")"
+    },
+    "UseCounter": {
+      "type": "computed",
+      "value": "(starter == \"Counter\")"
+    },
+    "UseBlank": {
+      "type": "computed",
+      "value": "(starter == \"Blank\")"
+    },
+    "EnableAot": {
+      "type": "computed",
+      "value": "(!no-nativeaot)"
+    }
+  },
+  "sources": [
+    {
+      "modifiers": [
+        {
+          "condition": "(!UseSample)",
+          "exclude": [ "SamplePage.cs" ]
+        },
+        {
+          "condition": "(!UseCounter)",
+          "exclude": [ "CounterPage.cs" ]
+        },
+        {
+          "condition": "(!UseBlank)",
+          "exclude": [ "BlankPage.cs" ]
+        }
+      ]
+    }
+  ],
+  "primaryOutputs": [
+    { "path": "CascadeApp.csproj" }
+  ]
+}

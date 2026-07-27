@@ -1,0 +1,91 @@
+<idea-plugin>
+    <id>com.cascadeui.rider</id>
+    <name>Cascade UI for Rider</name>
+    <version>1.0.0</version>
+    <vendor email="support@cascadeui.dev" url="https://cascadeui.dev">Cascade UI</vendor>
+
+    <description><![CDATA[
+        <h2>Cascade UI for JetBrains Rider</h2>
+        <p>First-class IDE support for the Cascade UI framework.</p>
+        <ul>
+            <li><b>Live Preview</b> — see your component rendering in real time with the GPU pipeline</li>
+            <li><b>Hot Reload</b> — edit code, save, and see changes instantly with signal state preserved</li>
+            <li><b>Inspector</b> — interactive component tree with bidirectional source linking</li>
+            <li><b>Signal Annotations</b> — see reactive field values inline in the editor</li>
+            <li><b>Theme Editor</b> — visual token editing with live preview</li>
+            <li><b>Accessibility Audit</b> — real-time WCAG compliance checking</li>
+        </ul>
+    ]]></description>
+
+    <change-notes><![CDATA[
+        <h3>1.0.0</h3>
+        <ul>
+            <li>Initial release</li>
+            <li>Live preview panel with theme and size selectors</li>
+            <li>Hot reload with signal state preservation</li>
+            <li>Inspector panel with bidirectional source linking</li>
+            <li>New Solution wizard for Cascade UI projects</li>
+        </ul>
+    ]]></change-notes>
+
+    <idea-version since-build="241" until-build="251.*"/>
+
+    <depends>com.intellij.modules.rider</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="Cascade Preview"
+                    anchor="right"
+                    factoryClass="com.cascadeui.rider.LivePreviewToolWindowFactory"
+                    icon="/icons/cascade-preview.svg"/>
+        <toolWindow id="Cascade Inspector"
+                    anchor="bottom"
+                    factoryClass="com.cascadeui.rider.InspectorToolWindowFactory"
+                    icon="/icons/cascade-inspector.svg"/>
+        <projectConfigurable instance="com.cascadeui.rider.CascadeSettingsConfigurable"
+                            displayName="Cascade UI"
+                            groupId="tools"/>
+    </extensions>
+
+    <actions>
+        <group id="Cascade.MainMenu" text="Cascade" description="Cascade UI actions">
+            <add-to-group group-id="MainMenu" anchor="before" relative-to-action="HelpMenu"/>
+            <action id="Cascade.TogglePreview"
+                    class="com.cascadeui.rider.actions.TogglePreviewAction"
+                    text="Toggle Live Preview"
+                    description="Show or hide the Cascade live preview panel"
+                    icon="/icons/cascade-preview.svg">
+                <keyboard-shortcut keymap="$default" first-keystroke="alt shift P"/>
+            </action>
+            <action id="Cascade.ToggleInspector"
+                    class="com.cascadeui.rider.actions.ToggleInspectorAction"
+                    text="Toggle Inspector"
+                    description="Show or hide the Cascade inspector panel"
+                    icon="/icons/cascade-inspector.svg">
+                <keyboard-shortcut keymap="$default" first-keystroke="alt shift I"/>
+            </action>
+            <action id="Cascade.RestartPreview"
+                    class="com.cascadeui.rider.actions.RestartPreviewAction"
+                    text="Restart Preview"
+                    description="Restart the live preview process"/>
+        </group>
+        <group id="Cascade.NewItems" text="Cascade UI" popup="true">
+            <add-to-group group-id="NewGroup" anchor="after" relative-to-action="NewFile"/>
+            <action id="Cascade.NewPage"
+                    class="com.cascadeui.rider.actions.NewCascadeItemAction"
+                    text="Cascade Page"
+                    description="Create a new Cascade UI page component"/>
+            <action id="Cascade.NewWindow"
+                    class="com.cascadeui.rider.actions.NewCascadeItemAction"
+                    text="Cascade Window"
+                    description="Create a new Cascade UI window"/>
+            <action id="Cascade.NewControl"
+                    class="com.cascadeui.rider.actions.NewCascadeItemAction"
+                    text="Cascade Control"
+                    description="Create a new Cascade UI control"/>
+            <action id="Cascade.NewTheme"
+                    class="com.cascadeui.rider.actions.NewCascadeItemAction"
+                    text="Cascade Theme"
+                    description="Create a new Cascade UI theme"/>
+        </group>
+    </actions>
+</idea-plugin>

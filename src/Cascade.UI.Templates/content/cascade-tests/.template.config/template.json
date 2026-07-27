@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "Cascade UI",
+  "classifications": [ "Desktop", "UI", "Cascade", "Testing" ],
+  "identity": "Cascade.UI.Tests",
+  "name": "Cascade Test Suite",
+  "shortName": "cascade-tests",
+  "description": "A Cascade UI component test suite using TUnit.",
+  "tags": {
+    "language": "C#",
+    "type": "item"
+  },
+  "sourceName": "CascadeTests",
+  "symbols": {
+    "namespace": {
+      "type": "parameter",
+      "datatype": "string",
+      "defaultValue": "MyApp.Tests",
+      "description": "The namespace for the test class.",
+      "replaces": "CascadeTests.Namespace"
+    }
+  },
+  "primaryOutputs": [
+    { "path": "CascadeTests.cs" }
+  ]
+}

@@ -406,7 +406,7 @@ public class TemplatePackageTests
         }
 
         string content = await File.ReadAllTextAsync(path);
-        bool hasId = content.Contains("<PackageId>Cascade.UI.Templates</PackageId>", StringComparison.Ordinal);
+        bool hasId = content.Contains("<PackageId>Echostorm.Cascade.UI.Templates</PackageId>", StringComparison.Ordinal);
         await Assert.That(hasId).IsTrue();
     }
 

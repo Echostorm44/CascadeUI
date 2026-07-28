@@ -97,6 +97,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cascade.UI.Updater.Shim", "
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cascade.UI.Installer.Sqlite", "src\Cascade.UI.Installer.Sqlite\Cascade.UI.Installer.Sqlite.csproj", "{D4F2985A-C107-474B-BEB8-CCFA98454588}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DataBinding", "examples\DataBinding\DataBinding.csproj", "{DA54E14E-D0F7-4FE2-AB9F-3678B3A66D2A}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -611,6 +613,18 @@ Global
 		{D4F2985A-C107-474B-BEB8-CCFA98454588}.Release|x64.Build.0 = Release|Any CPU
 		{D4F2985A-C107-474B-BEB8-CCFA98454588}.Release|x86.ActiveCfg = Release|Any CPU
 		{D4F2985A-C107-474B-BEB8-CCFA98454588}.Release|x86.Build.0 = Release|Any CPU
+		{DA54E14E-D0F7-4FE2-AB9F-3678B3A66D2A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DA54E14E-D0F7-4FE2-AB9F-3678B3A66D2A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DA54E14E-D0F7-4FE2-AB9F-3678B3A66D2A}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{DA54E14E-D0F7-4FE2-AB9F-3678B3A66D2A}.Debug|x64.Build.0 = Debug|Any CPU
+		{DA54E14E-D0F7-4FE2-AB9F-3678B3A66D2A}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{DA54E14E-D0F7-4FE2-AB9F-3678B3A66D2A}.Debug|x86.Build.0 = Debug|Any CPU
+		{DA54E14E-D0F7-4FE2-AB9F-3678B3A66D2A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DA54E14E-D0F7-4FE2-AB9F-3678B3A66D2A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{DA54E14E-D0F7-4FE2-AB9F-3678B3A66D2A}.Release|x64.ActiveCfg = Release|Any CPU
+		{DA54E14E-D0F7-4FE2-AB9F-3678B3A66D2A}.Release|x64.Build.0 = Release|Any CPU
+		{DA54E14E-D0F7-4FE2-AB9F-3678B3A66D2A}.Release|x86.ActiveCfg = Release|Any CPU
+		{DA54E14E-D0F7-4FE2-AB9F-3678B3A66D2A}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -658,5 +672,6 @@ Global
 		{5B79BDC4-E295-4287-9722-4890B3D15146} = {A0000001-0000-0000-0000-000000000001}
 		{E1EB96CA-0543-420C-9EA2-91C727775BD1} = {A0000001-0000-0000-0000-000000000001}
 		{D4F2985A-C107-474B-BEB8-CCFA98454588} = {A0000001-0000-0000-0000-000000000001}
+		{DA54E14E-D0F7-4FE2-AB9F-3678B3A66D2A} = {B36A84DF-456D-A817-6EDD-3EC3E7F6E11F}
 	EndGlobalSection
 EndGlobal

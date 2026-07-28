@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>DataBinding</AssemblyName>
+    <RootNamespace>DataBinding</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
+    <PublishAot Condition="'$(Configuration)' == 'Release'">true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <StripSymbols>true</StripSymbols>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Cascade.UI\Cascade.UI.csproj" />
+  </ItemGroup>
+  <Import Project="..\..\src\Cascade.UI\build\Echostorm.Cascade.UI.targets" />
+</Project>

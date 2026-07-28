@@ -461,6 +461,28 @@ public class ReactivityTests
         await Assert.That(invalidations).IsEqualTo(1);
     }
 
+    [Test]
+    public async Task ComponentBind_HighFrequencyChanges_CoalesceToOneReRenderPerFrame()
+    {
+        // The performance guarantee: binding a control to a value that changes very often
+        // must NOT multiply render work. Each change marks the component dirty, but the
+        // RenderScheduler dedups (HashSet), so N changes within a frame collapse to a
+        // single re-render. CPU/GPU cost is bounded by frame rate, not by change rate.
+        var scheduler = new RenderScheduler();
+        var page = new BindTestComponent();
+        var host = new ComponentHost(page, scheduler, treeDepth: 0);
+        host.Mount();
+
+        var bind = page.MakeNameBind();
+        for (int i = 0; i < 10_000; i++)
+        {
+            bind.OnChange("v" + i);
+        }
+
+        // 10,000 changes → exactly one dirty component → one re-render this frame.
+        await Assert.That(scheduler.DirtyCount).IsEqualTo(1);
+    }
+
     // Exercises the framework-level Bind() promoted to Component (Bind(value, setter)).
     private sealed class BindTestComponent : Component
     {

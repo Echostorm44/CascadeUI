@@ -250,6 +250,10 @@ internal sealed class Win32Window : IDisposable
         // Accept files dragged from Explorer; delivered as WM_DROPFILES (see HandleMessage).
         Win32.DragAcceptFiles(handle, true);
 
+        // Give the window its own icon (title bar + taskbar) from the executable's
+        // embedded <ApplicationIcon>, instead of the generic Windows default.
+        ApplyAppIcon();
+
         // Query the actual DPI for this window's monitor.
         currentDpi = Win32.GetDpiForWindow(handle);
         if (currentDpi == 0)
@@ -700,6 +704,33 @@ internal sealed class Win32Window : IDisposable
         }
 
         return paths;
+    }
+
+    // Sets the window's small (title bar) and large (Alt-Tab / taskbar) icons from
+    // the running executable's embedded application icon. No-op if the exe has no
+    // icon (the OS then falls back to its default), so it is safe for every app.
+    private void ApplyAppIcon()
+    {
+        string? exePath = Environment.ProcessPath;
+        if (string.IsNullOrEmpty(exePath))
+        {
+            return;
+        }
+
+        if (Win32.ExtractIconExW(exePath, 0, out nint largeIcon, out nint smallIcon, 1) == 0)
+        {
+            return;
+        }
+
+        if (smallIcon != 0)
+        {
+            Win32.SendMessageW(handle, Win32.WM_SETICON, Win32.ICON_SMALL, smallIcon);
+        }
+
+        if (largeIcon != 0)
+        {
+            Win32.SendMessageW(handle, Win32.WM_SETICON, Win32.ICON_BIG, largeIcon);
+        }
     }
 
     private nint HandleMessage(uint msg, nuint wParam, nint lParam)

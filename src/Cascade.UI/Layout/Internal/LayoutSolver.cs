@@ -2234,11 +2234,12 @@ internal static class LayoutSolver
 
     private static Size MeasureImage(Image img, LayoutConstraints constraints)
     {
-        // If the image has a decoded source, use its intrinsic dimensions
-        if (img.Source is not null)
+        // If the image has (or can resolve) a decoded source, use its intrinsic dimensions
+        ImageSource? source = img.ResolveSource();
+        if (source is not null)
         {
-            float intrinsicW = img.Source.Width;
-            float intrinsicH = img.Source.Height;
+            float intrinsicW = source.Width;
+            float intrinsicH = source.Height;
 
             // Scale to fit within constraints while preserving aspect ratio
             float scaleW = constraints.MaxWidth / intrinsicW;

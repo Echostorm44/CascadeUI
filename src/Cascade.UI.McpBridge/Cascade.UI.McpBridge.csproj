@@ -27,6 +27,9 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Cascade.UI.McpBridge.Tests" />
+    <!-- The `cascade` CLI hosts the same stdio bridge via `cascade mcp serve`.
+         Value is the CLI's assembly name (AssemblyName=cascade), not its project name. -->
+    <InternalsVisibleTo Include="cascade" />
   </ItemGroup>
 
 </Project>

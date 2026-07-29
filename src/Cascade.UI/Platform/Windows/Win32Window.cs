@@ -44,6 +44,7 @@ internal sealed class Win32Window : IDisposable
     internal Action? Destroyed;
     internal Action<uint>? DpiChanged;
     internal Action<int, int>? SizeChanged;
+    internal Action<string[]>? FilesDropped;
 
     internal nint Handle => handle;
 
@@ -246,6 +247,9 @@ internal sealed class Win32Window : IDisposable
 
         windowMap[handle] = this;
 
+        // Accept files dragged from Explorer; delivered as WM_DROPFILES (see HandleMessage).
+        Win32.DragAcceptFiles(handle, true);
+
         // Query the actual DPI for this window's monitor.
         currentDpi = Win32.GetDpiForWindow(handle);
         if (currentDpi == 0)
@@ -378,6 +382,25 @@ internal sealed class Win32Window : IDisposable
         }
 
         Win32.ShowWindow(handle, Win32.SW_RESTORE);
+    }
+
+    /// <summary>
+    /// Brings the window to the foreground, restoring it first if minimized.
+    /// Used e.g. when a second app instance routes its arguments to this one.
+    /// </summary>
+    internal void Activate()
+    {
+        if (handle == 0)
+        {
+            return;
+        }
+
+        if (Win32.IsIconic(handle))
+        {
+            Win32.ShowWindow(handle, Win32.SW_RESTORE);
+        }
+
+        Win32.SetForegroundWindow(handle);
     }
 
     internal void Close()
@@ -656,6 +679,29 @@ internal sealed class Win32Window : IDisposable
         return Win32.DefWindowProcW(hWnd, msg, wParam, lParam);
     }
 
+    // Enumerates the file paths carried by a WM_DROPFILES HDROP. Passing 0xFFFFFFFF
+    // as the index returns the count; each path is then read into a right-sized buffer.
+    private static string[] QueryDroppedFiles(nint hDrop)
+    {
+        uint count = Win32.DragQueryFileW(hDrop, 0xFFFFFFFF, null, 0);
+        if (count == 0)
+        {
+            return [];
+        }
+
+        var paths = new string[count];
+        for (uint i = 0; i < count; i++)
+        {
+            // Length excludes the null terminator; allocate +1 for it.
+            uint len = Win32.DragQueryFileW(hDrop, i, null, 0);
+            char[] buffer = new char[len + 1];
+            uint copied = Win32.DragQueryFileW(hDrop, i, buffer, (uint)buffer.Length);
+            paths[i] = new string(buffer, 0, (int)copied);
+        }
+
+        return paths;
+    }
+
     private nint HandleMessage(uint msg, nuint wParam, nint lParam)
     {
         switch (msg)
@@ -689,6 +735,25 @@ internal sealed class Win32Window : IDisposable
                     SizeChanged?.Invoke(width, height);
                 }
                 MessageReceived?.Invoke(msg, wParam, lParam);
+                return 0;
+            }
+
+            case Win32.WM_DROPFILES:
+            {
+                // wParam is an HDROP. Enumerate the dropped paths, then release it.
+                nint hDrop = (nint)wParam;
+                try
+                {
+                    string[] files = QueryDroppedFiles(hDrop);
+                    if (files.Length > 0)
+                    {
+                        FilesDropped?.Invoke(files);
+                    }
+                }
+                finally
+                {
+                    Win32.DragFinish(hDrop);
+                }
                 return 0;
             }
 

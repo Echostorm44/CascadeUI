@@ -57,6 +57,15 @@ internal static class McpCommand
             return ExecuteDocs(rest);
         }
 
+        // "serve" runs the long-lived stdio MCP bridge (the same server the
+        // standalone cascade-mcp executable hosts). This is what an MCP client
+        // such as Claude Code connects to; it forwards to whichever Cascade app
+        // is running and returns "no live instance" errors when none is.
+        if (subcommand == "serve")
+        {
+            return ExecuteServe(rest);
+        }
+
         McpCliVerbBinding? binding = McpToolRegistry.FindByVerb(subcommand);
         if (binding is null)
         {
@@ -78,6 +87,18 @@ internal static class McpCommand
     }
 
     // ── Subcommands ──────────────────────────────────────────────
+
+    private static int ExecuteServe(string[] args)
+    {
+        // Without --app the bridge reads the global registry and forwards to
+        // whichever Cascade app is running (matching the standalone cascade-mcp
+        // executable's default appId).
+        string appId = GetOption(args, "--app") ?? "cascade-mcp";
+
+        using var server = new Cascade.UI.McpBridge.HeadlessMcpServer(appId);
+        server.Run();
+        return 0;
+    }
 
     private static int ExecuteInfo(string[] args)
     {
@@ -900,6 +921,7 @@ internal static class McpCommand
         Console.WriteLine("Usage: cascade mcp <subcommand> [options]");
         Console.WriteLine();
         Console.WriteLine("Subcommands:");
+        Console.WriteLine($"  {"serve [--app <name>]",-50} Run the stdio MCP bridge (for MCP clients)");
         Console.WriteLine($"  {"info [--app <name>]",-50} List running Cascade instances");
         Console.WriteLine($"  {"docs [-o <file>]",-50} Tool reference generated from the registry");
 
@@ -948,6 +970,19 @@ internal static class McpCommand
 
     private static int PrintVerbHelp(string subcommand)
     {
+        if (subcommand == "serve")
+        {
+            Console.WriteLine("Usage: cascade mcp serve [--app <name>]");
+            Console.WriteLine();
+            Console.WriteLine("Run the long-lived stdio MCP bridge — the server an MCP client (e.g.");
+            Console.WriteLine("Claude Code) connects to. It speaks MCP over stdin/stdout, discovers");
+            Console.WriteLine("running Cascade apps via the shared registry, and forwards live tool");
+            Console.WriteLine("calls to them. With no app running it still serves tool schemas and");
+            Console.WriteLine("returns structured \"no live instance\" errors. Without --app it targets");
+            Console.WriteLine("whichever Cascade app is running.");
+            return 0;
+        }
+
         if (subcommand == "info")
         {
             Console.WriteLine("Usage: cascade mcp info [--app <name>]");

@@ -64,12 +64,17 @@ internal static partial class Win32
     internal const uint WM_EXITSIZEMOVE     = 0x0232;
     internal const uint WM_HOTKEY            = 0x0312;
     internal const uint WM_DROPFILES        = 0x0233;
+    internal const uint WM_COPYDATA         = 0x004A;
+    internal const uint WM_COPYGLOBALDATA   = 0x0049;
     internal const uint WM_SETICON          = 0x0080;
     internal const uint WM_USER             = 0x0400;
 
     // WM_SETICON wParam values.
     internal const nuint ICON_SMALL = 0;
     internal const nuint ICON_BIG   = 1;
+
+    // ChangeWindowMessageFilterEx action: let the message through the UIPI filter.
+    internal const uint MSGFLT_ALLOW = 1;
 
     // ── Hotkey Modifier Constants ─────────────────────────────────────
 
@@ -750,6 +755,13 @@ internal static partial class Win32
     // from Explorer. lParam of WM_DROPFILES is an HDROP usable with DragQueryFileW/DragFinish.
     [LibraryImport("shell32", EntryPoint = "DragAcceptFiles")]
     internal static partial void DragAcceptFiles(nint hWnd, [MarshalAs(UnmanagedType.Bool)] bool fAccept);
+
+    // Lets a specific window message pass the UIPI message filter. Required for an
+    // elevated (High-integrity) window to receive WM_DROPFILES from a normal
+    // (Medium-integrity) Explorer — without it, such drops are silently discarded.
+    [LibraryImport("user32", EntryPoint = "ChangeWindowMessageFilterEx")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool ChangeWindowMessageFilterEx(nint hWnd, uint message, uint action, nint pChangeFilterStruct);
 
     // Extracts icon handles embedded in an executable (index 0 = the app's main
     // icon group, i.e. the one set via <ApplicationIcon>). Returns the number of

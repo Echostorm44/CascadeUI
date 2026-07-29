@@ -250,6 +250,13 @@ internal sealed class Win32Window : IDisposable
         // Accept files dragged from Explorer; delivered as WM_DROPFILES (see HandleMessage).
         Win32.DragAcceptFiles(handle, true);
 
+        // If this process runs elevated (High integrity), UIPI otherwise silently
+        // blocks WM_DROPFILES from a normal (Medium) Explorer, so drops do nothing.
+        // Allow the drag-drop message trio through the filter. Harmless when not elevated.
+        Win32.ChangeWindowMessageFilterEx(handle, Win32.WM_DROPFILES, Win32.MSGFLT_ALLOW, 0);
+        Win32.ChangeWindowMessageFilterEx(handle, Win32.WM_COPYDATA, Win32.MSGFLT_ALLOW, 0);
+        Win32.ChangeWindowMessageFilterEx(handle, Win32.WM_COPYGLOBALDATA, Win32.MSGFLT_ALLOW, 0);
+
         // Give the window its own icon (title bar + taskbar) from the executable's
         // embedded <ApplicationIcon>, instead of the generic Windows default.
         ApplyAppIcon();

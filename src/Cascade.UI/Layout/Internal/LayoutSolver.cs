@@ -1285,30 +1285,25 @@ internal static class LayoutSolver
 
     private static Size MeasureListView(IListViewNode lvn, LayoutConstraints constraints)
     {
-        float itemHeight = lvn.GetItemHeight();
-        float totalHeight;
+        // The list's rows are a real node tree built from the render callback.
+        // Measure it at the list's width with unbounded height so its full content
+        // height is reported; a wrapping ScrollView (or a fixed Height) then decides
+        // the visible viewport, and the painter clips overflow to the list bounds.
+        Node content = lvn.GetContentNode();
 
-        if (lvn.SectionCount > 0)
-        {
-            totalHeight = 0f;
-            for (int s = 0; s < lvn.SectionCount; s++)
-            {
-                totalHeight += 32f; // section header
-                totalHeight += lvn.GetSectionItemCount(s) * itemHeight;
-            }
-        }
-        else
-        {
-            totalHeight = lvn.ItemCount * itemHeight;
-        }
+        var contentConstraints = new LayoutConstraints(
+            constraints.MinWidth, constraints.MaxWidth,
+            0, float.PositiveInfinity);
+        Size contentSize = MeasureChild(content, contentConstraints);
+        PositionChild(content, 0, 0);
 
-        float desiredWidth = float.IsPositiveInfinity(constraints.MaxWidth)
-            ? 300f
+        float width = float.IsPositiveInfinity(constraints.MaxWidth)
+            ? contentSize.Width
             : constraints.MaxWidth;
 
         return new Size(
-            constraints.ConstrainWidth(desiredWidth),
-            constraints.ConstrainHeight(MathF.Max(totalHeight, 40f)));
+            constraints.ConstrainWidth(width),
+            constraints.ConstrainHeight(MathF.Max(contentSize.Height, 1f)));
     }
 
     /// <summary>

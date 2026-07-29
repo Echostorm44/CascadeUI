@@ -9,6 +9,14 @@ internal interface ITreeView
     /// <summary>Returns the visible tree items flattened for rendering.</summary>
     IReadOnlyList<TreeViewDisplayItem> GetFlattenedDisplay();
 
+    /// <summary>
+    /// The caller's rendered node for the row at the given flattened index (from
+    /// the render callback), or an empty node if unavailable. Painted in the row's
+    /// content area so custom rows / icons actually render instead of plain text.
+    /// Valid after <see cref="GetFlattenedDisplay"/> has run for the frame.
+    /// </summary>
+    Node GetRowContent(int rowIndex);
+
     /// <summary>Toggles the expand/collapse state of the row at the given flattened index.</summary>
     void ToggleRow(int rowIndex);
 
@@ -207,6 +215,16 @@ public sealed class TreeView<T> : Node, ITreeView
         cachedDefaultExpanded = defaults;
         cachedNodes = nodes;
         return result;
+    }
+
+    Node ITreeView.GetRowContent(int rowIndex)
+    {
+        if (cachedNodes == null || rowIndex < 0 || rowIndex >= cachedNodes.Count)
+        {
+            return Node.Empty;
+        }
+
+        return Render(cachedNodes[rowIndex].Data);
     }
 
     void ITreeView.ToggleRow(int rowIndex)

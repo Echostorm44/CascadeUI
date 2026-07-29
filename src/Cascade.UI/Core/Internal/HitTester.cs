@@ -235,8 +235,10 @@ internal static class HitTester
                Card { ClickHandler: not null } or
                Tag { OnToggle: not null } or
                Tag { OnRemove: not null } or
-               ITabularDataNode or
-               IListViewNode;
+               ITabularDataNode;
+        // NOTE: IListViewNode is intentionally NOT here — it delegates to its
+        // rendered content (see GetSingleChild), so hit-testing must descend into
+        // the rows (e.g. a per-row remove button) rather than stop at the list.
     }
 
     private static IReadOnlyList<Node>? GetChildren(Node node)
@@ -265,6 +267,7 @@ internal static class HitTester
             IRadioButton rb when !rb.NodeLabel.IsLayoutEmpty => rb.NodeLabel,
             FormValidator fv    => fv.Content,
             AnimatePresence ap  => ap.Child,
+            IListViewNode lvn   => lvn.GetContentNode(),
             _ => null
         };
     }

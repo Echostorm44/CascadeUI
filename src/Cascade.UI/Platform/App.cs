@@ -22,6 +22,8 @@ public static class App
     private static readonly List<Func<Task>> shutdownHandlers = [];
     private static Action<string[]>? secondInstanceHandler;
     private static Action<Uri>? deepLinkHandler;
+    private static Action<string[]>? filesDroppedHandler;
+    private static SingleInstanceGuard? singleInstanceGuard;
 
     // ── Window Management ────────────────────────────────────────────
 
@@ -190,6 +192,22 @@ public static class App
 
     private static void RunWindows<TRoot>(AppConfig config) where TRoot : Component, new()
     {
+        // Single-instance gate. If another instance is already running, forward
+        // this launch's arguments to it and exit before building any UI.
+        if (config.SingleInstance)
+        {
+            string appId = System.Reflection.Assembly.GetEntryAssembly()?.GetName().Name ?? "CascadeApp";
+            var guard = new SingleInstanceGuard(appId);
+            if (!guard.TryAcquireOwnership())
+            {
+                guard.SendToPrimary(Args.Raw);
+                guard.Dispose();
+                return;
+            }
+
+            singleInstanceGuard = guard;
+        }
+
         Win32Window.EnableDpiAwareness();
 
         var loop = new Win32MessageLoop();
@@ -278,6 +296,20 @@ public static class App
             orchestrator.PixelRatio = newDpi / 96.0f;
         };
 
+        window.FilesDropped = (files) =>
+        {
+            filesDroppedHandler?.Invoke(files);
+        };
+
+        // Primary instance: when a second launch forwards its arguments, surface
+        // this window and hand the arguments to the app on the UI thread.
+        singleInstanceGuard?.StartListening(args =>
+            Dispatcher.Post(() =>
+            {
+                window.Activate();
+                secondInstanceHandler?.Invoke(args);
+            }));
+
         window.MessageReceived = (msg, wParam, lParam) =>
         {
             if (msg == Win32.WM_DISPATCH)
@@ -342,6 +374,8 @@ public static class App
         gpu?.Dispose();
         loop.Dispose();
         window.Dispose();
+        singleInstanceGuard?.Dispose();
+        singleInstanceGuard = null;
         nativeWindow = null;
         Dispatcher.messageLoop = null;
     }
@@ -565,6 +599,17 @@ public static class App
     public static void OnDeepLink(Action<Uri> handler)
     {
         deepLinkHandler = handler;
+    }
+
+    /// <summary>
+    /// Registers a handler invoked when the user drags one or more files from the
+    /// OS file manager (e.g. Windows Explorer) and drops them onto the app window.
+    /// The handler receives the absolute paths of the dropped files.
+    /// </summary>
+    /// <param name="handler">Handler receiving the dropped file paths.</param>
+    public static void OnFilesDropped(Action<string[]> handler)
+    {
+        filesDroppedHandler = handler;
     }
 
     // ── Arguments ────────────────────────────────────────────────────
@@ -1170,7 +1215,13 @@ public sealed class AppConfig
     /// <summary>The theme mode (light, dark, or follow system).</summary>
     public ThemeMode ThemeMode { get; set; } = ThemeMode.System;
 
-    /// <summary>Whether to enforce single-instance mode.</summary>
+    /// <summary>
+    /// When true, only one instance of the application runs at a time. A second
+    /// launch forwards its command-line arguments to the already-running instance
+    /// (delivered via <see cref="App.OnSecondInstanceLaunched"/>, which also brings
+    /// the primary window to the foreground) and then exits without opening a
+    /// window. Windows-only for now.
+    /// </summary>
     public bool SingleInstance { get; set; }
 
     /// <summary>Whether to start the window minimized.</summary>

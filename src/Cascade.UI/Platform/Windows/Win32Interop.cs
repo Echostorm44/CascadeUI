@@ -63,6 +63,7 @@ internal static partial class Win32
     internal const uint WM_ENTERSIZEMOVE    = 0x0231;
     internal const uint WM_EXITSIZEMOVE     = 0x0232;
     internal const uint WM_HOTKEY            = 0x0312;
+    internal const uint WM_DROPFILES        = 0x0233;
     internal const uint WM_USER             = 0x0400;
 
     // ── Hotkey Modifier Constants ─────────────────────────────────────
@@ -739,6 +740,11 @@ internal static partial class Win32
 
     [LibraryImport("shell32", EntryPoint = "DragFinish")]
     internal static partial void DragFinish(nint hDrop);
+
+    // Registers/unregisters a window to receive WM_DROPFILES when files are dropped on it
+    // from Explorer. lParam of WM_DROPFILES is an HDROP usable with DragQueryFileW/DragFinish.
+    [LibraryImport("shell32", EntryPoint = "DragAcceptFiles")]
+    internal static partial void DragAcceptFiles(nint hWnd, [MarshalAs(UnmanagedType.Bool)] bool fAccept);
 
     [LibraryImport("shell32", EntryPoint = "SHBrowseForFolderW")]
     internal static partial nint SHBrowseForFolderW(ref BROWSEINFOW lpbi);

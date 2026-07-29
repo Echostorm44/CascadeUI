@@ -115,11 +115,13 @@ public class ImageSourceTests
     // ── PNG validation ────────────────────────────────────────────────
 
     [Test]
-    public async Task Png_TooSmallData_ThrowsFormatException()
+    public async Task Png_TooSmallData_ThrowsNotSupportedException()
     {
+        // Only 3 bytes — too short to identify as any image format, so it is
+        // reported as unrecognized (NotSupportedException) rather than corrupt.
         await Assert.That(() =>
                 ImageSource.FromStream(new MemoryStream(new byte[] { 0x89, 0x50, 0x4E })))
-            .Throws<FormatException>();
+            .Throws<NotSupportedException>();
     }
 
     [Test]

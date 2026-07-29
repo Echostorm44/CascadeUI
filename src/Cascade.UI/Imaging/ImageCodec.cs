@@ -24,7 +24,7 @@ internal static class ImageCodec
     {
         ArgumentNullException.ThrowIfNull(fileData);
 
-        using SharpImageFrame frame = FormatRegistry.Read(fileData);
+        using SharpImageFrame frame = DecodeFrame(fileData);
 
         int width = (int)frame.Columns;
         int height = (int)frame.Rows;
@@ -53,6 +53,29 @@ internal static class ImageCodec
         }
 
         return (rgba, width, height);
+    }
+
+    // Decodes to a SharpImage frame with a stable exception contract, independent
+    // of SharpImage's internal exception types: unrecognized data throws
+    // NotSupportedException; recognized-but-corrupt/truncated data throws
+    // FormatException (with the underlying error as InnerException).
+    private static SharpImageFrame DecodeFrame(byte[] fileData)
+    {
+        ImageFileFormat format = FormatRegistry.DetectFormat(fileData);
+        if (format == ImageFileFormat.Unknown)
+        {
+            throw new NotSupportedException("The data is not a recognized image format.");
+        }
+
+        try
+        {
+            return FormatRegistry.Decode(fileData, format);
+        }
+        catch (Exception ex) when (ex is not NotSupportedException and not OutOfMemoryException)
+        {
+            throw new FormatException(
+                "The image data could not be decoded; it may be corrupt or truncated.", ex);
+        }
     }
 
     /// <summary>

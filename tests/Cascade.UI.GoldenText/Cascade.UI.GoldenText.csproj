@@ -20,7 +20,7 @@
          Mirrors Cascade.UI: local Etch source ref for dev, the published Echostorm.Etch
          package (which bundles Etch.Testing) when UseEtchPackage=true — CI has no Etch checkout. -->
     <ProjectReference Include="..\..\..\Etch\src\Etch.Testing\Etch.Testing.csproj" Condition="'$(UseEtchPackage)' != 'true'" />
-    <PackageReference Include="Echostorm.Etch" Version="0.1.0-alpha.5" Condition="'$(UseEtchPackage)' == 'true'" />
+    <PackageReference Include="Echostorm.Etch" Version="0.1.0-alpha.6" Condition="'$(UseEtchPackage)' == 'true'" />
     <!-- Build-order dependencies only: the golden tests launch these as
          external processes (real CLI exe, real specimen app). -->
     <ProjectReference Include="..\..\src\Cascade.UI.Tools\Cascade.UI.Tools.csproj" ReferenceOutputAssembly="false" />

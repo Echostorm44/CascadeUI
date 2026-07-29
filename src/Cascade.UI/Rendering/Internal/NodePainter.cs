@@ -132,6 +132,9 @@ internal sealed class NodePainter
     // drag frames to avoid a per-frame allocation.
     private LayoutEngine? dragPreviewLayout;
 
+    // Lays out each TreeView row's (detached) rendered content node on demand.
+    private LayoutEngine? treeRowLayout;
+
     // Lays out the (detached) curtain node produced by a curtain page transition
     // on demand. Reused across transition frames to avoid a per-frame allocation.
     private LayoutEngine? curtainLayout;
@@ -889,7 +892,7 @@ internal sealed class NodePainter
                 break;
 
             case IListViewNode lvn:
-                PaintListView(lvn, (Node)lvn, bounds);
+                PaintListView(lvn, bounds);
                 break;
 
             case NavigationTransitionHost nth:
@@ -11335,105 +11338,16 @@ internal sealed class NodePainter
 
     // ── ListView (IListViewNode) ──────────────────────────────────────
 
-    private void PaintListView(IListViewNode lvn, Node node, Rect bounds)
+    private void PaintListView(IListViewNode lvn, Rect bounds)
     {
-        float itemHeight = lvn.GetItemHeight();
-        const float pad = 12f;
-        const float fontSize = 13f;
-        const float sectionFontSize = 11f;
+        // Card chrome.
+        ctx.DrawRect(bounds, theme.Colors.Surface, radius: 4f);
+        ctx.DrawRect(bounds, stroke: new Stroke(theme.Colors.Border, 1f), radius: 4f);
 
-        var bg = theme.Colors.Surface;
-        var textColor = theme.Colors.Text;
-        var borderColor = theme.Colors.Border;
-        var selectedBg = theme.Colors.Primary;
-        var selectedText = theme.Colors.TextOnPrimary;
-        var sectionBg = theme.Colors.SurfaceAlt;
-        var sectionText = theme.Colors.TextMuted;
-
-        // Outer border
-        ctx.DrawRect(bounds, bg, radius: 4f);
-        ctx.DrawRect(bounds, stroke: new Stroke(borderColor, 1f), radius: 4f);
-
-        float currentY = bounds.Y;
-
-        if (lvn.SectionCount > 0)
-        {
-            for (int s = 0; s < lvn.SectionCount; s++)
-            {
-                if (currentY > bounds.Bottom)
-                {
-                    break;
-                }
-
-                // Section header
-                float sectionHeaderHeight = 28f;
-                ctx.DrawRect(new Rect(bounds.X + 1f, currentY, bounds.Width - 2f, sectionHeaderHeight), sectionBg);
-                ctx.DrawText(lvn.GetSectionKey(s).ToUpperInvariant(), MathF.Round(bounds.X + pad),
-                    MathF.Round(currentY + (sectionHeaderHeight - sectionFontSize) / 2f),
-                    sectionFontSize, sectionText);
-                currentY += sectionHeaderHeight;
-
-                // Section items
-                for (int i = 0; i < lvn.GetSectionItemCount(s); i++)
-                {
-                    if (currentY + itemHeight > bounds.Bottom)
-                    {
-                        break;
-                    }
-
-                    string text = lvn.GetSectionItemText(s, i);
-                    ctx.DrawText(text, MathF.Round(bounds.X + pad),
-                        MathF.Round(currentY + (itemHeight - fontSize) / 2f),
-                        fontSize, textColor);
-
-                    currentY += itemHeight;
-
-                    // Separator
-                    ctx.DrawLine(
-                        new Point(bounds.X + pad, currentY),
-                        new Point(bounds.Right - pad, currentY),
-                        new Stroke(borderColor, 0.5f));
-                }
-            }
-        }
-        else
-        {
-            for (int i = 0; i < lvn.ItemCount; i++)
-            {
-                float itemY = bounds.Y + i * itemHeight;
-                if (itemY + itemHeight > bounds.Bottom)
-                {
-                    break;
-                }
-
-                bool isSelected = lvn.IsItemSelected(i);
-                string text = lvn.GetItemText(i);
-
-                if (isSelected)
-                {
-                    ctx.DrawRect(new Rect(bounds.X + 1f, itemY, bounds.Width - 2f, itemHeight), selectedBg);
-                    ctx.DrawText(text, MathF.Round(bounds.X + pad),
-                        MathF.Round(itemY + (itemHeight - fontSize) / 2f),
-                        fontSize, selectedText);
-                }
-                else
-                {
-                    ctx.DrawText(text, MathF.Round(bounds.X + pad),
-                        MathF.Round(itemY + (itemHeight - fontSize) / 2f),
-                        fontSize, textColor);
-                }
-
-                // Separator
-                if (i < lvn.ItemCount - 1)
-                {
-                    float sepY = itemY + itemHeight;
-                    ctx.DrawLine(
-                        new Point(bounds.X + pad, sepY),
-                        new Point(bounds.Right - pad, sepY),
-                        new Stroke(borderColor, 0.5f));
-                }
-            }
-        }
+        // The rows are a real node tree built from the render callback. Paint it,
+        // clipped to the list bounds; a wrapping ScrollView (if any) handles scroll.
+        using var clip = ctx.PushRoundedClip(bounds, 4f);
+        PaintRecursive(lvn.GetContentNode());
     }
 
     // ── ColorPicker ───────────────────────────────────────────────────
@@ -14905,17 +14819,44 @@ internal sealed class NodePainter
                 ctx.DrawCircle(new Point(dotX, dotY), 2f, fill: dotColor);
             }
 
-            // Draw label text, optically centred on the row so it lines up with the
-            // chevron / leaf dot (both drawn at the row centre). DrawText's y is the
-            // line-box top; the visible glyph box sits ~0.3·fontSize below it, so its
-            // optical centre is ~0.8·fontSize down — place that on the row centre.
+            // Row content sits to the right of the chevron/leaf dot.
             float textX = indentX + iconSize + 8f;
-            float fontSize = item.Depth == 0 ? 13f : 12f;
-            float textY = rowY + rowHeight / 2f - fontSize * 0.8f;
-            var textColor = isSelected
-                ? theme.Colors.TextOnPrimary
-                : (item.HasChildren ? theme.Colors.Text : theme.Colors.TextMuted);
-            ctx.DrawText(item.Label, textX, textY, fontSize, textColor);
+
+            // Paint the caller's rendered node (icon + label, custom rows, etc.),
+            // laid out on demand and vertically centred in the row. Falls back to
+            // the plain label text when the render callback produced nothing.
+            Node rowContent = tree.GetRowContent(i);
+            if (!rowContent.IsLayoutEmpty)
+            {
+                float contentW = MathF.Max(0f, bounds.Right - textX - 6f);
+                treeRowLayout ??= new LayoutEngine();
+                treeRowLayout.Layout(rowContent, LayoutConstraints.Loose(new Size(contentW, rowHeight)));
+                float contentH = rowContent.LayoutData.MeasuredSize.Height;
+                float contentY = rowY + MathF.Max(0f, (rowHeight - contentH) / 2f);
+
+                float savedAx = absoluteX, savedAy = absoluteY;
+                absoluteX = textX;
+                absoluteY = contentY;
+                using (ctx.PushTranslate(textX, contentY))
+                {
+                    PaintRecursive(rowContent);
+                }
+
+                absoluteX = savedAx;
+                absoluteY = savedAy;
+            }
+            else
+            {
+                // DrawText's y is the line-box top; the glyph box sits ~0.3·fontSize
+                // below, so its optical centre is ~0.8·fontSize down — put that on
+                // the row centre to line up with the chevron/leaf dot.
+                float fontSize = item.Depth == 0 ? 13f : 12f;
+                float textY = rowY + rowHeight / 2f - fontSize * 0.8f;
+                var textColor = isSelected
+                    ? theme.Colors.TextOnPrimary
+                    : (item.HasChildren ? theme.Colors.Text : theme.Colors.TextMuted);
+                ctx.DrawText(item.Label, textX, textY, fontSize, textColor);
+            }
         }
     }
 

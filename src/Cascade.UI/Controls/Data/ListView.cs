@@ -15,6 +15,13 @@ internal interface IListViewNode
     string GetSectionKey(int sectionIndex);
     int GetSectionItemCount(int sectionIndex);
     string GetSectionItemText(int sectionIndex, int itemIndex);
+
+    /// <summary>
+    /// The real node tree for the list's rows, built from the render callback(s).
+    /// Layout, paint, and hit-testing delegate to this so custom rows actually
+    /// render and are interactive. Built once and cached per instance.
+    /// </summary>
+    Node GetContentNode();
 }
 
 /// <summary>
@@ -223,6 +230,56 @@ public sealed class ListView<T> : Node, IListViewNode
     string IListViewNode.GetSectionItemText(int sectionIndex, int itemIndex)
     {
         return Sections?[sectionIndex].Items[itemIndex]?.ToString() ?? "";
+    }
+
+    private Node? contentNode;
+
+    /// <summary>
+    /// Builds (once, cached) the row tree from the render callbacks: a Column of
+    /// rendered items, with a rendered header before each section's items when
+    /// grouped, or the empty-state node when there are no items.
+    /// </summary>
+    public Node GetContentNode()
+    {
+        if (contentNode is not null)
+        {
+            return contentNode;
+        }
+
+        if (Sections is not null)
+        {
+            var children = new List<Node>();
+            foreach (var section in Sections)
+            {
+                if (RenderHeader is not null)
+                {
+                    children.Add(RenderHeader(section));
+                }
+
+                foreach (var item in section.Items)
+                {
+                    children.Add(Render(item));
+                }
+            }
+
+            contentNode = new Column(spacing: 0, children: [.. children]);
+        }
+        else if (Items.Count == 0)
+        {
+            contentNode = emptyStateNode;
+        }
+        else
+        {
+            var children = new Node[Items.Count];
+            for (int i = 0; i < Items.Count; i++)
+            {
+                children[i] = Render(Items[i]);
+            }
+
+            contentNode = new Column(spacing: 0, children: children);
+        }
+
+        return contentNode;
     }
 }
 

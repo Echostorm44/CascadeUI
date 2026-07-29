@@ -108,64 +108,14 @@ public static class AiImage
     }
 
     /// <summary>
-    /// Minimal PNG encoder. Produces a valid PNG from RGBA pixel data
-    /// using deflate compression and no row filtering.
+    /// Encodes RGBA8 frame pixels to a PNG via SharpImage (see
+    /// <see cref="Imaging.ImageCodec"/>). <paramref name="image"/>'s pixels are
+    /// tightly packed RGBA (stride = width * 4).
     /// </summary>
     internal static byte[] EncodePng(ImageData image)
     {
-        int width = image.Width;
-        int height = image.Height;
-        int stride = width * 4;
-
-        using var ms = new MemoryStream();
-        using var writer = new BinaryWriter(ms);
-
-        // PNG signature
-        writer.Write(new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A });
-
-        // IHDR
-        WritePngChunk(writer, "IHDR"u8, w =>
-        {
-            WriteBigEndian(w, width);
-            WriteBigEndian(w, height);
-            w.Write((byte)8);  // bit depth
-            w.Write((byte)6);  // RGBA
-            w.Write((byte)0);  // compression
-            w.Write((byte)0);  // filter
-            w.Write((byte)0);  // interlace
-        });
-
-        // IDAT
-        WritePngChunk(writer, "IDAT"u8, w =>
-        {
-            using var deflateMs = new MemoryStream();
-            deflateMs.WriteByte(0x78); // zlib CMF
-            deflateMs.WriteByte(0x01); // zlib FLG
-
-            using (var compressor = new System.IO.Compression.DeflateStream(
-                deflateMs, System.IO.Compression.CompressionLevel.Fastest, leaveOpen: true))
-            {
-                byte[] filterByte = [0]; // None
-                for (int y = 0; y < height; y++)
-                {
-                    compressor.Write(filterByte, 0, 1);
-                    compressor.Write(image.Pixels, y * stride, stride);
-                }
-            }
-
-            uint adler = ComputeAdler32(image.Pixels, width, height, stride);
-            deflateMs.WriteByte((byte)(adler >> 24));
-            deflateMs.WriteByte((byte)(adler >> 16));
-            deflateMs.WriteByte((byte)(adler >> 8));
-            deflateMs.WriteByte((byte)adler);
-
-            w.Write(deflateMs.ToArray());
-        });
-
-        // IEND
-        WritePngChunk(writer, "IEND"u8, _ => { });
-
-        return ms.ToArray();
+        ArgumentNullException.ThrowIfNull(image);
+        return Imaging.ImageCodec.EncodePng(image.Pixels, image.Width, image.Height);
     }
 
     private static ImageData? CaptureFrame()
@@ -187,84 +137,4 @@ public static class AiImage
         return provider.CaptureFrame();
     }
 
-    private static void WritePngChunk(BinaryWriter writer, ReadOnlySpan<byte> type, Action<BinaryWriter> writeData)
-    {
-        using var dataMs = new MemoryStream();
-        using var dataWriter = new BinaryWriter(dataMs);
-        writeData(dataWriter);
-        dataWriter.Flush();
-        byte[] data = dataMs.ToArray();
-
-        WriteBigEndian(writer, data.Length);
-
-        byte[] typeBytes = type.ToArray();
-        writer.Write(typeBytes);
-
-        if (data.Length > 0)
-        {
-            writer.Write(data);
-        }
-
-        // CRC-32 over type + data
-        uint crc = Crc32(typeBytes, data);
-        WriteBigEndian(writer, (int)crc);
-    }
-
-    private static void WriteBigEndian(BinaryWriter writer, int value)
-    {
-        writer.Write((byte)(value >> 24));
-        writer.Write((byte)(value >> 16));
-        writer.Write((byte)(value >> 8));
-        writer.Write((byte)value);
-    }
-
-    private static uint ComputeAdler32(byte[] pixels, int width, int height, int stride)
-    {
-        uint a = 1, b = 0;
-        for (int y = 0; y < height; y++)
-        {
-            // Filter byte (0 = None)
-            a = (a + 0) % 65521;
-            b = (b + a) % 65521;
-
-            int rowStart = y * stride;
-            for (int x = 0; x < width * 4; x++)
-            {
-                a = (a + pixels[rowStart + x]) % 65521;
-                b = (b + a) % 65521;
-            }
-        }
-        return (b << 16) | a;
-    }
-
-    private static readonly uint[] CrcTable = BuildCrcTable();
-
-    private static uint[] BuildCrcTable()
-    {
-        uint[] table = new uint[256];
-        for (uint n = 0; n < 256; n++)
-        {
-            uint c = n;
-            for (int k = 0; k < 8; k++)
-            {
-                c = (c & 1) != 0 ? 0xEDB88320 ^ (c >> 1) : c >> 1;
-            }
-            table[n] = c;
-        }
-        return table;
-    }
-
-    private static uint Crc32(byte[] type, byte[] data)
-    {
-        uint crc = 0xFFFFFFFF;
-        foreach (byte b in type)
-        {
-            crc = CrcTable[(crc ^ b) & 0xFF] ^ (crc >> 8);
-        }
-        foreach (byte b in data)
-        {
-            crc = CrcTable[(crc ^ b) & 0xFF] ^ (crc >> 8);
-        }
-        return crc ^ 0xFFFFFFFF;
-    }
 }

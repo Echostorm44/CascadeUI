@@ -6145,10 +6145,11 @@ internal sealed class NodePainter
 
     private void PaintImage(Image img, Rect bounds)
     {
-        if (img.Source is not null)
+        ImageSource? source = img.ResolveSource();
+        if (source is not null)
         {
             float opacity = img.LayoutData.Opacity;
-            ctx.DrawImage(img.Source, bounds, opacity);
+            ctx.DrawImage(source, bounds, opacity);
         }
         else
         {

@@ -64,7 +64,12 @@ internal static partial class Win32
     internal const uint WM_EXITSIZEMOVE     = 0x0232;
     internal const uint WM_HOTKEY            = 0x0312;
     internal const uint WM_DROPFILES        = 0x0233;
+    internal const uint WM_SETICON          = 0x0080;
     internal const uint WM_USER             = 0x0400;
+
+    // WM_SETICON wParam values.
+    internal const nuint ICON_SMALL = 0;
+    internal const nuint ICON_BIG   = 1;
 
     // ── Hotkey Modifier Constants ─────────────────────────────────────
 
@@ -745,6 +750,12 @@ internal static partial class Win32
     // from Explorer. lParam of WM_DROPFILES is an HDROP usable with DragQueryFileW/DragFinish.
     [LibraryImport("shell32", EntryPoint = "DragAcceptFiles")]
     internal static partial void DragAcceptFiles(nint hWnd, [MarshalAs(UnmanagedType.Bool)] bool fAccept);
+
+    // Extracts icon handles embedded in an executable (index 0 = the app's main
+    // icon group, i.e. the one set via <ApplicationIcon>). Returns the number of
+    // icons extracted. Caller owns the returned HICONs (DestroyIcon to free).
+    [LibraryImport("shell32", EntryPoint = "ExtractIconExW", StringMarshalling = StringMarshalling.Utf16)]
+    internal static partial uint ExtractIconExW(string lpszFile, int nIconIndex, out nint phiconLarge, out nint phiconSmall, uint nIcons);
 
     [LibraryImport("shell32", EntryPoint = "SHBrowseForFolderW")]
     internal static partial nint SHBrowseForFolderW(ref BROWSEINFOW lpbi);

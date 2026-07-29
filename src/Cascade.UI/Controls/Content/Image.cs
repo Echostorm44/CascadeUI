@@ -3,9 +3,15 @@ using System.Diagnostics.CodeAnalysis;
 namespace Cascade.UI;
 
 /// <summary>
-/// GPU-accelerated image display. Supports raster formats (PNG, JPEG, WebP,
-/// AVIF, GIF, etc.) via native .NET decoding and SVG via resvg/Etch. Images
-/// from URLs are loaded asynchronously with lazy loading enabled by default.
+/// GPU-accelerated image display. Renders from a file <see cref="Path"/>, raw
+/// encoded <see cref="Data"/>, or a pre-decoded <see cref="ImageSource"/>. File
+/// and byte-array sources are decoded on first use via <see cref="ImageSource"/>
+/// (PNG and BMP; decoded results are cached by path).
+///
+/// NOT IMPLEMENTED: URL sources (the <see cref="Image(string, bool)"/> ctor) —
+/// async network loading has no loader yet and renders nothing. For non-PNG/BMP
+/// formats, decode with SharpImage and pass the resulting bytes or an
+/// <see cref="ImageSource"/>.
 /// </summary>
 [SuppressMessage("Naming", "CA1724", Justification = "SharpImage.Image namespace conflict is acceptable; type is fully qualified where needed.")]
 public sealed class Image : Node
@@ -22,7 +28,11 @@ public sealed class Image : Node
         LazyLoadEnabled = false;
     }
 
-    /// <summary>Creates an image from a URL (loaded asynchronously).</summary>
+    /// <summary>
+    /// Creates an image from a URL. NOT IMPLEMENTED: there is no async URL
+    /// loader yet, so this renders nothing. Download the bytes yourself and use
+    /// the byte-array or <see cref="ImageSource"/> constructor instead.
+    /// </summary>
     /// <param name="url">The image URL.</param>
     /// <param name="placeholder">Placeholder required for disambiguation.</param>
     public Image(string url, bool placeholder)
@@ -91,6 +101,62 @@ public sealed class Image : Node
     internal float DoubleTapZoom { get; set; } = 2.0f;
     internal Action<ImageProcessingContext>? ProcessingPipeline { get; set; }
     internal IReadOnlyList<string> ProcessingOperations { get; private set; } = Array.Empty<string>();
+
+    // ── Source resolution ──────────────────────────────────────────────
+
+    // Decoded file paths are cached so a per-frame `new Image(path)` in Render()
+    // decodes once, not every frame. A null entry marks a path that failed to
+    // decode (so we don't re-read a missing/invalid file each frame). Keyed by
+    // path only — assumes app image files don't change at runtime.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, ImageSource?> PathCache = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Returns the decoded image to render, resolving lazily from the file
+    /// <see cref="Path"/> or raw <see cref="Data"/> the first time it is needed
+    /// (path results are cached process-wide). Returns null when there is nothing
+    /// to show yet — a decode failure, or a URL (async URL loading is not
+    /// implemented; use <see cref="ImageSource"/> or a byte array instead).
+    /// </summary>
+    internal ImageSource? ResolveSource()
+    {
+        if (Source is not null)
+        {
+            return Source;
+        }
+
+        if (Path is not null)
+        {
+            Source = PathCache.GetOrAdd(Path, static p =>
+            {
+                try
+                {
+                    return ImageSource.FromFile(p);
+                }
+                catch (Exception ex) when (ex is IOException or NotSupportedException or FormatException or UnauthorizedAccessException)
+                {
+                    return null;
+                }
+            });
+            return Source;
+        }
+
+        if (Data is { } bytes)
+        {
+            try
+            {
+                using var ms = new MemoryStream(bytes.ToArray());
+                Source = ImageSource.FromStream(ms);
+            }
+            catch (Exception ex) when (ex is IOException or NotSupportedException or FormatException)
+            {
+                Source = null;
+            }
+
+            return Source;
+        }
+
+        return null;
+    }
 
     // ── Fit ───────────────────────────────────────────────────────────
 
@@ -182,7 +248,12 @@ public sealed class Image : Node
 
     // ── Static helpers ────────────────────────────────────────────────
 
-    /// <summary>Loads an image asynchronously for programmatic processing.</summary>
+    /// <summary>
+    /// NOT IMPLEMENTED: returns an empty 0×0 frame carrying only the source path
+    /// — it does not decode the file. To actually load pixels, use
+    /// <see cref="ImageSource.FromFile(string)"/> (for rendering) or SharpImage's
+    /// <c>ImagePipeline.Load</c> (for processing).
+    /// </summary>
     public static Task<ImageFrame> LoadAsync(string path)
     {
         ArgumentNullException.ThrowIfNull(path);

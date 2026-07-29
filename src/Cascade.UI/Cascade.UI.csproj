@@ -51,7 +51,7 @@
        to the app output) flow transitively through Cascade.UI to the final consumer — the
        default would privatize Build and the natives would never reach the app. -->
   <ItemGroup Condition="'$(UseEtchPackage)' == 'true'">
-    <PackageReference Include="Echostorm.Etch" Version="0.1.0-alpha.5" PrivateAssets="none" />
+    <PackageReference Include="Echostorm.Etch" Version="0.1.0-alpha.6" PrivateAssets="none" />
   </ItemGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">

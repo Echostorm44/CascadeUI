@@ -10,12 +10,18 @@ internal interface ITreeView
     IReadOnlyList<TreeViewDisplayItem> GetFlattenedDisplay();
 
     /// <summary>
-    /// The caller's rendered node for the row at the given flattened index (from
-    /// the render callback), or an empty node if unavailable. Painted in the row's
-    /// content area so custom rows / icons actually render instead of plain text.
-    /// Valid after <see cref="GetFlattenedDisplay"/> has run for the frame.
+    /// The real, interactive node tree for the whole tree — indented rows with a
+    /// tappable expand/collapse chevron and the render callback's content — built
+    /// from the current expand/selection state. Layout/paint/hit-testing delegate
+    /// to this so custom rows render and per-row controls are clickable. Cached
+    /// within a frame; the layout pass calls <see cref="InvalidateContent"/> first
+    /// so it rebuilds each frame, picking up expand/selection changes that only
+    /// repaint (they don't re-render the owning component).
     /// </summary>
-    Node GetRowContent(int rowIndex);
+    Node GetContentNode();
+
+    /// <summary>Drops the cached content so the next <see cref="GetContentNode"/> rebuilds. Layout calls this each frame.</summary>
+    void InvalidateContent();
 
     /// <summary>Toggles the expand/collapse state of the row at the given flattened index.</summary>
     void ToggleRow(int rowIndex);
@@ -182,6 +188,21 @@ public sealed class TreeView<T> : Node, ITreeView
     /// <summary>Function that renders a data item into a node for display in a row.</summary>
     public Func<T, Node> Render { get; }
 
+    // Optional selection-aware renderer (data, isSelected) -> Node. When set it is
+    // used instead of Render, so a row can adapt (e.g. text colour) to selection.
+    internal Func<T, bool, Node>? RenderSelectableFn { get; private set; }
+
+    /// <summary>
+    /// Renders each row with its selection state, so custom rows can adapt their
+    /// appearance (e.g. use an on-primary text colour when selected). Overrides
+    /// the plain render callback.
+    /// </summary>
+    public TreeView<T> RenderSelectable(Func<T, bool, Node> render)
+    {
+        RenderSelectableFn = render;
+        return this;
+    }
+
     /// <summary>
     /// Async function called the first time a node is expanded to load its children.
     /// A spinner replaces the expand arrow during loading. Results are cached.
@@ -217,14 +238,68 @@ public sealed class TreeView<T> : Node, ITreeView
         return result;
     }
 
-    Node ITreeView.GetRowContent(int rowIndex)
+    private static readonly Icon ChevronRightIcon = new(
+        "m9 18 6-6-6-6", new Size(24, 24), 24f, "Expand");
+
+    private static readonly Icon ChevronDownIcon = new(
+        "m6 9 6 6 6-6", new Size(24, 24), 24f, "Collapse");
+
+    private Node? contentNode;
+
+    void ITreeView.InvalidateContent() => contentNode = null;
+
+    Node ITreeView.GetContentNode()
     {
-        if (cachedNodes == null || rowIndex < 0 || rowIndex >= cachedNodes.Count)
+        if (contentNode is not null)
         {
-            return Node.Empty;
+            return contentNode;
         }
 
-        return Render(cachedNodes[rowIndex].Data);
+        // Populates cachedItems / cachedPaths / cachedNodes for this frame.
+        var flat = ((ITreeView)this).GetFlattenedDisplay();
+        var colors = ThemeSwitcher.ActiveColors;
+        string? selectedPath = TreeViewInteractionState.SelectedPath;
+
+        const float rowHeight = 28f;
+        const float indentWidth = 20f;
+        const float chevronBox = 16f;
+
+        var rows = new Node[flat.Count];
+        for (int i = 0; i < flat.Count; i++)
+        {
+            int idx = i;
+            var item = flat[i];
+            bool isSelected = cachedPaths != null && idx < cachedPaths.Count
+                && cachedPaths[idx] == selectedPath;
+            T data = cachedNodes![idx].Data;
+
+            Node content = RenderSelectableFn is not null
+                ? RenderSelectableFn(data, isSelected)
+                : Render(data);
+
+            // Tappable expand/collapse chevron (rotates when expanded), or an
+            // empty box of the same width for leaf rows so content lines up.
+            Node chevron = item.HasChildren
+                ? new Center(
+                        new IconView(item.IsExpanded ? ChevronDownIcon : ChevronRightIcon, size: 11)
+                            .Color(isSelected ? colors.TextOnPrimary : colors.TextMuted))
+                    .Size(chevronBox, rowHeight)
+                    .OnTap(() => ((ITreeView)this).ToggleRow(idx))
+                : new Center(Node.Empty).Size(chevronBox, rowHeight);
+
+            rows[i] = new Row(
+                    spacing: 4,
+                    crossAxisAlignment: CrossAxisAlignment.Center,
+                    children: [chevron, content.Expand()])
+                .Height(rowHeight)
+                .Padding(EdgeInsets.Only(left: 6 + (item.Depth * indentWidth), right: 6))
+                .Background(isSelected ? colors.Primary : ColorValue.Transparent)
+                .CornerRadius(5)
+                .OnTap(() => ((ITreeView)this).SelectRow(idx));
+        }
+
+        contentNode = new Column(spacing: 1, children: rows);
+        return contentNode;
     }
 
     void ITreeView.ToggleRow(int rowIndex)

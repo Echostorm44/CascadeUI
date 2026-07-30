@@ -2239,6 +2239,12 @@ int overlayCulled = 0;
     {
         var transformStack = new Stack<Matrix3x2>();
         var currentTransform = Matrix3x2.Identity;
+        // Active clip rects in DEVICE space. Root-stream images must be clamped to these
+        // (the shader has no scissor), otherwise an image straddling a clip edge — e.g. a
+        // list row's icon at the viewport boundary — bleeds past it. Rounded clips use
+        // their AABB (square corners), which still beats no clip at all. Path clips push a
+        // non-constraining entry so PushClip/PopClip stay balanced.
+        var clipStack = new Stack<(float L, float T, float R, float B, bool Constrains)>();
         _imageQuadSlot = 0;
 
         // Main pass — images in the root command stream. The root DPI-scale
@@ -2260,6 +2266,28 @@ int overlayCulled = 0;
                     }
                     break;
 
+                case EtchBackend.OpKind.PushClip:
+                case EtchBackend.OpKind.PushClipRoundedRect:
+                    {
+                        var clipLocal = new EGeometry.Rect(cmd.X, cmd.Y, cmd.X + cmd.W, cmd.Y + cmd.H);
+                        var clipDev = clipLocal.Transform(EtchBackend.ToAffine(currentTransform));
+                        clipStack.Push((
+                            (float)clipDev.MinX, (float)clipDev.MinY,
+                            (float)clipDev.MaxX, (float)clipDev.MaxY, true));
+                        break;
+                    }
+
+                case EtchBackend.OpKind.PushClipPath:
+                    clipStack.Push((0f, 0f, 0f, 0f, false)); // shape unknown: don't constrain
+                    break;
+
+                case EtchBackend.OpKind.PopClip:
+                    if (clipStack.Count > 0)
+                    {
+                        clipStack.Pop();
+                    }
+                    break;
+
                 case EtchBackend.OpKind.DrawImage:
                     {
                         var img = backend.GetImage(cmd.ImageHandle);
@@ -2278,10 +2306,41 @@ int overlayCulled = 0;
                             break;
                         }
 
-                        EmitImageQuad(encoder, frame, (int)cmd.ImageHandle,
-                            (float)deviceRect.MinX, (float)deviceRect.MinY,
-                            (float)deviceRect.MaxX, (float)deviceRect.MaxY,
-                            0f, 0f, 1f, 1f);
+                        float dl = (float)deviceRect.MinX, dt = (float)deviceRect.MinY;
+                        float dr = (float)deviceRect.MaxX, db = (float)deviceRect.MaxY;
+                        float u0 = 0f, v0 = 0f, u1 = 1f, v1 = 1f;
+
+                        // Clamp the quad (and its UVs) to the intersection of the active
+                        // clip rects — same technique the layer pass uses for the viewport.
+                        float cl = float.NegativeInfinity, ct = float.NegativeInfinity;
+                        float cr = float.PositiveInfinity, cb = float.PositiveInfinity;
+                        foreach (var c in clipStack)
+                        {
+                            if (!c.Constrains)
+                            {
+                                continue;
+                            }
+
+                            cl = Math.Max(cl, c.L); ct = Math.Max(ct, c.T);
+                            cr = Math.Min(cr, c.R); cb = Math.Min(cb, c.B);
+                        }
+
+                        if (cr > cl && cb > ct)
+                        {
+                            float nl = Math.Max(dl, cl), nt = Math.Max(dt, ct);
+                            float nr = Math.Min(dr, cr), nb = Math.Min(db, cb);
+                            if (nr <= nl || nb <= nt)
+                            {
+                                break; // fully outside the clip
+                            }
+
+                            float w = dr - dl, h = db - dt;
+                            u0 = (nl - dl) / w; u1 = (nr - dl) / w;
+                            v0 = (nt - dt) / h; v1 = (nb - dt) / h;
+                            dl = nl; dt = nt; dr = nr; db = nb;
+                        }
+
+                        EmitImageQuad(encoder, frame, (int)cmd.ImageHandle, dl, dt, dr, db, u0, v0, u1, v1);
                         break;
                     }
             }

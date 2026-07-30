@@ -77,6 +77,18 @@ internal sealed class InputDispatcher
     private float listReorderStartY;
     private bool listReorderActive;
 
+    // ListView swipe-actions tracking (control-level: horizontal drag reveals action
+    // buttons; taps on the revealed buttons are hit-tested by computed rects).
+    private IListViewNode? swipeLv;
+    private int swipeRow = -1;
+    private float swipeStartX;
+    private float swipeStartY;
+    private bool swipeActive;
+    private float swipeRawDx;
+    private bool swipeButtonPending;
+    private bool swipeButtonPendingLeading;
+    private int swipeButtonPendingIndex = -1;
+
     // Drag-and-drop state — tracks cross-node drag from .Draggable() to .DropTarget()
     private bool dragDropPending;       // mouse down on draggable, threshold not yet met
     private bool dragDropActive;        // drag is in progress (threshold exceeded)
@@ -1092,21 +1104,49 @@ internal sealed class InputDispatcher
                 RequestRepaint?.Invoke();
             }
         }
-        // ListView drag-to-reorder — activates once the pointer moves past a threshold
+        // ListView swipe actions — a horizontal-dominant drag reveals action buttons.
+        else if (isMouseDown && swipeLv != null && !swipeButtonPending
+            && (swipeActive
+                || (MathF.Abs(evt.X - swipeStartX) >= 5f
+                    && MathF.Abs(evt.X - swipeStartX) >= MathF.Abs(evt.Y - swipeStartY))))
+        {
+            if (!swipeActive)
+            {
+                swipeActive = true;
+                swipeLv.SwipeRowIndex = swipeRow;
+                pressedNode = null;        // a drag, not a tap
+                listReorderLv = null;      // give up the competing reorder gesture
+            }
+
+            float dx = evt.X - swipeStartX;
+            swipeRawDx = dx;
+            float bw = swipeLv.SwipeButtonWidth;
+            float maxTrail = swipeLv.TrailingActionCount(swipeRow) * bw;
+            float maxLead = swipeLv.LeadingActionCount(swipeRow) * bw;
+            swipeLv.SwipeOffsetX = Math.Clamp(dx, -maxTrail, maxLead);
+            RequestRepaint?.Invoke();
+        }
+        // ListView drag-to-reorder — activates on a vertical-dominant drag.
         else if (isMouseDown && listReorderLv != null)
         {
-            if (listReorderActive || MathF.Abs(evt.Y - listReorderStartY) >= 5f)
+            float dy = evt.Y - listReorderStartY;
+            bool vertOk = listReorderActive
+                || (MathF.Abs(dy) >= 5f
+                    && (swipeLv == null || MathF.Abs(dy) > MathF.Abs(evt.X - swipeStartX)));
+            if (vertOk)
             {
                 if (!listReorderActive)
                 {
                     listReorderActive = true;
                     listReorderLv.ReorderFromIndex = listReorderStartRow;
                     pressedNode = null; // a drag, not a tap — cancel the pending click/select
+                    swipeLv = null;     // give up the competing swipe gesture
                 }
 
                 var b = listReorderLv.ReorderBounds;
                 float ih = listReorderLv.GetItemHeight();
-                int to = ih > 0 ? (int)((evt.Y - b.Y) / ih) : listReorderStartRow;
+                // +OffsetY maps the on-screen Y back to an absolute row when scrolled.
+                int to = ih > 0 ? (int)((evt.Y - b.Y + listReorderLv.OffsetY) / ih) : listReorderStartRow;
                 listReorderLv.ReorderToIndex = Math.Clamp(to, 0, listReorderLv.ItemCount - 1);
                 RequestRepaint?.Invoke();
             }
@@ -1180,6 +1220,24 @@ internal sealed class InputDispatcher
     {
         isMouseDown = true;
         lastMouseModifiers = evt.Modifiers;
+
+        // A ListView swipe is open: a left click either invokes a revealed action
+        // button (fired on release) or, anywhere else, dismisses the swipe.
+        if (evt.Button == NativeMouseButton.Left && swipeLv != null && swipeLv.SwipeRowIndex >= 0)
+        {
+            var hitButton = HitSwipeButton(swipeLv, evt.X, evt.Y);
+            if (hitButton is { } hb)
+            {
+                swipeButtonPending = true;
+                swipeButtonPendingLeading = hb.leading;
+                swipeButtonPendingIndex = hb.index;
+                return;
+            }
+
+            CloseSwipe();
+            RequestRepaint?.Invoke();
+            return;
+        }
 
         // Check if the click is on an active toast notification
         if (evt.Button == NativeMouseButton.Left && Toast.HitZones.Count > 0)
@@ -1859,11 +1917,25 @@ internal sealed class InputDispatcher
             if (reLv != null)
             {
                 float ih = reLv.GetItemHeight();
-                int startRow = ih > 0 ? (int)((evt.Y - reLv.ReorderBounds.Y) / ih) : -1;
+                int startRow = ih > 0 ? (int)((evt.Y - reLv.ReorderBounds.Y + reLv.OffsetY) / ih) : -1;
                 listReorderLv = reLv;
                 listReorderStartRow = Math.Clamp(startRow, 0, Math.Max(0, reLv.ItemCount - 1));
                 listReorderStartY = evt.Y;
                 listReorderActive = false;
+            }
+
+            // Arm a potential swipe. The move handler arbitrates by dominant axis
+            // (horizontal → swipe, vertical → reorder) when a list supports both.
+            var swLv = HitTester.FindSwipeableListViewAt(rootNode, evt.X, evt.Y);
+            if (swLv != null)
+            {
+                float ih = swLv.GetItemHeight();
+                int startRow = ih > 0 ? (int)((evt.Y - swLv.ReorderBounds.Y + swLv.OffsetY) / ih) : -1;
+                swipeLv = swLv;
+                swipeRow = Math.Clamp(startRow, 0, Math.Max(0, swLv.ItemCount - 1));
+                swipeStartX = evt.X;
+                swipeStartY = evt.Y;
+                swipeActive = false;
             }
         }
 
@@ -2100,8 +2172,135 @@ internal sealed class InputDispatcher
         }
     }
 
+    // Computes which revealed swipe-action button (if any) contains the point,
+    // using the current swipe offset. Returns (leading, actionIndex) or null.
+    private static (bool leading, int index)? HitSwipeButton(IListViewNode lv, float x, float y)
+    {
+        int row = lv.SwipeRowIndex;
+        if (row < 0)
+        {
+            return null;
+        }
+
+        var b = lv.ReorderBounds;
+        float ih = lv.GetItemHeight();
+        float rowTop = b.Y + (row * ih - lv.OffsetY);
+        if (y < rowTop || y > rowTop + ih)
+        {
+            return null;
+        }
+
+        float bw = lv.SwipeButtonWidth;
+        float off = lv.SwipeOffsetX;
+
+        if (off < 0f)
+        {
+            int n = lv.TrailingActionCount(row);
+            for (int k = 0; k < n; k++)
+            {
+                float bx = b.X + b.Width + (k * bw) + off;
+                if (x >= bx && x < bx + bw)
+                {
+                    return (false, k);
+                }
+            }
+        }
+        else if (off > 0f)
+        {
+            int n = lv.LeadingActionCount(row);
+            for (int k = 0; k < n; k++)
+            {
+                float bx = b.X + (k * bw) - (n * bw) + off;
+                if (x >= bx && x < bx + bw)
+                {
+                    return (true, k);
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private void CloseSwipe()
+    {
+        if (swipeLv != null)
+        {
+            swipeLv.SwipeRowIndex = -1;
+            swipeLv.SwipeOffsetX = 0f;
+        }
+
+        swipeLv = null;
+        swipeRow = -1;
+        swipeActive = false;
+        swipeRawDx = 0f;
+    }
+
     private void HandleMouseUp(Node? hitNode, NativeMouseEvent evt)
     {
+        // A revealed swipe-action button was pressed on mouse-down — invoke on release.
+        if (swipeButtonPending)
+        {
+            if (swipeLv != null && swipeLv.SwipeRowIndex >= 0)
+            {
+                if (swipeButtonPendingLeading)
+                {
+                    swipeLv.InvokeLeadingAction(swipeRow, swipeButtonPendingIndex);
+                }
+                else
+                {
+                    swipeLv.InvokeTrailingAction(swipeRow, swipeButtonPendingIndex);
+                }
+            }
+
+            swipeButtonPending = false;
+            swipeButtonPendingIndex = -1;
+            CloseSwipe();
+            isMouseDown = false;
+            RequestRepaint?.Invoke();
+            return;
+        }
+
+        // Finish an active swipe drag: full-swipe invoke, snap open, or snap closed.
+        if (swipeActive && swipeLv != null)
+        {
+            float off = swipeLv.SwipeOffsetX;
+            float bw = swipeLv.SwipeButtonWidth;
+            int trailN = swipeLv.TrailingActionCount(swipeRow);
+            int leadN = swipeLv.LeadingActionCount(swipeRow);
+            float rowW = swipeLv.ReorderBounds.Width;
+
+            if (off < 0f && trailN > 0 && swipeLv.TrailingIsFullSwipe(swipeRow)
+                && -swipeRawDx >= rowW * 0.5f)
+            {
+                swipeLv.InvokeTrailingAction(swipeRow, 0);
+                CloseSwipe();
+            }
+            else if (off > 0f && leadN > 0 && swipeLv.LeadingIsFullSwipe(swipeRow)
+                && swipeRawDx >= rowW * 0.5f)
+            {
+                swipeLv.InvokeLeadingAction(swipeRow, 0);
+                CloseSwipe();
+            }
+            else if (off < 0f && trailN > 0 && -off >= trailN * bw * 0.5f)
+            {
+                swipeLv.SwipeOffsetX = -trailN * bw; // snap trailing open
+                swipeActive = false;                 // keep swipeLv referenced (open)
+            }
+            else if (off > 0f && leadN > 0 && off >= leadN * bw * 0.5f)
+            {
+                swipeLv.SwipeOffsetX = leadN * bw;   // snap leading open
+                swipeActive = false;
+            }
+            else
+            {
+                CloseSwipe(); // not far enough — snap closed
+            }
+
+            isMouseDown = false;
+            RequestRepaint?.Invoke();
+            return;
+        }
+
         // Finish a ListView drag-to-reorder (if it actually activated).
         if (listReorderLv != null)
         {
@@ -2116,6 +2315,15 @@ internal sealed class InputDispatcher
             listReorderActive = false;
             listReorderStartRow = -1;
             RequestRepaint?.Invoke();
+        }
+
+        // Drop a swipe that was armed but never engaged (a plain click). A snapped-open
+        // swipe (SwipeRowIndex >= 0) is kept so the next click can dismiss/invoke it.
+        if (swipeLv != null && !swipeActive && swipeLv.SwipeRowIndex < 0)
+        {
+            swipeLv = null;
+            swipeRow = -1;
+            swipeRawDx = 0f;
         }
 
         // Finish column resize drag
@@ -2418,6 +2626,23 @@ internal sealed class InputDispatcher
 
                 return;
             }
+        }
+
+        // Virtualized ListView — a list that owns its own scroll offset (builds only
+        // the visible slice). Takes priority over an enclosing ScrollView.
+        var virtualList = HitTester.FindScrollableListViewAt(rootNode, evt.X, evt.Y);
+        if (virtualList != null)
+        {
+            const float pixelsPerNotch = 48f;
+            float delta = -evt.DeltaY * pixelsPerNotch;
+            float newOffset = Math.Clamp(virtualList.OffsetY + delta, 0f, virtualList.MaxY);
+            if (Math.Abs(newOffset - virtualList.OffsetY) > 0.001f)
+            {
+                virtualList.OffsetY = newOffset;
+                RequestRepaint?.Invoke();
+            }
+
+            return;
         }
 
         // ScrollView handling — check if mouse is over a ScrollView and scroll it

@@ -337,6 +337,106 @@ internal static class HitTester
         return single != null ? FindReorderableListViewAt(single, x, y) : null;
     }
 
+    /// <summary>
+    /// Finds a virtualized ListView (owns its own scroll offset, content overflows)
+    /// whose bounds contain the point. Used to route wheel events to the list.
+    /// </summary>
+    internal static IListViewNode? FindScrollableListViewAt(Node root, float x, float y)
+    {
+        var point = new Point(x, y);
+
+        if (root is Component comp && comp.RenderedTree is { } rendered)
+        {
+            return FindScrollableListViewAt(rendered, x, y);
+        }
+
+        if (root is IListViewNode lv && lv.MaxY > 0f && lv.ReorderBounds.Contains(point))
+        {
+            return lv;
+        }
+
+        var children = GetChildren(root);
+        if (children != null)
+        {
+            for (int i = children.Count - 1; i >= 0; i--)
+            {
+                var hit = FindScrollableListViewAt(children[i], x, y);
+                if (hit != null)
+                {
+                    return hit;
+                }
+            }
+        }
+
+        if (root is ScrollView sv && sv.Content != null)
+        {
+            var hit = FindScrollableListViewAt(sv.Content, x, y);
+            if (hit != null)
+            {
+                return hit;
+            }
+        }
+
+        if (root is SplitView split)
+        {
+            return FindScrollableListViewAt(split.First, x, y)
+                ?? FindScrollableListViewAt(split.Second, x, y);
+        }
+
+        var single = GetSingleChild(root);
+        return single != null ? FindScrollableListViewAt(single, x, y) : null;
+    }
+
+    /// <summary>
+    /// Finds a ListView with swipe actions whose bounds contain the point. Used to
+    /// arm a control-level horizontal swipe.
+    /// </summary>
+    internal static IListViewNode? FindSwipeableListViewAt(Node root, float x, float y)
+    {
+        var point = new Point(x, y);
+
+        if (root is Component comp && comp.RenderedTree is { } rendered)
+        {
+            return FindSwipeableListViewAt(rendered, x, y);
+        }
+
+        if (root is IListViewNode lv && lv.HasSwipeActions && lv.ReorderBounds.Contains(point))
+        {
+            return lv;
+        }
+
+        var children = GetChildren(root);
+        if (children != null)
+        {
+            for (int i = children.Count - 1; i >= 0; i--)
+            {
+                var hit = FindSwipeableListViewAt(children[i], x, y);
+                if (hit != null)
+                {
+                    return hit;
+                }
+            }
+        }
+
+        if (root is ScrollView sv && sv.Content != null)
+        {
+            var hit = FindSwipeableListViewAt(sv.Content, x, y);
+            if (hit != null)
+            {
+                return hit;
+            }
+        }
+
+        if (root is SplitView split)
+        {
+            return FindSwipeableListViewAt(split.First, x, y)
+                ?? FindSwipeableListViewAt(split.Second, x, y);
+        }
+
+        var single = GetSingleChild(root);
+        return single != null ? FindSwipeableListViewAt(single, x, y) : null;
+    }
+
     /// Finds the innermost ScrollView whose bounds contain the given point.
     /// Used by InputDispatcher to route scroll events to the correct ScrollView.
     /// </summary>

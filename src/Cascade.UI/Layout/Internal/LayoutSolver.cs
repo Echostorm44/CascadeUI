@@ -1285,17 +1285,50 @@ internal static class LayoutSolver
 
     private static Size MeasureListView(IListViewNode lvn, LayoutConstraints constraints)
     {
-        // The list's rows are a real node tree built from the render callback.
-        // Measure it at the list's width with unbounded height so its full content
-        // height is reported; a wrapping ScrollView (or a fixed Height) then decides
-        // the visible viewport, and the painter clips overflow to the list bounds.
-        // Rebuild each frame so selection/data changes that only repaint are reflected.
+        bool boundedHeight = !float.IsPositiveInfinity(constraints.MaxHeight);
+
+        // Width the built rows will occupy — the swipe-open row reads this to size
+        // its sliding surface. Keep the last known width when unconstrained.
+        if (!float.IsPositiveInfinity(constraints.MaxWidth))
+        {
+            lvn.ContentWidth = constraints.MaxWidth;
+        }
+
+        // Virtualized path: a flat list with a fixed item height and a bounded
+        // viewport. The list owns its scroll offset and builds only the on-screen
+        // slice, so cost is bounded by the viewport, not by the item count.
+        if (lvn.CanVirtualize && boundedHeight)
+        {
+            float ih = lvn.GetItemHeight();
+            float viewport = constraints.MaxHeight;
+
+            lvn.ViewportHeight = viewport;
+            lvn.MaxY = MathF.Max(0f, (lvn.ItemCount * ih) - viewport);
+            lvn.OffsetY = Math.Clamp(lvn.OffsetY, 0f, lvn.MaxY);
+
+            lvn.InvalidateContent();
+            Node slice = lvn.GetContentNode();
+
+            var sliceConstraints = new LayoutConstraints(
+                constraints.MinWidth, constraints.MaxWidth, 0, float.PositiveInfinity);
+            MeasureChild(slice, sliceConstraints);
+            PositionChild(slice, 0, lvn.ContentOffsetY);
+
+            float vw = float.IsPositiveInfinity(constraints.MaxWidth)
+                ? slice.LayoutData.MeasuredSize.Width
+                : constraints.MaxWidth;
+
+            return new Size(constraints.ConstrainWidth(vw), constraints.ConstrainHeight(viewport));
+        }
+
+        // Non-virtualized: build all rows and report full content height (a wrapping
+        // ScrollView / fixed Height clips it; sections & auto-height lists use this).
+        lvn.ViewportHeight = 0f;
         lvn.InvalidateContent();
         Node content = lvn.GetContentNode();
 
         var contentConstraints = new LayoutConstraints(
-            constraints.MinWidth, constraints.MaxWidth,
-            0, float.PositiveInfinity);
+            constraints.MinWidth, constraints.MaxWidth, 0, float.PositiveInfinity);
         Size contentSize = MeasureChild(content, contentConstraints);
         PositionChild(content, 0, 0);
 

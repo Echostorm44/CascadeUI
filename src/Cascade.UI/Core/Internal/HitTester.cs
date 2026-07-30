@@ -285,6 +285,58 @@ internal static class HitTester
     }
 
     /// <summary>
+    /// <summary>
+    /// Finds a reorderable ListView whose (painter-stamped) reorder bounds contain
+    /// the point. Used to start a control-level drag-to-reorder — the dragged rows
+    /// are built content (not in the reconciled tree), so we locate the list node
+    /// itself rather than walking up from the hit row.
+    /// </summary>
+    internal static IListViewNode? FindReorderableListViewAt(Node root, float x, float y)
+    {
+        var point = new Point(x, y);
+
+        if (root is Component comp && comp.RenderedTree is { } rendered)
+        {
+            return FindReorderableListViewAt(rendered, x, y);
+        }
+
+        if (root is IListViewNode lv && lv.IsReorderable && lv.ReorderBounds.Contains(point))
+        {
+            return lv;
+        }
+
+        var children = GetChildren(root);
+        if (children != null)
+        {
+            for (int i = children.Count - 1; i >= 0; i--)
+            {
+                var hit = FindReorderableListViewAt(children[i], x, y);
+                if (hit != null)
+                {
+                    return hit;
+                }
+            }
+        }
+
+        if (root is ScrollView sv && sv.Content != null)
+        {
+            var hit = FindReorderableListViewAt(sv.Content, x, y);
+            if (hit != null)
+            {
+                return hit;
+            }
+        }
+
+        if (root is SplitView split)
+        {
+            return FindReorderableListViewAt(split.First, x, y)
+                ?? FindReorderableListViewAt(split.Second, x, y);
+        }
+
+        var single = GetSingleChild(root);
+        return single != null ? FindReorderableListViewAt(single, x, y) : null;
+    }
+
     /// Finds the innermost ScrollView whose bounds contain the given point.
     /// Used by InputDispatcher to route scroll events to the correct ScrollView.
     /// </summary>

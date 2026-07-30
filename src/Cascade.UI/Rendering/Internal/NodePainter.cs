@@ -11338,14 +11338,36 @@ internal sealed class NodePainter
 
     private void PaintListView(IListViewNode lvn, Rect bounds)
     {
+        // Absolute bounds, for control-level drag-to-reorder hit-testing.
+        lvn.ReorderBounds = new Rect(absoluteX, absoluteY, bounds.Width, bounds.Height);
+
         // Card chrome.
         ctx.DrawRect(bounds, theme.Colors.Surface, radius: 4f);
         ctx.DrawRect(bounds, stroke: new Stroke(theme.Colors.Border, 1f), radius: 4f);
 
         // The rows are a real node tree built from the render callback. Paint it,
         // clipped to the list bounds; a wrapping ScrollView (if any) handles scroll.
-        using var clip = ctx.PushRoundedClip(bounds, 4f);
-        PaintRecursive(lvn.GetContentNode());
+        using (ctx.PushRoundedClip(bounds, 4f))
+        {
+            PaintRecursive(lvn.GetContentNode());
+        }
+
+        // Drag-to-reorder: an accent insertion line at the drop position.
+        if (lvn.ReorderFromIndex >= 0 && lvn.ReorderToIndex >= 0)
+        {
+            float ih = lvn.GetItemHeight();
+            float lineY = bounds.Y + (lvn.ReorderToIndex * ih);
+            if (lvn.ReorderToIndex > lvn.ReorderFromIndex)
+            {
+                lineY += ih; // dropping below the target row
+            }
+
+            lineY = Math.Clamp(lineY, bounds.Y + 1f, bounds.Bottom - 1f);
+            ctx.DrawLine(
+                new Point(bounds.X + 6f, lineY),
+                new Point(bounds.Right - 6f, lineY),
+                new Stroke(theme.Colors.Primary, 2f));
+        }
     }
 
     // ── ColorPicker ───────────────────────────────────────────────────

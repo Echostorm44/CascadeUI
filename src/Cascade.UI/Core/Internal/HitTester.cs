@@ -225,7 +225,6 @@ internal static class HitTester
                IToggleGroup or
                INumberInput or
                ISelectNode or
-               ITreeView or
                DatePicker or
                TabBar or
                ToolBar or
@@ -268,6 +267,7 @@ internal static class HitTester
             FormValidator fv    => fv.Content,
             AnimatePresence ap  => ap.Child,
             IListViewNode lvn   => lvn.GetContentNode(),
+            ITreeView tv        => tv.GetContentNode(),
             _ => null
         };
     }

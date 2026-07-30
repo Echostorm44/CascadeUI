@@ -132,8 +132,6 @@ internal sealed class NodePainter
     // drag frames to avoid a per-frame allocation.
     private LayoutEngine? dragPreviewLayout;
 
-    // Lays out each TreeView row's (detached) rendered content node on demand.
-    private LayoutEngine? treeRowLayout;
 
     // Lays out the (detached) curtain node produced by a curtain page transition
     // on demand. Reused across transition frames to avoid a per-frame allocation.
@@ -14703,161 +14701,20 @@ internal sealed class NodePainter
 
     // ── TreeView ───────────────────────────────────────────────────────
 
-    private static readonly Dictionary<long, float> treeChevronProgress = new();
-
     private void PaintTreeView(ITreeView tree, Rect bounds)
     {
-        // Store absolute bounds for hit testing
+        // Kept for the legacy leaf hit-test path (now unused, but harmless).
         tree.AbsoluteBounds = new Rect(absoluteX, absoluteY, bounds.Width, bounds.Height);
 
-        var items = tree.GetFlattenedDisplay();
-        if (items.Count == 0)
-        {
-            return;
-        }
-
-        var paths = tree.FlattenedPaths;
-        string? selectedPath = TreeViewInteractionState.SelectedPath;
-        int hoveredRow = TreeViewInteractionState.HoveredRow;
-
-        bool treeReducedMotion = ControlStateAnimator.ReducedMotion;
-
-        // Background
+        // Card chrome.
         ctx.DrawRect(bounds, theme.Colors.SurfaceAlt, radius: 6f);
         ctx.DrawRect(bounds, stroke: new Stroke(theme.Colors.Border.Opacity(0.3f), 1f), radius: 6f);
 
-        const float rowHeight = 28f;
-        const float indentWidth = 20f;
-        const float iconSize = 8f;
-        const float leftPad = 8f;
-
-        for (int i = 0; i < items.Count; i++)
-        {
-            var item = items[i];
-            float rowY = bounds.Y + i * rowHeight;
-
-            if (rowY + rowHeight < bounds.Y || rowY > bounds.Y + bounds.Height)
-            {
-                continue;
-            }
-
-            // Row hover / selection highlight — a slightly inset rounded pill, so the
-            // tree reads as interactive (a selected row uses a solid accent fill; a
-            // hovered row a subtle neutral wash). Draw before the row content.
-            bool isSelected = selectedPath != null && i < paths.Count && paths[i] == selectedPath;
-            bool isHovered = i == hoveredRow;
-            if (isSelected || isHovered)
-            {
-                var rowRect = new Rect(bounds.X + 4f, rowY + 1f, bounds.Width - 8f, rowHeight - 2f);
-                var rowFill = isSelected ? theme.Colors.Primary : theme.Colors.Text.Opacity(0.06f);
-                ctx.DrawRect(rowRect, rowFill, radius: 5f);
-            }
-
-            float indentX = bounds.X + leftPad + item.Depth * indentWidth;
-
-            // Draw expand/collapse chevron or leaf dot
-            if (item.HasChildren)
-            {
-                float chevronX = indentX + 2f;
-                float chevronCY = rowY + rowHeight / 2f;
-                var chevronColor = isSelected ? theme.Colors.TextOnPrimary : theme.Colors.TextMuted;
-                float cStroke = 1.5f;
-
-                // Animate chevron rotation per item
-                // Use content-space position for stable identity across re-renders.
-                float targetRotation = item.IsExpanded ? 90f : 0f;
-                float treeContentY = absoluteY + activeScrollOffsetY;
-                long itemKey = (long)HashCode.Combine(
-                    (int)Math.Round(treeContentY * 10f),
-                    (int)Math.Round(bounds.Width * 10f),
-                    i);
-                if (treeReducedMotion)
-                {
-                    treeChevronProgress[itemKey] = targetRotation;
-                }
-                else
-                {
-                    if (!treeChevronProgress.TryGetValue(itemKey, out float current))
-                    {
-                        current = targetRotation;
-                    }
-                    float diff = targetRotation - current;
-                    if (MathF.Abs(diff) > 0.5f)
-                    {
-                        current += diff * 0.2f;
-                        ControlStateAnimator.SignalActiveTransition();
-                    }
-                    else
-                    {
-                        current = targetRotation;
-                    }
-                    treeChevronProgress[itemKey] = current;
-                }
-                float rotation = treeChevronProgress[itemKey];
-
-                // Always draw > shape, rotate 0→90° for expanded
-                var chevCenter = new Point(chevronX + iconSize / 2f, chevronCY);
-                using var treeChevRotate = ctx.PushRotate(
-                    Angle.Degrees(rotation), chevCenter);
-                ctx.DrawLine(
-                    new Point(chevronX + iconSize / 4f, chevronCY - iconSize / 2f),
-                    new Point(chevronX + iconSize * 3f / 4f, chevronCY),
-                    new Stroke(chevronColor, cStroke, StrokeCap.Round, StrokeJoin.Round));
-                ctx.DrawLine(
-                    new Point(chevronX + iconSize * 3f / 4f, chevronCY),
-                    new Point(chevronX + iconSize / 4f, chevronCY + iconSize / 2f),
-                    new Stroke(chevronColor, cStroke, StrokeCap.Round, StrokeJoin.Round));
-            }
-            else
-            {
-                // Leaf node dot
-                float dotX = indentX + iconSize / 2f + 2f;
-                float dotY = rowY + rowHeight / 2f;
-                var dotColor = isSelected
-                    ? theme.Colors.TextOnPrimary.Opacity(0.7f)
-                    : theme.Colors.TextMuted.Opacity(0.5f);
-                ctx.DrawCircle(new Point(dotX, dotY), 2f, fill: dotColor);
-            }
-
-            // Row content sits to the right of the chevron/leaf dot.
-            float textX = indentX + iconSize + 8f;
-
-            // Paint the caller's rendered node (icon + label, custom rows, etc.),
-            // laid out on demand and vertically centred in the row. Falls back to
-            // the plain label text when the render callback produced nothing.
-            Node rowContent = tree.GetRowContent(i);
-            if (!rowContent.IsLayoutEmpty)
-            {
-                float contentW = MathF.Max(0f, bounds.Right - textX - 6f);
-                treeRowLayout ??= new LayoutEngine();
-                treeRowLayout.Layout(rowContent, LayoutConstraints.Loose(new Size(contentW, rowHeight)));
-                float contentH = rowContent.LayoutData.MeasuredSize.Height;
-                float contentY = rowY + MathF.Max(0f, (rowHeight - contentH) / 2f);
-
-                float savedAx = absoluteX, savedAy = absoluteY;
-                absoluteX = textX;
-                absoluteY = contentY;
-                using (ctx.PushTranslate(textX, contentY))
-                {
-                    PaintRecursive(rowContent);
-                }
-
-                absoluteX = savedAx;
-                absoluteY = savedAy;
-            }
-            else
-            {
-                // DrawText's y is the line-box top; the glyph box sits ~0.3·fontSize
-                // below, so its optical centre is ~0.8·fontSize down — put that on
-                // the row centre to line up with the chevron/leaf dot.
-                float fontSize = item.Depth == 0 ? 13f : 12f;
-                float textY = rowY + rowHeight / 2f - fontSize * 0.8f;
-                var textColor = isSelected
-                    ? theme.Colors.TextOnPrimary
-                    : (item.HasChildren ? theme.Colors.Text : theme.Colors.TextMuted);
-                ctx.DrawText(item.Label, textX, textY, fontSize, textColor);
-            }
-        }
+        // Rows are a real interactive node tree (tappable chevron + rendered
+        // content + selection). Paint it, clipped to the tree bounds; a wrapping
+        // ScrollView (if any) provides scroll.
+        using var clip = ctx.PushRoundedClip(bounds, 6f);
+        PaintRecursive(tree.GetContentNode());
     }
 
     // ── PasswordInput ─────────────────────────────────────────────────

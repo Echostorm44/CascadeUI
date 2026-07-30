@@ -1289,6 +1289,8 @@ internal static class LayoutSolver
         // Measure it at the list's width with unbounded height so its full content
         // height is reported; a wrapping ScrollView (or a fixed Height) then decides
         // the visible viewport, and the painter clips overflow to the list bounds.
+        // Rebuild each frame so selection/data changes that only repaint are reflected.
+        lvn.InvalidateContent();
         Node content = lvn.GetContentNode();
 
         var contentConstraints = new LayoutConstraints(
@@ -2205,13 +2207,25 @@ internal static class LayoutSolver
 
     private static Size MeasureTreeView(ITreeView tree, LayoutConstraints constraints)
     {
-        var items = tree.GetFlattenedDisplay();
-        const float rowHeight = 28f;
-        const float defaultWidth = 300f;
-        float height = items.Count * rowHeight;
+        // The tree's rows are a real interactive node tree (indent + chevron +
+        // rendered content). Rebuild it each frame so expand/selection changes (which
+        // only repaint) are reflected, then measure and position it.
+        tree.InvalidateContent();
+        Node content = tree.GetContentNode();
+
+        var contentConstraints = new LayoutConstraints(
+            constraints.MinWidth, constraints.MaxWidth,
+            0, float.PositiveInfinity);
+        Size contentSize = MeasureChild(content, contentConstraints);
+        PositionChild(content, 0, 0);
+
+        float width = float.IsPositiveInfinity(constraints.MaxWidth)
+            ? contentSize.Width
+            : constraints.MaxWidth;
+
         return new Size(
-            constraints.ConstrainWidth(defaultWidth),
-            constraints.ConstrainHeight(Math.Max(rowHeight, height)));
+            constraints.ConstrainWidth(width),
+            constraints.ConstrainHeight(MathF.Max(contentSize.Height, 1f)));
     }
 
     private static Size MeasurePasswordInput(PasswordInput pwd, LayoutConstraints constraints)

@@ -22,6 +22,9 @@ internal interface IListViewNode
     /// render and are interactive. Built once and cached per instance.
     /// </summary>
     Node GetContentNode();
+
+    /// <summary>Drops the cached content so the next <see cref="GetContentNode"/> rebuilds. Layout calls this each frame.</summary>
+    void InvalidateContent();
 }
 
 /// <summary>
@@ -234,8 +237,10 @@ public sealed class ListView<T> : Node, IListViewNode
 
     private Node? contentNode;
 
+    void IListViewNode.InvalidateContent() => contentNode = null;
+
     /// <summary>
-    /// Builds (once, cached) the row tree from the render callbacks: a Column of
+    /// Builds (cached per frame) the row tree from the render callbacks: a Column of
     /// rendered items, with a rendered header before each section's items when
     /// grouped, or the empty-state node when there are no items.
     /// </summary>

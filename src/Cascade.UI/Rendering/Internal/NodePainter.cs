@@ -11347,16 +11347,51 @@ internal sealed class NodePainter
 
         // The rows are a real node tree built from the render callback. Paint it,
         // clipped to the list bounds; a wrapping ScrollView (if any) handles scroll.
+        // While virtualizing, register the viewport so PaintRecursive culls the
+        // off-screen buffer rows entirely — otherwise their icon blits get rasterized
+        // just outside the clip and leave stale-pixel "ghosts" at the boundary.
         using (ctx.PushRoundedClip(bounds, 4f))
         {
-            PaintRecursive(lvn.GetContentNode());
+            if (lvn.ViewportHeight > 0f)
+            {
+                float prevTop = currentViewportTop;
+                float prevBottom = currentViewportBottom;
+                // PaintRecursive expands the cull region by 25% of its height on each
+                // side (a prefetch margin). Inset by H/6 so that expanded region lands
+                // exactly on the list bounds — off-screen rows are then culled tight,
+                // leaving no boundary "ghosts" while every visible row still paints.
+                float inset = bounds.Height / 6f;
+                currentViewportTop = absoluteY + inset;
+                currentViewportBottom = absoluteY + bounds.Height - inset;
+                PaintRecursive(lvn.GetContentNode());
+                currentViewportTop = prevTop;
+                currentViewportBottom = prevBottom;
+            }
+            else
+            {
+                PaintRecursive(lvn.GetContentNode());
+            }
+        }
+
+        // Virtualized scrollbar: a thin thumb on the right edge when content overflows.
+        if (lvn.MaxY > 0f && lvn.ViewportHeight > 0f)
+        {
+            float total = lvn.ItemCount * lvn.GetItemHeight();
+            float trackH = bounds.Height - 8f;
+            float thumbH = MathF.Max(24f, trackH * (lvn.ViewportHeight / total));
+            float t = lvn.MaxY > 0f ? lvn.OffsetY / lvn.MaxY : 0f;
+            float thumbY = bounds.Y + 4f + t * (trackH - thumbH);
+            ctx.DrawRect(
+                new Rect(bounds.Right - 8f, thumbY, 4f, thumbH),
+                theme.Colors.Border,
+                radius: 2f);
         }
 
         // Drag-to-reorder: an accent insertion line at the drop position.
         if (lvn.ReorderFromIndex >= 0 && lvn.ReorderToIndex >= 0)
         {
             float ih = lvn.GetItemHeight();
-            float lineY = bounds.Y + (lvn.ReorderToIndex * ih);
+            float lineY = bounds.Y + (lvn.ReorderToIndex * ih) - lvn.OffsetY;
             if (lvn.ReorderToIndex > lvn.ReorderFromIndex)
             {
                 lineY += ih; // dropping below the target row

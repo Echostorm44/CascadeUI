@@ -148,6 +148,13 @@ internal sealed class Reconciler
             newSv.Control.CapturedFocusedEditable = oldSv.Control.CapturedFocusedEditable;
         }
 
+        // Preserve a virtualized ListView's scroll offset across re-renders so the
+        // list doesn't jump back to the top when its data changes.
+        if (from is IListViewNode oldLv && to is IListViewNode newLv)
+        {
+            newLv.OffsetY = oldLv.OffsetY;
+        }
+
         // Preserve an uncontrolled Expander's open/closed state across re-renders so a
         // section the user opened stays open (the new node is seeded to its initial value).
         if (from is Expander oldExp && to is Expander newExp && newExp.ExpandedBind.OnChange == null)

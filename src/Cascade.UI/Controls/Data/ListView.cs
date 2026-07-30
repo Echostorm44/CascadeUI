@@ -28,6 +28,43 @@ internal interface IListViewNode
     /// <summary>Applies a completed reorder by invoking the OnReorder handler.</summary>
     void ApplyReorder(int from, int to);
 
+    // ── Virtualized scrolling (the list owns its own scroll offset) ──
+    /// <summary>Vertical scroll offset in logical pixels. Persisted across frames by the reconciler.</summary>
+    float OffsetY { get; set; }
+    /// <summary>Maximum scroll offset (content height minus viewport), set by layout.</summary>
+    float MaxY { get; set; }
+    /// <summary>Viewport height available to the list, set by layout each frame.</summary>
+    float ViewportHeight { get; set; }
+    /// <summary>Y position (logical) at which the built visible-row slice should be placed.</summary>
+    float ContentOffsetY { get; }
+    /// <summary>True when the list can virtualize (flat list with a fixed item height).</summary>
+    bool CanVirtualize { get; }
+
+    /// <summary>Width of the built content, set by layout so the swipe row can size itself.</summary>
+    float ContentWidth { get; set; }
+
+    // ── Swipe actions (control-level drag + tap, like reorder) ──
+    /// <summary>True when any swipe actions are configured.</summary>
+    bool HasSwipeActions { get; }
+    /// <summary>The row currently swiped open, or -1.</summary>
+    int SwipeRowIndex { get; set; }
+    /// <summary>Horizontal swipe offset in logical px (negative = trailing actions revealed).</summary>
+    float SwipeOffsetX { get; set; }
+    /// <summary>Fixed width of one swipe-action button, in logical px.</summary>
+    float SwipeButtonWidth { get; }
+    /// <summary>Number of trailing (left-swipe) actions for the given row.</summary>
+    int TrailingActionCount(int row);
+    /// <summary>Number of leading (right-swipe) actions for the given row.</summary>
+    int LeadingActionCount(int row);
+    /// <summary>Invokes the trailing action at the given index for the row.</summary>
+    void InvokeTrailingAction(int row, int actionIndex);
+    /// <summary>Invokes the leading action at the given index for the row.</summary>
+    void InvokeLeadingAction(int row, int actionIndex);
+    /// <summary>Whether the row's first trailing action is a full-swipe (auto-invoke) action.</summary>
+    bool TrailingIsFullSwipe(int row);
+    /// <summary>Whether the row's first leading action is a full-swipe (auto-invoke) action.</summary>
+    bool LeadingIsFullSwipe(int row);
+
     /// <summary>
     /// The real node tree for the list's rows, built from the render callback(s).
     /// Layout, paint, and hit-testing delegate to this so custom rows actually
@@ -268,6 +305,135 @@ public sealed class ListView<T> : Node, IListViewNode
         }
     }
 
+    private float offsetY;
+    private float maxY;
+    private float viewportHeight;
+    private float contentOffsetY;
+
+    float IListViewNode.OffsetY { get => offsetY; set => offsetY = value; }
+    float IListViewNode.MaxY { get => maxY; set => maxY = value; }
+    float IListViewNode.ViewportHeight { get => viewportHeight; set => viewportHeight = value; }
+    float IListViewNode.ContentOffsetY => contentOffsetY;
+    bool IListViewNode.CanVirtualize => fixedItemHeight.HasValue && Sections is null && Items.Count > 0;
+
+    private float contentWidth;
+    private int swipeRowIndex = -1;
+    private float swipeOffsetX;
+    private const float SwipeButtonW = 72f;
+
+    float IListViewNode.ContentWidth { get => contentWidth; set => contentWidth = value; }
+    bool IListViewNode.HasSwipeActions => swipeActionsFactory is not null && Sections is null;
+    int IListViewNode.SwipeRowIndex { get => swipeRowIndex; set => swipeRowIndex = value; }
+    float IListViewNode.SwipeOffsetX { get => swipeOffsetX; set => swipeOffsetX = value; }
+    float IListViewNode.SwipeButtonWidth => SwipeButtonW;
+
+    private SwipeActionSet? SwipeSetFor(int row)
+    {
+        if (swipeActionsFactory is null || Sections is not null || row < 0 || row >= Items.Count)
+        {
+            return null;
+        }
+
+        return swipeActionsFactory(Items[row]);
+    }
+
+    int IListViewNode.TrailingActionCount(int row) => SwipeSetFor(row)?.Trailing?.Count ?? 0;
+    int IListViewNode.LeadingActionCount(int row) => SwipeSetFor(row)?.Leading?.Count ?? 0;
+
+    void IListViewNode.InvokeTrailingAction(int row, int actionIndex)
+    {
+        var acts = SwipeSetFor(row)?.Trailing;
+        if (acts is not null && actionIndex >= 0 && actionIndex < acts.Count)
+        {
+            acts[actionIndex].OnClick();
+        }
+    }
+
+    void IListViewNode.InvokeLeadingAction(int row, int actionIndex)
+    {
+        var acts = SwipeSetFor(row)?.Leading;
+        if (acts is not null && actionIndex >= 0 && actionIndex < acts.Count)
+        {
+            acts[actionIndex].OnClick();
+        }
+    }
+
+    bool IListViewNode.TrailingIsFullSwipe(int row)
+    {
+        var acts = SwipeSetFor(row)?.Trailing;
+        return acts is { Count: > 0 } && acts[0].FullSwipe;
+    }
+
+    bool IListViewNode.LeadingIsFullSwipe(int row)
+    {
+        var acts = SwipeSetFor(row)?.Leading;
+        return acts is { Count: > 0 } && acts[0].FullSwipe;
+    }
+
+    // Wraps a row in the sliding swipe composite when it is the open row.
+    // Reveal is visual (TranslateX, honored by the painter); taps on the revealed
+    // buttons are handled control-level by the input dispatcher (computed rects),
+    // which is why per-frame rebuild of this composite is safe.
+    private Node WrapSwipe(int index, Node rowContent, float ih)
+    {
+        if (swipeRowIndex != index || swipeOffsetX == 0f)
+        {
+            return rowContent.Height(ih);
+        }
+
+        var set = SwipeSetFor(index);
+        if (set is null)
+        {
+            return rowContent.Height(ih);
+        }
+
+        float w = contentWidth > 0f ? contentWidth : 0f;
+        var colors = ThemeSwitcher.ActiveColors;
+
+        var children = new List<Node>();
+        int leadCount = set.Leading?.Count ?? 0;
+        if (set.Leading is { Count: > 0 } lead)
+        {
+            foreach (var a in lead)
+            {
+                children.Add(SwipeButton(a, ih));
+            }
+        }
+
+        // Give the sliding row an opaque surface so buttons are revealed, not seen through.
+        children.Add(rowContent.Width(w).Height(ih).Background(colors.Surface));
+
+        if (set.Trailing is { Count: > 0 } trail)
+        {
+            foreach (var a in trail)
+            {
+                children.Add(SwipeButton(a, ih));
+            }
+        }
+
+        // Natural layout is [lead…][content][trail…]; shift so content sits at x=0 when
+        // closed, then apply the live swipe offset. The list clip hides the overflow.
+        float baseShift = -leadCount * SwipeButtonW;
+        return new Row(spacing: 0, children: [.. children])
+            .TranslateX(baseShift + swipeOffsetX)
+            .Height(ih);
+    }
+
+    private static Node SwipeButton(SwipeAction action, float ih)
+    {
+        var white = new ColorValue("#FFFFFF");
+        var content = new Column(
+            spacing: 2f,
+            crossAxisAlignment: CrossAxisAlignment.Center,
+            children:
+            [
+                new IconView(action.Icon, size: 18f).Color(white),
+                new Label(action.Label).FontSize(11f).Color(white),
+            ]);
+
+        return new Center(content).Width(SwipeButtonW).Height(ih).Background(action.Color);
+    }
+
     /// <summary>
     /// Builds (cached per frame) the row tree from the render callbacks: a Column of
     /// rendered items, with a rendered header before each section's items when
@@ -301,18 +467,42 @@ public sealed class ListView<T> : Node, IListViewNode
         else if (Items.Count == 0)
         {
             contentNode = emptyStateNode;
+            contentOffsetY = 0f;
+        }
+        else if (fixedItemHeight is { } ih && viewportHeight > 0f)
+        {
+            // Virtualized: build only the on-screen slice plus a small buffer, and
+            // offset it so the correct rows appear at the current scroll position.
+            // Cost is bounded by viewport size, not by Items.Count.
+            const int buffer = 3;
+            int first = Math.Max(0, (int)(offsetY / ih) - buffer);
+            int last = Math.Min(Items.Count - 1, (int)((offsetY + viewportHeight) / ih) + buffer);
+
+            var rows = new Node[last - first + 1];
+            for (int i = first; i <= last; i++)
+            {
+                rows[i - first] = WrapSwipe(i, Render(Items[i]), ih);
+            }
+
+            contentNode = new Column(spacing: 0, children: rows);
+            contentOffsetY = (first * ih) - offsetY;
         }
         else
         {
+            // Non-virtualized fallback (no fixed item height, or unbounded viewport):
+            // build every row. Set .ItemHeight() and give the list a bounded height
+            // to enable virtualization.
             var children = new Node[Items.Count];
             for (int i = 0; i < Items.Count; i++)
             {
                 Node row = Render(Items[i]);
-                // Uniform row height (when set) keeps drag-to-reorder index mapping exact.
-                children[i] = fixedItemHeight.HasValue ? row.Height(fixedItemHeight.Value) : row;
+                children[i] = fixedItemHeight.HasValue
+                    ? WrapSwipe(i, row, fixedItemHeight.Value)
+                    : row;
             }
 
             contentNode = new Column(spacing: 0, children: children);
+            contentOffsetY = 0f;
         }
 
         return contentNode;

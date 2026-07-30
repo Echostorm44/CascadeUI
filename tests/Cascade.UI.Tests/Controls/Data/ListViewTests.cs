@@ -256,6 +256,191 @@ public class ListViewTests
         await Assert.That(factory).IsNotNull();
     }
 
+    // ── Virtualization ──────────────────────────────────────────────
+
+    [Test]
+    public async Task VirtualizationBuildsOnlyVisibleSlice()
+    {
+        int renderCalls = 0;
+        var items = Enumerable.Range(0, 10_000).ToArray();
+        var list = new ListView<int>(items, _ => { renderCalls++; return Node.Empty; })
+            .ItemHeight(30f);
+
+        var lvn = (IListViewNode)list;
+        lvn.ViewportHeight = 300f; // 10 rows visible
+        lvn.OffsetY = 0f;
+        lvn.InvalidateContent();
+        lvn.GetContentNode();
+
+        // 10 visible + a small buffer — nowhere near 10,000.
+        await Assert.That(renderCalls).IsGreaterThan(0);
+        await Assert.That(renderCalls).IsLessThan(20);
+    }
+
+    [Test]
+    public async Task VirtualizationRendersScrolledSlice()
+    {
+        var rendered = new List<int>();
+        var items = Enumerable.Range(0, 10_000).ToArray();
+        var list = new ListView<int>(items, i => { rendered.Add(i); return Node.Empty; })
+            .ItemHeight(30f);
+
+        var lvn = (IListViewNode)list;
+        lvn.ViewportHeight = 300f;
+        lvn.OffsetY = 3000f; // scrolled to row 100
+        lvn.InvalidateContent();
+        lvn.GetContentNode();
+
+        // Rows around index 100 are built; the top of the list is not.
+        await Assert.That(rendered).Contains(100);
+        await Assert.That(rendered).DoesNotContain(0);
+        await Assert.That(rendered.Count).IsLessThan(20);
+    }
+
+    [Test]
+    public async Task VirtualizationContentOffsetAlignsSliceToScroll()
+    {
+        var items = Enumerable.Range(0, 10_000).ToArray();
+        var list = new ListView<int>(items, _ => Node.Empty).ItemHeight(30f);
+
+        var lvn = (IListViewNode)list;
+        lvn.ViewportHeight = 300f;
+        lvn.OffsetY = 3000f; // row 100; first = 100 - 3 buffer = 97
+        lvn.InvalidateContent();
+        lvn.GetContentNode();
+
+        // ContentOffsetY = first*ih - offsetY = 97*30 - 3000 = -90.
+        await Assert.That(lvn.ContentOffsetY).IsEqualTo(-90f);
+    }
+
+    [Test]
+    public async Task VirtualizationDisabledWithoutFixedHeight()
+    {
+        var list = new ListView<int>([1, 2, 3], _ => Node.Empty);
+
+        var lvn = (IListViewNode)list;
+        await Assert.That(lvn.CanVirtualize).IsFalse();
+    }
+
+    [Test]
+    public async Task NonVirtualizedBuildsAllRows()
+    {
+        int renderCalls = 0;
+        var items = Enumerable.Range(0, 500).ToArray();
+        // No ItemHeight → not virtualizable; every row is built.
+        var list = new ListView<int>(items, _ => { renderCalls++; return Node.Empty; });
+
+        var lvn = (IListViewNode)list;
+        lvn.InvalidateContent();
+        lvn.GetContentNode();
+
+        await Assert.That(renderCalls).IsEqualTo(500);
+    }
+
+    // ── Swipe actions (control-level behavior) ──────────────────────
+
+    private static readonly Icon swipeIcon = new("m6 9 6 6 6-6", new Size(24, 24), 24f, "Test");
+
+    [Test]
+    public async Task SwipeActionsAreDetectedAndCounted()
+    {
+        var set = new SwipeActionSet(
+            leading: new SwipeAction("Pin", swipeIcon, new ColorValue("#3B82F6"), () => { }),
+            trailing: new SwipeAction("Delete", swipeIcon, new ColorValue("#EF4444"), () => { }));
+        var list = new ListView<string>(sampleItems, _ => Node.Empty)
+            .ItemSwipeActions(_ => set);
+
+        var lvn = (IListViewNode)list;
+        await Assert.That(lvn.HasSwipeActions).IsTrue();
+        await Assert.That(lvn.TrailingActionCount(0)).IsEqualTo(1);
+        await Assert.That(lvn.LeadingActionCount(0)).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task SwipeInvokeTrailingActionFiresHandler()
+    {
+        bool fired = false;
+        var set = new SwipeActionSet(
+            trailing: new SwipeAction("Delete", swipeIcon, new ColorValue("#EF4444"), () => fired = true));
+        var list = new ListView<string>(sampleItems, _ => Node.Empty)
+            .ItemSwipeActions(_ => set);
+
+        var lvn = (IListViewNode)list;
+        lvn.InvokeTrailingAction(0, 0);
+
+        await Assert.That(fired).IsTrue();
+    }
+
+    [Test]
+    public async Task SwipeInvokeLeadingActionFiresHandler()
+    {
+        bool fired = false;
+        var set = new SwipeActionSet(
+            leading: new SwipeAction("Pin", swipeIcon, new ColorValue("#3B82F6"), () => fired = true));
+        var list = new ListView<string>(sampleItems, _ => Node.Empty)
+            .ItemSwipeActions(_ => set);
+
+        var lvn = (IListViewNode)list;
+        lvn.InvokeLeadingAction(0, 0);
+
+        await Assert.That(fired).IsTrue();
+    }
+
+    [Test]
+    public async Task SwipeFullSwipeFlagReported()
+    {
+        var set = new SwipeActionSet(
+            trailing: new SwipeAction("Delete", swipeIcon, new ColorValue("#EF4444"), () => { }, fullSwipe: true));
+        var list = new ListView<string>(sampleItems, _ => Node.Empty)
+            .ItemSwipeActions(_ => set);
+
+        var lvn = (IListViewNode)list;
+        await Assert.That(lvn.TrailingIsFullSwipe(0)).IsTrue();
+        await Assert.That(lvn.LeadingIsFullSwipe(0)).IsFalse();
+    }
+
+    [Test]
+    public async Task SwipeClosedRowIsNotWrapped()
+    {
+        var set = new SwipeActionSet(
+            trailing: new SwipeAction("Delete", swipeIcon, new ColorValue("#EF4444"), () => { }));
+        // A marker row so we can tell the raw content from a swipe wrapper.
+        var list = new ListView<int>(Enumerable.Range(0, 5).ToArray(), _ => new Label("row"))
+            .ItemHeight(40f)
+            .ItemSwipeActions(_ => set);
+
+        var lvn = (IListViewNode)list;
+        lvn.ViewportHeight = 200f;
+        lvn.ContentWidth = 300f;
+        lvn.InvalidateContent();
+        var content = (Column)lvn.GetContentNode();
+
+        // Closed: each row is the plain rendered content (with a height wrapper), not a Row composite.
+        await Assert.That(content.Children[0] is Row).IsFalse();
+    }
+
+    [Test]
+    public async Task SwipeOpenRowIsWrappedInSlidingComposite()
+    {
+        var set = new SwipeActionSet(
+            trailing: new SwipeAction("Delete", swipeIcon, new ColorValue("#EF4444"), () => { }));
+        var list = new ListView<int>(Enumerable.Range(0, 5).ToArray(), _ => new Label("row"))
+            .ItemHeight(40f)
+            .ItemSwipeActions(_ => set);
+
+        var lvn = (IListViewNode)list;
+        lvn.ViewportHeight = 200f;
+        lvn.ContentWidth = 300f;
+        lvn.SwipeRowIndex = 2;
+        lvn.SwipeOffsetX = -72f; // trailing open
+        lvn.InvalidateContent();
+        var content = (Column)lvn.GetContentNode();
+
+        // Only the open row (index 2) becomes a sliding Row composite (content + button).
+        await Assert.That(content.Children[2] is Row).IsTrue();
+        await Assert.That(content.Children[0] is Row).IsFalse();
+    }
+
     // ── Context menu ────────────────────────────────────────────────
 
     [Test]

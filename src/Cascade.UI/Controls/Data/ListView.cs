@@ -16,6 +16,18 @@ internal interface IListViewNode
     int GetSectionItemCount(int sectionIndex);
     string GetSectionItemText(int sectionIndex, int itemIndex);
 
+    // ── Drag-to-reorder (control-level, like DataGrid column reorder) ──
+    /// <summary>Whether drag-to-reorder is enabled and applicable (flat list).</summary>
+    bool IsReorderable { get; }
+    /// <summary>Absolute screen bounds, set by the painter for reorder hit-testing.</summary>
+    Rect ReorderBounds { get; set; }
+    /// <summary>Row being dragged, or -1. Set by the input dispatcher, read by the painter.</summary>
+    int ReorderFromIndex { get; set; }
+    /// <summary>Current drop target row, or -1.</summary>
+    int ReorderToIndex { get; set; }
+    /// <summary>Applies a completed reorder by invoking the OnReorder handler.</summary>
+    void ApplyReorder(int from, int to);
+
     /// <summary>
     /// The real node tree for the list's rows, built from the render callback(s).
     /// Layout, paint, and hit-testing delegate to this so custom rows actually
@@ -239,6 +251,23 @@ public sealed class ListView<T> : Node, IListViewNode
 
     void IListViewNode.InvalidateContent() => contentNode = null;
 
+    private Rect reorderBounds;
+    private int reorderFromIndex = -1;
+    private int reorderToIndex = -1;
+
+    bool IListViewNode.IsReorderable =>
+        reorderableEnabled && onReorderHandler is not null && Sections is null && Items.Count > 1;
+    Rect IListViewNode.ReorderBounds { get => reorderBounds; set => reorderBounds = value; }
+    int IListViewNode.ReorderFromIndex { get => reorderFromIndex; set => reorderFromIndex = value; }
+    int IListViewNode.ReorderToIndex { get => reorderToIndex; set => reorderToIndex = value; }
+    void IListViewNode.ApplyReorder(int from, int to)
+    {
+        if (from != to && from >= 0 && to >= 0)
+        {
+            onReorderHandler?.Invoke(from, to);
+        }
+    }
+
     /// <summary>
     /// Builds (cached per frame) the row tree from the render callbacks: a Column of
     /// rendered items, with a rendered header before each section's items when
@@ -278,7 +307,9 @@ public sealed class ListView<T> : Node, IListViewNode
             var children = new Node[Items.Count];
             for (int i = 0; i < Items.Count; i++)
             {
-                children[i] = Render(Items[i]);
+                Node row = Render(Items[i]);
+                // Uniform row height (when set) keeps drag-to-reorder index mapping exact.
+                children[i] = fixedItemHeight.HasValue ? row.Height(fixedItemHeight.Value) : row;
             }
 
             contentNode = new Column(spacing: 0, children: children);

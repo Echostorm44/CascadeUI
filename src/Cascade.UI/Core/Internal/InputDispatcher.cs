@@ -71,6 +71,12 @@ internal sealed class InputDispatcher
     private int reorderPendingCol = -1;
     private bool reorderDragActive;
 
+    // ListView drag-to-reorder tracking (control-level, like column reorder above)
+    private IListViewNode? listReorderLv;
+    private int listReorderStartRow = -1;
+    private float listReorderStartY;
+    private bool listReorderActive;
+
     // Drag-and-drop state — tracks cross-node drag from .Draggable() to .DropTarget()
     private bool dragDropPending;       // mouse down on draggable, threshold not yet met
     private bool dragDropActive;        // drag is in progress (threshold exceeded)
@@ -1086,6 +1092,25 @@ internal sealed class InputDispatcher
                 RequestRepaint?.Invoke();
             }
         }
+        // ListView drag-to-reorder — activates once the pointer moves past a threshold
+        else if (isMouseDown && listReorderLv != null)
+        {
+            if (listReorderActive || MathF.Abs(evt.Y - listReorderStartY) >= 5f)
+            {
+                if (!listReorderActive)
+                {
+                    listReorderActive = true;
+                    listReorderLv.ReorderFromIndex = listReorderStartRow;
+                    pressedNode = null; // a drag, not a tap — cancel the pending click/select
+                }
+
+                var b = listReorderLv.ReorderBounds;
+                float ih = listReorderLv.GetItemHeight();
+                int to = ih > 0 ? (int)((evt.Y - b.Y) / ih) : listReorderStartRow;
+                listReorderLv.ReorderToIndex = Math.Clamp(to, 0, listReorderLv.ItemCount - 1);
+                RequestRepaint?.Invoke();
+            }
+        }
         // If dragging a slider, update its value from the drag delta
         else if (isMouseDown && pressedNode is Slider slider && !slider.IsDisabled && !slider.IsReadOnly)
         {
@@ -1825,6 +1850,23 @@ internal sealed class InputDispatcher
 
         pressedNode = hitNode;
 
+        // Arm a potential ListView drag-to-reorder. It only activates if the pointer
+        // then moves past the threshold (see HandleMouseMove); a plain click still
+        // falls through to the row's tap/select/button below.
+        if (rootNode != null)
+        {
+            var reLv = HitTester.FindReorderableListViewAt(rootNode, evt.X, evt.Y);
+            if (reLv != null)
+            {
+                float ih = reLv.GetItemHeight();
+                int startRow = ih > 0 ? (int)((evt.Y - reLv.ReorderBounds.Y) / ih) : -1;
+                listReorderLv = reLv;
+                listReorderStartRow = Math.Clamp(startRow, 0, Math.Max(0, reLv.ItemCount - 1));
+                listReorderStartY = evt.Y;
+                listReorderActive = false;
+            }
+        }
+
         if (hitNode != null)
         {
             hitNode.IsPressed = true;
@@ -2060,6 +2102,22 @@ internal sealed class InputDispatcher
 
     private void HandleMouseUp(Node? hitNode, NativeMouseEvent evt)
     {
+        // Finish a ListView drag-to-reorder (if it actually activated).
+        if (listReorderLv != null)
+        {
+            if (listReorderActive)
+            {
+                listReorderLv.ApplyReorder(listReorderLv.ReorderFromIndex, listReorderLv.ReorderToIndex);
+            }
+
+            listReorderLv.ReorderFromIndex = -1;
+            listReorderLv.ReorderToIndex = -1;
+            listReorderLv = null;
+            listReorderActive = false;
+            listReorderStartRow = -1;
+            RequestRepaint?.Invoke();
+        }
+
         // Finish column resize drag
         if (columnResizeTdn != null)
         {

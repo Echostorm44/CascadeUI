@@ -93,7 +93,7 @@ internal sealed class McpHost : IDisposable
     /// MCP access simply by pressing F5.
     ///
     /// In non-DEBUG builds the listener is <b>gated by the <c>CASCADE_MCP=1</c>
-    /// environment variable</c></b>. End-user AOT apps therefore pay zero MCP
+    /// environment variable</b>. End-user AOT apps therefore pay zero MCP
     /// runtime cost unless the user (or agent runtime) explicitly opts in.
     /// Without the env var, <see cref="Start"/> is a no-op — no listener,
     /// no registry write, no background thread.

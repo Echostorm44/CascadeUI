@@ -285,7 +285,6 @@ internal static class HitTester
     }
 
     /// <summary>
-    /// <summary>
     /// Finds a reorderable ListView whose (painter-stamped) reorder bounds contain
     /// the point. Used to start a control-level drag-to-reorder — the dragged rows
     /// are built content (not in the reconciled tree), so we locate the list node
@@ -437,6 +436,7 @@ internal static class HitTester
         return single != null ? FindSwipeableListViewAt(single, x, y) : null;
     }
 
+    /// <summary>
     /// Finds the innermost ScrollView whose bounds contain the given point.
     /// Used by InputDispatcher to route scroll events to the correct ScrollView.
     /// </summary>

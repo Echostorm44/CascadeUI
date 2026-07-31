@@ -230,7 +230,6 @@ public static class App
         uint pixelWidth = 0;
         uint pixelHeight = 0;
 
-        if (gpu != null)
         {
             activeBackendProvider = gpu;
 
@@ -276,18 +275,15 @@ public static class App
         window.Destroyed = () =>
         {
             orchestrator.Dispose();
-            gpu?.Dispose();
+            gpu.Dispose();
             loop.Quit(0);
         };
 
         window.SizeChanged = (width, height) =>
         {
-            if (gpu != null)
-            {
-                pixelWidth = (uint)width;
-                pixelHeight = (uint)height;
-                gpu.ResizeSurface(pixelWidth, pixelHeight);
-            }
+            pixelWidth = (uint)width;
+            pixelHeight = (uint)height;
+            gpu.ResizeSurface(pixelWidth, pixelHeight);
 
             float scale = window.DpiScale;
             orchestrator.HandleResize(width / scale, height / scale);
@@ -373,7 +369,7 @@ public static class App
         mcpHost.Dispose();
 
         orchestrator.Dispose();
-        gpu?.Dispose();
+        gpu.Dispose();
         loop.Dispose();
         window.Dispose();
         singleInstanceGuard?.Dispose();

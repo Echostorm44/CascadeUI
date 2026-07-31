@@ -246,7 +246,7 @@ public static class App
 
             // Apply the configured theme via ThemeSwitcher (FrameOrchestrator.Theme
             // reads from ThemeSwitcher.Current, so we must Apply() first).
-            var appliedTheme = config.Theme as CascadeTheme ?? new FluentTheme();
+            var appliedTheme = config.Theme ?? new FluentTheme();
             {
                 ThemeSwitcher.Apply(appliedTheme);
                 ThemeSwitcher.SetDarkMode(appliedTheme.Mode == ThemeMode.Dark);
@@ -1207,10 +1207,20 @@ public sealed class AppHotkeys
 /// </summary>
 public sealed class AppConfig
 {
-    /// <summary>The application theme instance.</summary>
-    public object? Theme { get; set; }
+    /// <summary>
+    /// The theme that supplies every control's colours, fonts, and metrics. Assign a
+    /// built-in theme — <see cref="AppleTheme"/>, <see cref="FluentTheme"/>, or
+    /// <see cref="Material3Theme"/> — or your own <see cref="CascadeTheme"/> subclass,
+    /// e.g. <c>config.Theme = new AppleTheme(ThemeMode.Dark);</c>. When left null, a
+    /// default <see cref="FluentTheme"/> is used.
+    /// </summary>
+    public CascadeTheme? Theme { get; set; }
 
-    /// <summary>The theme mode (light, dark, or follow system).</summary>
+    /// <summary>
+    /// Whether the UI follows light, dark, or the OS setting. A theme constructed with an
+    /// explicit mode (e.g. <c>new AppleTheme(ThemeMode.Dark)</c>) already carries its own
+    /// mode; this is the fallback when the theme defers to the app.
+    /// </summary>
     public ThemeMode ThemeMode { get; set; } = ThemeMode.System;
 
     /// <summary>

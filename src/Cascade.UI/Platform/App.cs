@@ -223,8 +223,10 @@ public static class App
             requestFrame: () => loop.StartFrameTimer(16),
             cancelFrame:  () => loop.StopFrameTimer());
 
-        // Wire GPU backend if one was configured
-        var gpu = config.BackendProvider;
+        // Wire the GPU backend. Etch is the default renderer — a windowed app always
+        // needs one, and forgetting to opt in used to open a blank, non-rendering
+        // window. config.UseEtch() is therefore optional (kept for back-compat).
+        var gpu = config.BackendProvider ?? new EtchBackendProvider();
         uint pixelWidth = 0;
         uint pixelHeight = 0;
 
@@ -1234,9 +1236,9 @@ public sealed class AppConfig
     public TrayIcon? Tray { get; set; }
 
     /// <summary>
-    /// GPU render backend provider. Set by backend packages via extension methods
-    /// (e.g., <c>config.UseEtch()</c>). When null, the paint pass uses the legacy
-    /// PaintCallback path (headless mode).
+    /// GPU render backend provider. Defaults to Etch in <see cref="App.Run{T}(System.Action{AppConfig})"/>,
+    /// so apps render without any explicit setup. <c>config.UseEtch()</c> is optional
+    /// (it sets this to the same Etch provider) and kept for back-compat.
     /// </summary>
     internal EtchBackendProvider? BackendProvider { get; set; }
 }

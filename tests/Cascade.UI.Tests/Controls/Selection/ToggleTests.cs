@@ -115,7 +115,7 @@ public class ToggleTests
         var binding = CreateBoolBinding(false);
         var toggle = new Toggle(binding).AccessibleLabel("Dark mode toggle");
 
-        string label = toggle.AccessibleLabelValue.Value;
+        string label = toggle.LayoutData.A11yLabel!;
         await Assert.That(label).IsEqualTo("Dark mode toggle");
     }
 

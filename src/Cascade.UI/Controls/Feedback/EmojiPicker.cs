@@ -87,7 +87,6 @@ public sealed class EmojiPicker : Node
     internal bool IsDisabled { get; set; }
 
     /// <summary>Accessible label for screen readers.</summary>
-    internal LocKey AccessibleLabelValue { get; set; }
 
     // ── Runtime state for layout/paint/input ──────────────────────────
 
@@ -203,7 +202,7 @@ public static class EmojiPickerExtensions
     public static EmojiPicker AccessibleLabel(this EmojiPicker picker, LocKey label)
     {
         ArgumentNullException.ThrowIfNull(picker);
-        picker.AccessibleLabelValue = label;
+        picker.LayoutData.A11yLabel = label.Resolve();
         return picker;
     }
 }

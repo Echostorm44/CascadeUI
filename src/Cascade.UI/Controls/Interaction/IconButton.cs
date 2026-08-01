@@ -31,7 +31,6 @@ public sealed class IconButton : Node
     internal float? Size { get; set; }
     internal float? IconSizeOverride { get; set; }
     internal float? IconStrokeOverride { get; set; }
-    internal LocKey AccessibleLabelValue { get; set; }
     internal LocKey TooltipText { get; set; }
 }
 
@@ -99,7 +98,7 @@ public static class IconButtonExtensions
     /// <summary>Sets the accessible label for screen readers.</summary>
     public static IconButton AccessibleLabel(this IconButton button, LocKey label)
     {
-        button.AccessibleLabelValue = label;
+        button.LayoutData.A11yLabel = label.Resolve();
         return button;
     }
 

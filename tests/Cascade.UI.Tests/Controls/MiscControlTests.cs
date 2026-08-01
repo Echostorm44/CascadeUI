@@ -130,7 +130,7 @@ public sealed class PasswordInputTests
     {
         var input = new PasswordInput(CreateStringBinding()).AccessibleLabel("Password field");
 
-        string label = input.AccessibleLabelValue.Value;
+        string label = input.LayoutData.A11yLabel!;
         await Assert.That(label).IsEqualTo("Password field");
     }
 
@@ -410,7 +410,7 @@ public sealed class NotificationBellTests
         var bell = new NotificationBell(CreateNotificationBinding())
             .AccessibleLabel("Notifications");
 
-        string label = bell.AccessibleLabelValue.Value;
+        string label = bell.LayoutData.A11yLabel!;
         await Assert.That(label).IsEqualTo("Notifications");
     }
 

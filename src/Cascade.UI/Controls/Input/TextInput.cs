@@ -57,7 +57,6 @@ public sealed class TextInput : Node
     internal Action<string>? OnChangeHandler { get; set; }
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
-    internal LocKey AccessibleLabelValue { get; set; }
 
     /// <summary>
     /// Absolute viewport-space bounds, set by the painter each frame.
@@ -216,7 +215,7 @@ public static class TextInputExtensions
     /// <summary>Sets the accessible label for screen readers.</summary>
     public static TextInput AccessibleLabel(this TextInput input, LocKey label)
     {
-        input.AccessibleLabelValue = label;
+        input.LayoutData.A11yLabel = label.Resolve();
         return input;
     }
 

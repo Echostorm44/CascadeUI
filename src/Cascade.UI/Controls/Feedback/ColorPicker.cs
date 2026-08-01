@@ -89,7 +89,6 @@ public sealed class ColorPicker : Node
     internal bool HsbInitialized { get; set; }
 
     /// <summary>Accessible label for screen readers.</summary>
-    internal LocKey AccessibleLabelValue { get; set; }
 }
 
 /// <summary>
@@ -164,7 +163,7 @@ public static class ColorPickerExtensions
     public static ColorPicker AccessibleLabel(this ColorPicker picker, LocKey label)
     {
         ArgumentNullException.ThrowIfNull(picker);
-        picker.AccessibleLabelValue = label;
+        picker.LayoutData.A11yLabel = label.Resolve();
         return picker;
     }
 }

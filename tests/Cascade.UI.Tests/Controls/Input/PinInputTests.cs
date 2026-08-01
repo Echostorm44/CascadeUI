@@ -141,7 +141,7 @@ public sealed class PinInputTests
     {
         var pin = CreateDefaultPin().AccessibleLabel("Verification code");
 
-        string label = pin.AccessibleLabelValue.Value;
+        string label = pin.LayoutData.A11yLabel!;
         await Assert.That(label).IsEqualTo("Verification code");
     }
 

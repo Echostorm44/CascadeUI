@@ -132,7 +132,7 @@ public class ButtonTests
     {
         var button = new Button("OK", NoOp).AccessibleLabel("Submit form");
 
-        string label = button.AccessibleLabelValue.Value;
+        string label = button.LayoutData.A11yLabel!;
         await Assert.That(label).IsEqualTo("Submit form");
     }
 
@@ -282,7 +282,7 @@ public class IconButtonTests
     {
         var button = new IconButton(TestIcon, NoOp).AccessibleLabel("Close dialog");
 
-        string label = button.AccessibleLabelValue.Value;
+        string label = button.LayoutData.A11yLabel!;
         await Assert.That(label).IsEqualTo("Close dialog");
     }
 
@@ -410,7 +410,7 @@ public class LinkButtonTests
     {
         var button = new LinkButton("Link", NoOp).AccessibleLabel("Read documentation");
 
-        string label = button.AccessibleLabelValue.Value;
+        string label = button.LayoutData.A11yLabel!;
         await Assert.That(label).IsEqualTo("Read documentation");
     }
 

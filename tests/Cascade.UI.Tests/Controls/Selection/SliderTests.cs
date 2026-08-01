@@ -196,7 +196,7 @@ public class SliderTests
         var binding = CreateFloatBinding(0.5f);
         var slider = new Slider(binding).AccessibleLabel("Volume slider");
 
-        string label = slider.AccessibleLabelValue.Value;
+        string label = slider.LayoutData.A11yLabel!;
         await Assert.That(label).IsEqualTo("Volume slider");
     }
 

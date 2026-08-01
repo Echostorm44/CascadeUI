@@ -72,7 +72,6 @@ public sealed class RadioGroup<T> : Node, IRadioGroup where T : notnull
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
-    internal LocKey AccessibleLabelValue { get; set; }
 
     // ── IRadioGroup implementation ───────────────────────────────────
 
@@ -240,7 +239,7 @@ public static class RadioGroupExtensions
     public static RadioGroup<T> AccessibleLabel<T>(this RadioGroup<T> group, LocKey label)
         where T : notnull
     {
-        group.AccessibleLabelValue = label;
+        group.LayoutData.A11yLabel = label.Resolve();
         return group;
     }
 }

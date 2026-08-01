@@ -48,7 +48,6 @@ public sealed class MentionInput : Node
     internal TimeSpan? DebounceDelay { get; set; }
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
-    internal LocKey AccessibleLabelValue { get; set; }
 
     // ── Internal editing state ────────────────────────────────────
 
@@ -244,7 +243,7 @@ public static class MentionInputExtensions
     /// <summary>Sets the accessible label for screen readers.</summary>
     public static MentionInput AccessibleLabel(this MentionInput input, LocKey label)
     {
-        input.AccessibleLabelValue = label;
+        input.LayoutData.A11yLabel = label.Resolve();
         return input;
     }
 }

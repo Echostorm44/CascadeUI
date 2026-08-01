@@ -193,7 +193,7 @@ public class SelectTests
         var select = new Select<string>(binding, CreateOptions())
             .AccessibleLabel("Country selector");
 
-        string label = select.AccessibleLabelValue.Value;
+        string label = select.LayoutData.A11yLabel!;
         await Assert.That(label).IsEqualTo("Country selector");
     }
 

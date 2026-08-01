@@ -117,7 +117,6 @@ public sealed class MultiSelect<T> : Node, IMultiSelectNode where T : notnull
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
-    internal LocKey AccessibleLabelValue { get; set; }
 
     // ── IMultiSelectNode runtime state ────────────────────────────────
 
@@ -379,7 +378,7 @@ public static class MultiSelectExtensions
     public static MultiSelect<T> AccessibleLabel<T>(this MultiSelect<T> select, LocKey label)
         where T : notnull
     {
-        select.AccessibleLabelValue = label;
+        select.LayoutData.A11yLabel = label.Resolve();
         return select;
     }
 }

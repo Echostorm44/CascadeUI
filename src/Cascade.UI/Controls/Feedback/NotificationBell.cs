@@ -71,7 +71,6 @@ public sealed class NotificationBell : Node
     internal int MaxVisibleCount { get; set; } = 50;
     internal Node EmptyStateNode { get; set; } = Node.Empty;
     internal bool IsDisabled { get; set; }
-    internal LocKey AccessibleLabelValue { get; set; }
 
     // ── Runtime state for layout/paint/input ──────────────────────────
 
@@ -151,7 +150,7 @@ public static class NotificationBellExtensions
     /// <summary>Sets the accessible label for screen readers.</summary>
     public static NotificationBell AccessibleLabel(this NotificationBell bell, LocKey label)
     {
-        bell.AccessibleLabelValue = label;
+        bell.LayoutData.A11yLabel = label.Resolve();
         return bell;
     }
 }

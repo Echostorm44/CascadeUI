@@ -126,7 +126,7 @@ public class ColorPickerTests
         var binding = CreateColorBinding();
         var picker = new ColorPicker(binding).AccessibleLabel("Pick a color");
 
-        var label = picker.AccessibleLabelValue.Value;
+        var label = picker.LayoutData.A11yLabel!;
         await Assert.That(label).IsEqualTo("Pick a color");
     }
 
@@ -260,7 +260,7 @@ public class DateTimePickerTests
         var binding = CreateBinding();
         var picker = new DateTimePicker(binding).AccessibleLabel("Schedule");
 
-        var label = picker.AccessibleLabelValue.Value;
+        var label = picker.LayoutData.A11yLabel!;
         await Assert.That(label).IsEqualTo("Schedule");
     }
 
@@ -400,7 +400,7 @@ public class MonthPickerTests
         var binding = CreateBinding();
         var picker = new MonthPicker(binding).AccessibleLabel("Select month");
 
-        var label = picker.AccessibleLabelValue.Value;
+        var label = picker.LayoutData.A11yLabel!;
         await Assert.That(label).IsEqualTo("Select month");
     }
 }
@@ -481,7 +481,7 @@ public class EmojiPickerTests
     {
         var picker = new EmojiPicker(_ => { }).AccessibleLabel("Emoji");
 
-        var label = picker.AccessibleLabelValue.Value;
+        var label = picker.LayoutData.A11yLabel!;
         await Assert.That(label).IsEqualTo("Emoji");
     }
 

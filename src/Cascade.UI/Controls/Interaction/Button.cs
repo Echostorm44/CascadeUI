@@ -34,7 +34,6 @@ public sealed class Button : Node
     internal bool IsLoading { get; set; }
     internal string? VariantName { get; set; }
     internal TextStyle? StyleOverride { get; set; }
-    internal LocKey AccessibleLabelValue { get; set; }
     internal int? TabIndexValue { get; set; }
     internal Action? OnContextMenuHandler { get; set; }
     internal LocKey TooltipText { get; set; }
@@ -76,7 +75,7 @@ public static class ButtonExtensions
     /// <summary>Sets the accessible label for screen readers.</summary>
     public static Button AccessibleLabel(this Button button, LocKey label)
     {
-        button.AccessibleLabelValue = label;
+        button.LayoutData.A11yLabel = label.Resolve();
         return button;
     }
 

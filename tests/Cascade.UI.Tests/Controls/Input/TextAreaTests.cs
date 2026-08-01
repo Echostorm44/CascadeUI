@@ -168,7 +168,7 @@ public sealed class TextAreaTests
     {
         var area = CreateDefaultArea().AccessibleLabel("Notes input");
 
-        string label = area.AccessibleLabelValue.Value;
+        string label = area.LayoutData.A11yLabel!;
         await Assert.That(label).IsEqualTo("Notes input");
     }
 

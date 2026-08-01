@@ -55,7 +55,6 @@ public sealed class TagInput : Node
     internal bool IsReorderEnabled { get; set; }
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
-    internal LocKey AccessibleLabelValue { get; set; }
 
     /// <summary>
     /// Runs per-tag validation for the given tag value.
@@ -237,7 +236,7 @@ public static class TagInputExtensions
     /// <summary>Sets the accessible label for screen readers.</summary>
     public static TagInput AccessibleLabel(this TagInput input, LocKey label)
     {
-        input.AccessibleLabelValue = label;
+        input.LayoutData.A11yLabel = label.Resolve();
         return input;
     }
 }

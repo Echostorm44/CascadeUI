@@ -118,7 +118,6 @@ public sealed class NumberInput<T> : Node, INumberInput where T : struct, ICompa
     internal Node SuffixNode { get; set; } = Node.Empty;
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
-    internal LocKey AccessibleLabelValue { get; set; }
 
     // ── INumberInput explicit interface members ───────────────────────
 
@@ -301,7 +300,7 @@ public static class NumberInputExtensions
     public static NumberInput<T> AccessibleLabel<T>(this NumberInput<T> input, LocKey label)
         where T : struct, IComparable<T>
     {
-        input.AccessibleLabelValue = label;
+        input.LayoutData.A11yLabel = label.Resolve();
         return input;
     }
 }

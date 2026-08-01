@@ -42,7 +42,6 @@ public sealed class PinInput : Node
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
-    internal LocKey AccessibleLabelValue { get; set; }
 
     /// <summary>Absolute bounds in window coordinates, set by the painter each frame.</summary>
     internal Rect AbsoluteBounds { get; set; }
@@ -174,7 +173,7 @@ public static class PinInputExtensions
     /// <summary>Sets the accessible label for screen readers.</summary>
     public static PinInput AccessibleLabel(this PinInput input, LocKey label)
     {
-        input.AccessibleLabelValue = label;
+        input.LayoutData.A11yLabel = label.Resolve();
         return input;
     }
 }

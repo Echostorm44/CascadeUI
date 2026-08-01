@@ -54,7 +54,6 @@ public sealed class Slider : Node
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
-    internal LocKey AccessibleLabelValue { get; set; }
 
     /// <summary>
     /// Runs all registered validation rules against the current value.
@@ -147,7 +146,7 @@ public static class SliderExtensions
     /// <summary>Sets the accessible label for screen readers.</summary>
     public static Slider AccessibleLabel(this Slider slider, LocKey label)
     {
-        slider.AccessibleLabelValue = label;
+        slider.LayoutData.A11yLabel = label.Resolve();
         return slider;
     }
 }

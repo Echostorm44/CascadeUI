@@ -26,7 +26,6 @@ public sealed class LinkButton : Node
     // ── Internal modifier state set by extension methods ──────────────
 
     internal bool IsDisabled { get; set; }
-    internal LocKey AccessibleLabelValue { get; set; }
     internal bool IsUnderlined { get; set; } = true;
 }
 
@@ -45,7 +44,7 @@ public static class LinkButtonExtensions
     /// <summary>Sets the accessible label for screen readers.</summary>
     public static LinkButton AccessibleLabel(this LinkButton button, LocKey label)
     {
-        button.AccessibleLabelValue = label;
+        button.LayoutData.A11yLabel = label.Resolve();
         return button;
     }
 

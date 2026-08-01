@@ -48,7 +48,6 @@ public sealed class MonthPicker : Node
     internal bool IsDisabled { get; set; }
 
     /// <summary>Accessible label for screen readers.</summary>
-    internal LocKey AccessibleLabelValue { get; set; }
 
     /// <summary>Placeholder text shown when no month is selected.</summary>
     internal LocKey PlaceholderText { get; set; }
@@ -193,7 +192,7 @@ public static class MonthPickerExtensions
     public static MonthPicker AccessibleLabel(this MonthPicker picker, LocKey label)
     {
         ArgumentNullException.ThrowIfNull(picker);
-        picker.AccessibleLabelValue = label;
+        picker.LayoutData.A11yLabel = label.Resolve();
         return picker;
     }
 

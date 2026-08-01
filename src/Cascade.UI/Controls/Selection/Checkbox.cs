@@ -56,7 +56,6 @@ public sealed class Checkbox : Node
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
-    internal LocKey AccessibleLabelValue { get; set; }
 
     /// <summary>
     /// Runs all registered validation rules against the current boolean value.
@@ -114,7 +113,7 @@ public static class CheckboxExtensions
     /// <summary>Sets the accessible label for screen readers.</summary>
     public static Checkbox AccessibleLabel(this Checkbox checkbox, LocKey label)
     {
-        checkbox.AccessibleLabelValue = label;
+        checkbox.LayoutData.A11yLabel = label.Resolve();
         return checkbox;
     }
 }

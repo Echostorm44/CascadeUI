@@ -29,7 +29,6 @@ public sealed class IconView : Node
 
     internal ColorValue? ColorOverride { get; set; }
     internal float? StrokeOverride { get; set; }
-    internal LocKey AccessibleLabelValue { get; set; }
 }
 
 /// <summary>
@@ -59,7 +58,7 @@ public static class IconViewExtensions
     /// <summary>Sets the accessible label for screen readers.</summary>
     public static IconView AccessibleLabel(this IconView view, LocKey label)
     {
-        view.AccessibleLabelValue = label;
+        view.LayoutData.A11yLabel = label.Resolve();
         return view;
     }
 }

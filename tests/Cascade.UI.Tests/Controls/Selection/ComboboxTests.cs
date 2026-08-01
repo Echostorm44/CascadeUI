@@ -161,7 +161,7 @@ public class ComboboxTests
         var combobox = new Combobox<string>(binding)
             .AccessibleLabel("Color picker");
 
-        string label = combobox.AccessibleLabelValue.Value;
+        string label = combobox.LayoutData.A11yLabel!;
         await Assert.That(label).IsEqualTo("Color picker");
     }
 

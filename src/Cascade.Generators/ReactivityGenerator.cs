@@ -87,15 +87,6 @@ internal static class ReactivityGenerator
                     bind.FieldName));
             }
         }
-
-        // CS-CASCADE-PERF-001: heap allocation in Render()
-        foreach (var alloc in model.RenderAllocations)
-        {
-            spc.ReportDiagnostic(Diagnostic.Create(
-                ReactivityDiagnostics.AllocationInRender,
-                CreateLocation(alloc.FilePath, alloc.LineNumber),
-                alloc.TypeName));
-        }
     }
 
     private static Location CreateLocation(string filePath, int lineNumber)

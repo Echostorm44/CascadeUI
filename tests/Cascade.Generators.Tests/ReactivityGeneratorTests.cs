@@ -65,6 +65,7 @@ namespace TestApp
     public partial class MyPage : Cascade.UI.Component
     {
         string email = """";
+        int EmailLen => email.Length; // computed makes 'email' a genuine reactive dependency
 
         protected override Cascade.UI.Node Render()
         {
@@ -94,6 +95,7 @@ namespace TestApp
     public partial class MyPage : Cascade.UI.Component
     {
         int count = 42;
+        int CountPlus => count + 1; // computed makes 'count' a genuine reactive dependency
 
         protected override Cascade.UI.Node Render()
         {
@@ -147,6 +149,7 @@ namespace TestApp
     {
         string email = """";
         readonly string label = ""Email"";
+        int EmailLen => email.Length; // only 'email' is a reactive dependency; 'label' is readonly
 
         protected override Cascade.UI.Node Render()
         {
@@ -375,45 +378,19 @@ namespace TestApp
     }
 
     [TUnit.Core.Test]
-    public async Task AllocationInRender_ReportsDiagnostic()
-    {
-        string source = StubTypes + @"
-namespace TestApp
-{
-    public class SomeService { }
-
-    public partial class MyPage : Cascade.UI.Component
-    {
-        string email = """";
-
-        protected override Cascade.UI.Node Render()
-        {
-            var svc = new SomeService();
-            var x = email;
-            return Cascade.UI.Node.Empty;
-        }
-    }
-}
-";
-        var result = RunGenerator(source);
-        var diagnostics = result.Diagnostics;
-
-        var perfDiag = diagnostics.Where(d => d.Id == "CASCADEPERF001").ToList();
-        await TUnit.Assertions.Assert.That(perfDiag.Count).IsGreaterThan(0);
-    }
-
-    [TUnit.Core.Test]
     public async Task NonPartialReactiveComponent_ReportsMustBePartial()
     {
-        // A Component with reactive state (count is written in a handler) that is NOT declared
-        // partial. The generator must report CASCADE003 pointing at the class AND skip emitting
-        // the reactive partial — otherwise the user just sees a confusing CS0260 collision.
+        // A Component that genuinely needs generated plumbing — it has a computed property
+        // (Total) over a reactive field — but is NOT declared partial. The generator must
+        // report CASCADE003 pointing at the class AND skip emitting the reactive partial —
+        // otherwise the user just sees a confusing CS0260 collision.
         string source = StubTypes + @"
 namespace TestApp
 {
     public class MyPage : Cascade.UI.Component
     {
         int count;
+        int Total => count + 1;
         static Cascade.UI.Node Button(string label, System.Action onClick) => Cascade.UI.Node.Empty;
 
         protected override Cascade.UI.Node Render()
@@ -444,6 +421,7 @@ namespace TestApp
     public partial class MyPage : Cascade.UI.Component
     {
         int count;
+        int Total => count + 1;
         static Cascade.UI.Node Button(string label, System.Action onClick) => Cascade.UI.Node.Empty;
 
         protected override Cascade.UI.Node Render()
@@ -459,6 +437,36 @@ namespace TestApp
         var cascade003 = result.Diagnostics.Where(d => d.Id == "CASCADE003").ToList();
         await TUnit.Assertions.Assert.That(cascade003.Count).IsEqualTo(0);
         await TUnit.Assertions.Assert.That(GetGeneratedSource(result)).IsNotNull();
+    }
+
+    [TUnit.Core.Test]
+    public async Task PlainFieldComponent_NeedsNoPartial_AndGeneratesNothing()
+    {
+        // A component that just mutates a plain field in a handler and re-renders via manual
+        // Invalidate() (no Bind(), no computed property) must NOT be forced to be partial and
+        // must produce NO generated plumbing — the field needs none. This is the common case
+        // (e.g. QuickFixMyPics2's MainView) that previously tripped a false CASCADE003.
+        string source = StubTypes + @"
+namespace TestApp
+{
+    public class MyPage : Cascade.UI.Component
+    {
+        int count;
+        static Cascade.UI.Node Button(string label, System.Action onClick) => Cascade.UI.Node.Empty;
+
+        protected override Cascade.UI.Node Render()
+        {
+            var x = count;
+            return Button(""Increment"", () => { count++; });
+        }
+    }
+}
+";
+        var result = RunGenerator(source);
+
+        var cascade003 = result.Diagnostics.Where(d => d.Id == "CASCADE003").ToList();
+        await TUnit.Assertions.Assert.That(cascade003.Count).IsEqualTo(0);
+        await TUnit.Assertions.Assert.That(GetGeneratedSource(result)).IsNull();
     }
 
     // ── Edge cases ────────────────────────────────────────────────────
@@ -491,6 +499,7 @@ namespace TestApp
     {
         string email = """";
         string unusedField = """";
+        int EmailLen => email.Length; // 'email' is a reactive dependency; 'unusedField' is not read
 
         protected override Cascade.UI.Node Render()
         {
@@ -517,6 +526,7 @@ namespace TestApp
     public partial class MyPage : Cascade.UI.Component
     {
         string email = """";
+        int EmailLen => email.Length; // computed makes 'email' a genuine reactive dependency
 
         private string GetDisplayText()
         {
@@ -549,6 +559,7 @@ namespace TestApp
     {
         string email = """";
         int count = 0;
+        int Both => email.Length + count; // computed makes both fields reactive dependencies
 
         protected override Cascade.UI.Node Render()
         {
@@ -578,6 +589,7 @@ namespace TestApp
     public partial class MyPage : Cascade.UI.Component
     {
         string email = """";
+        int EmailLen => email.Length; // computed makes 'email' a genuine reactive dependency
 
         protected override Cascade.UI.Node Render()
         {

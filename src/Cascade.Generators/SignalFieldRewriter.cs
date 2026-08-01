@@ -166,50 +166,6 @@ internal sealed class RenderWriteInfo : IEquatable<RenderWriteInfo>
 }
 
 /// <summary>
-/// Records a heap allocation detected inside Render() for CS-CASCADE-PERF-001 reporting.
-/// </summary>
-internal sealed class RenderAllocationInfo : IEquatable<RenderAllocationInfo>
-{
-    public string TypeName { get; }
-    public int LineNumber { get; }
-    public string FilePath { get; }
-
-    public RenderAllocationInfo(string typeName, int lineNumber, string filePath)
-    {
-        TypeName = typeName;
-        LineNumber = lineNumber;
-        FilePath = filePath;
-    }
-
-    public bool Equals(RenderAllocationInfo? other)
-    {
-        if (other is null)
-        {
-            return false;
-        }
-        return TypeName == other.TypeName
-            && LineNumber == other.LineNumber
-            && FilePath == other.FilePath;
-    }
-
-    public override bool Equals(object? obj)
-    {
-        return Equals(obj as RenderAllocationInfo);
-    }
-
-    public override int GetHashCode()
-    {
-        unchecked
-        {
-            int hash = TypeName.GetHashCode();
-            hash = hash * 397 + LineNumber;
-            hash = hash * 397 + FilePath.GetHashCode();
-            return hash;
-        }
-    }
-}
-
-/// <summary>
 /// Complete reactivity model for a single Component subclass.
 /// This is the equatable data flowing through the incremental pipeline —
 /// changes are detected by comparing models, and downstream stages only
@@ -224,7 +180,6 @@ internal sealed class ComponentReactivityModel : IEquatable<ComponentReactivityM
     public EquatableArray<ComputedPropertyInfo> ComputedProperties { get; }
     public EquatableArray<BindCallInfo> BindCalls { get; }
     public EquatableArray<RenderWriteInfo> RenderWrites { get; }
-    public EquatableArray<RenderAllocationInfo> RenderAllocations { get; }
 
     /// <summary>Whether the user's class declaration has the <c>partial</c> modifier.</summary>
     public bool IsPartial { get; }
@@ -243,7 +198,6 @@ internal sealed class ComponentReactivityModel : IEquatable<ComponentReactivityM
         EquatableArray<ComputedPropertyInfo> computedProperties,
         EquatableArray<BindCallInfo> bindCalls,
         EquatableArray<RenderWriteInfo> renderWrites,
-        EquatableArray<RenderAllocationInfo> renderAllocations,
         bool isPartial,
         string classFilePath,
         int classLineNumber)
@@ -255,7 +209,6 @@ internal sealed class ComponentReactivityModel : IEquatable<ComponentReactivityM
         ComputedProperties = computedProperties;
         BindCalls = bindCalls;
         RenderWrites = renderWrites;
-        RenderAllocations = renderAllocations;
         IsPartial = isPartial;
         ClassFilePath = classFilePath;
         ClassLineNumber = classLineNumber;
@@ -276,8 +229,7 @@ internal sealed class ComponentReactivityModel : IEquatable<ComponentReactivityM
             && ReactiveFields.Equals(other.ReactiveFields)
             && ComputedProperties.Equals(other.ComputedProperties)
             && BindCalls.Equals(other.BindCalls)
-            && RenderWrites.Equals(other.RenderWrites)
-            && RenderAllocations.Equals(other.RenderAllocations);
+            && RenderWrites.Equals(other.RenderWrites);
     }
 
     public override bool Equals(object? obj)
@@ -299,7 +251,6 @@ internal sealed class ComponentReactivityModel : IEquatable<ComponentReactivityM
             hash = hash * 397 + ComputedProperties.GetHashCode();
             hash = hash * 397 + BindCalls.GetHashCode();
             hash = hash * 397 + RenderWrites.GetHashCode();
-            hash = hash * 397 + RenderAllocations.GetHashCode();
             return hash;
         }
     }
@@ -385,7 +336,6 @@ internal static class SignalFieldRewriter
         // Walk the transitive Render() call graph to find field reads and writes
         var fieldsReadInRender = new HashSet<string>();
         var fieldsWrittenInRender = new List<(string name, Location location)>();
-        var allocationsInRender = new List<(string typeName, Location location)>();
 
         AnalyzeMethodBody(
             renderMethod,
@@ -394,14 +344,17 @@ internal static class SignalFieldRewriter
             classSymbol,
             fieldsReadInRender,
             fieldsWrittenInRender,
-            allocationsInRender,
             new HashSet<string>(),
             ct);
 
         ct.ThrowIfCancellationRequested();
 
-        // Classify fields: reactive = non-readonly, non-static, read in Render, not [NotReactive]
-        var reactiveFields = new List<ReactiveFieldInfo>();
+        // Candidate fields: non-readonly, non-static, read in Render, not [NotReactive].
+        // These are the fields eligible for reactive plumbing — but we only KEEP the ones
+        // that a feature actually uses (Bind() target or computed-property dependency).
+        // A plain field the component just mutates + Invalidate()s itself needs no
+        // generated code and must not force `partial` (CASCADE003). See below.
+        var candidateFields = new List<ReactiveFieldInfo>();
         foreach (var field in allFields)
         {
             if (field.IsReadOnly)
@@ -417,16 +370,16 @@ internal static class SignalFieldRewriter
             if (fieldsReadInRender.Contains(field.Name))
             {
                 var initializer = GetFieldInitializer(field, classDecl);
-                reactiveFields.Add(new ReactiveFieldInfo(
+                candidateFields.Add(new ReactiveFieldInfo(
                     field.Name,
                     field.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
                     initializer));
             }
         }
 
-        // Analyze computed properties
+        // Analyze computed properties (dependencies resolved against the candidate set)
         var computedProperties = ComputedMemoizer.AnalyzeComputedProperties(
-            classDecl, semanticModel, classSymbol, reactiveFields, ct);
+            classDecl, semanticModel, classSymbol, candidateFields, ct);
 
         // Analyze Bind() calls
         var bindCalls = BindRewriter.AnalyzeBindCalls(
@@ -434,27 +387,39 @@ internal static class SignalFieldRewriter
 
         ct.ThrowIfCancellationRequested();
 
-        // Build diagnostic data for writes to reactive fields inside Render()
-        var reactiveFieldNames = new HashSet<string>(reactiveFields.Select(f => f.Name));
+        // Keep only candidates the generated plumbing actually uses: a Bind() target, or a
+        // dependency of a computed property. Everything else is a plain field the component
+        // manages itself — generating a shadow setter for it is dead code, and forcing the
+        // class to be `partial` for it is pure friction. This is what makes CASCADE003 fire
+        // only when the reactive infrastructure is genuinely needed.
+        var usedFieldNames = new HashSet<string>();
+        foreach (var bind in bindCalls)
+        {
+            usedFieldNames.Add(bind.FieldName);
+        }
+        foreach (var computed in computedProperties)
+        {
+            foreach (var dep in computed.FieldDependencies)
+            {
+                usedFieldNames.Add(dep);
+            }
+        }
+
+        var reactiveFields = candidateFields
+            .Where(f => usedFieldNames.Contains(f.Name))
+            .ToList();
+
+        // CASCADE001 (write-in-render purity) applies to ANY mutable state field read in
+        // Render, not just the ones that get generated plumbing — writing state during
+        // Render is impure regardless of whether the field is Bind()-backed.
+        var candidateFieldNames = new HashSet<string>(candidateFields.Select(f => f.Name));
         var renderWrites = fieldsWrittenInRender
-            .Where(w => reactiveFieldNames.Contains(w.name))
+            .Where(w => candidateFieldNames.Contains(w.name))
             .Select(w =>
             {
                 var lineSpan = w.location.GetLineSpan();
                 return new RenderWriteInfo(
                     w.name,
-                    lineSpan.StartLinePosition.Line + 1,
-                    lineSpan.Path ?? "");
-            })
-            .ToArray();
-
-        // Build diagnostic data for allocations inside Render()
-        var renderAllocs = allocationsInRender
-            .Select(a =>
-            {
-                var lineSpan = a.location.GetLineSpan();
-                return new RenderAllocationInfo(
-                    a.typeName,
                     lineSpan.StartLinePosition.Line + 1,
                     lineSpan.Path ?? "");
             })
@@ -480,7 +445,6 @@ internal static class SignalFieldRewriter
             new EquatableArray<ComputedPropertyInfo>(computedProperties),
             new EquatableArray<BindCallInfo>(bindCalls),
             new EquatableArray<RenderWriteInfo>(renderWrites),
-            new EquatableArray<RenderAllocationInfo>(renderAllocs),
             isPartial,
             classFilePath,
             classLineNumber);
@@ -528,7 +492,6 @@ internal static class SignalFieldRewriter
         INamedTypeSymbol classSymbol,
         HashSet<string> fieldsRead,
         List<(string name, Location location)> fieldsWritten,
-        List<(string typeName, Location location)> allocations,
         HashSet<string> visitedMethods,
         CancellationToken ct)
     {
@@ -550,11 +513,10 @@ internal static class SignalFieldRewriter
             ct.ThrowIfCancellationRequested();
 
             // Code inside an event-handler lambda runs when the handler fires, NOT
-            // during Render, so its writes/allocations/calls must not be attributed
-            // to Render. Without this the documented pattern
-            // `new Button("+", () => { count++; })` produced a false CASCADE001
-            // ("reactive field written inside Render()") and CASCADEPERF001. Reads
-            // still count, so a field used in a handler stays classified reactive.
+            // during Render, so its writes/calls must not be attributed to Render.
+            // Without this the documented pattern `new Button("+", () => { count++; })`
+            // produced a false CASCADE001 ("reactive field written inside Render()").
+            // Reads still count, so a field used in a handler stays classified reactive.
             bool deferred = IsInHandlerLambda(node, body);
 
             switch (node)
@@ -568,11 +530,7 @@ internal static class SignalFieldRewriter
                 case InvocationExpressionSyntax invocation when !deferred:
                     FollowMethodCall(
                         invocation, classDecl, semanticModel, classSymbol,
-                        fieldsRead, fieldsWritten, allocations, visitedMethods, ct);
-                    break;
-
-                case ObjectCreationExpressionSyntax creation when !deferred:
-                    DetectAllocation(creation, semanticModel, allocations);
+                        fieldsRead, fieldsWritten, visitedMethods, ct);
                     break;
             }
         }
@@ -683,7 +641,6 @@ internal static class SignalFieldRewriter
         INamedTypeSymbol classSymbol,
         HashSet<string> fieldsRead,
         List<(string name, Location location)> fieldsWritten,
-        List<(string typeName, Location location)> allocations,
         HashSet<string> visitedMethods,
         CancellationToken ct)
     {
@@ -706,38 +663,8 @@ internal static class SignalFieldRewriter
         {
             AnalyzeMethodBody(
                 calledMethod, classDecl, semanticModel, classSymbol,
-                fieldsRead, fieldsWritten, allocations, visitedMethods, ct);
+                fieldsRead, fieldsWritten, visitedMethods, ct);
         }
-    }
-
-    /// <summary>
-    /// Detects reference type allocations (new expressions) for the performance diagnostic.
-    /// Value type allocations and throw expressions are not flagged.
-    /// </summary>
-    private static void DetectAllocation(
-        ObjectCreationExpressionSyntax creation,
-        SemanticModel semanticModel,
-        List<(string typeName, Location location)> allocations)
-    {
-        // Skip allocations inside throw expressions — exception creation is not hot-path
-        if (creation.Parent is ThrowExpressionSyntax
-            || creation.Parent is ThrowStatementSyntax)
-        {
-            return;
-        }
-
-        var typeInfo = semanticModel.GetTypeInfo(creation);
-        if (typeInfo.Type is null)
-        {
-            return;
-        }
-
-        if (typeInfo.Type.IsValueType)
-        {
-            return;
-        }
-
-        allocations.Add((typeInfo.Type.ToDisplayString(), creation.GetLocation()));
     }
 
     private static string? GetFieldInitializer(IFieldSymbol field, ClassDeclarationSyntax classDecl)

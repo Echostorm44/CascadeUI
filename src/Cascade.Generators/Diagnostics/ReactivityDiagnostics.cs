@@ -10,7 +10,6 @@ namespace Cascade.Generators;
 internal static class ReactivityDiagnostics
 {
     private const string ReactivityCategory = "Cascade.Reactivity";
-    private const string PerformanceCategory = "Cascade.Performance";
 
     /// <summary>
     /// CS-CASCADE-001: Writing a reactive field inside Render() is a compile error.
@@ -48,18 +47,5 @@ internal static class ReactivityDiagnostics
         messageFormat: "Component '{0}' has reactive state (fields, computed properties, or Bind()), so it must be declared 'partial' — the Cascade generator adds a partial class with the reactive plumbing. Add the 'partial' modifier to '{0}'.",
         category: ReactivityCategory,
         defaultSeverity: DiagnosticSeverity.Error,
-        isEnabledByDefault: true);
-
-    /// <summary>
-    /// CS-CASCADE-PERF-001: Allocation detected inside Render() body.
-    /// Render() is called on every state change and should be allocation-free
-    /// on the hot path.
-    /// </summary>
-    internal static readonly DiagnosticDescriptor AllocationInRender = new(
-        id: "CASCADEPERF001",
-        title: "Allocation detected in Render() body",
-        messageFormat: "Allocation of '{0}' detected in Render(). Render() should be allocation-free — consider caching or moving the allocation outside Render().",
-        category: PerformanceCategory,
-        defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true);
 }

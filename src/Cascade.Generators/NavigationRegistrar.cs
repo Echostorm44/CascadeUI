@@ -42,13 +42,31 @@ internal static class NavigationRegistrar
                 return;
             }
 
+            // De-duplicate by route pattern. Two components claiming the same path is a
+            // CASCADENAV001 error (and would otherwise emit a dictionary with duplicate
+            // keys — a runtime ArgumentException). Report the collision and keep the first.
             var validRoutes = new List<RouteModel>();
+            var seenPatterns = new Dictionary<string, string>(System.StringComparer.Ordinal);
             foreach (var route in routes)
             {
-                if (route is not null)
+                if (route is null)
                 {
-                    validRoutes.Add(route.Value);
+                    continue;
                 }
+
+                var r = route.Value;
+                if (seenPatterns.TryGetValue(r.Pattern, out var firstClass))
+                {
+                    spc.ReportDiagnostic(Diagnostic.Create(
+                        NavigationDiagnostics.DuplicateRoute,
+                        Location.None,
+                        r.Pattern,
+                        firstClass));
+                    continue;
+                }
+
+                seenPatterns[r.Pattern] = r.ClassName;
+                validRoutes.Add(r);
             }
 
             if (validRoutes.Count == 0)

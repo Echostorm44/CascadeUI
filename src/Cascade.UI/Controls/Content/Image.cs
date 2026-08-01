@@ -263,6 +263,21 @@ public sealed class Image : Node
     }
 }
 
+/// <summary>Fluent modifiers for <see cref="Image"/>.</summary>
+public static class ImageExtensions
+{
+    /// <summary>
+    /// Sets the accessible label (alt text) surfaced to screen readers. Pass an empty
+    /// string — <c>AccessibleLabel("")</c> — to mark a purely decorative image; that
+    /// still satisfies the CASCADEA11Y002 "image has no alt text" analyzer.
+    /// </summary>
+    public static Image AccessibleLabel(this Image image, LocKey label)
+    {
+        image.LayoutData.A11yLabel = label.Resolve();
+        return image;
+    }
+}
+
 /// <summary>
 /// Image scaling behavior within its layout bounds.
 /// </summary>

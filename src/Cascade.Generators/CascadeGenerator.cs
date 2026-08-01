@@ -19,5 +19,7 @@ public sealed class CascadeGenerator : IIncrementalGenerator
         NavigationRegistrar.Register(context);
         AiSurfaceGenerator.Register(context);
         ApiIndexGenerator.Register(context);
+        PersistStateGenerator.Register(context);
+        StorageKeyGenerator.Register(context);
     }
 }

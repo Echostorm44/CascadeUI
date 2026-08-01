@@ -40,7 +40,6 @@ public sealed class ToggleGroup<T> : Node, IToggleGroup where T : notnull
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
-    internal LocKey AccessibleLabelValue { get; set; }
 
     // ── IToggleGroup implementation ──────────────────────────────────
 
@@ -190,7 +189,7 @@ public static class ToggleGroupExtensions
     public static ToggleGroup<T> AccessibleLabel<T>(this ToggleGroup<T> group, LocKey label)
         where T : notnull
     {
-        group.AccessibleLabelValue = label;
+        group.LayoutData.A11yLabel = label.Resolve();
         return group;
     }
 }

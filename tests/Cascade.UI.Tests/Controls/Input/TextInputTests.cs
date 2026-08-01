@@ -113,7 +113,7 @@ public sealed class TextInputTests
     {
         var input = CreateDefaultInput().AccessibleLabel("Screen reader");
 
-        string label = input.AccessibleLabelValue.Value;
+        string label = input.LayoutData.A11yLabel!;
         await Assert.That(label).IsEqualTo("Screen reader");
     }
 

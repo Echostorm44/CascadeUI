@@ -60,7 +60,6 @@ public sealed class TextArea : Node
     internal Action<string>? OnChangeHandler { get; set; }
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
-    internal LocKey AccessibleLabelValue { get; set; }
 
     /// <summary>
     /// Absolute viewport-space bounds, set by the painter each frame.
@@ -201,7 +200,7 @@ public static class TextAreaExtensions
     /// <summary>Sets the accessible label for screen readers.</summary>
     public static TextArea AccessibleLabel(this TextArea input, LocKey label)
     {
-        input.AccessibleLabelValue = label;
+        input.LayoutData.A11yLabel = label.Resolve();
         return input;
     }
 }

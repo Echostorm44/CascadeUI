@@ -96,7 +96,6 @@ public sealed class Combobox<T> : Node, IComboboxNode where T : notnull
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
-    internal LocKey AccessibleLabelValue { get; set; }
 
     /// <summary>
     /// Runs all registered validation rules against the current value.
@@ -384,7 +383,7 @@ public static class ComboboxExtensions
     public static Combobox<T> AccessibleLabel<T>(this Combobox<T> combobox, LocKey label)
         where T : notnull
     {
-        combobox.AccessibleLabelValue = label;
+        combobox.LayoutData.A11yLabel = label.Resolve();
         return combobox;
     }
 }

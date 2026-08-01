@@ -74,7 +74,6 @@ public sealed class Rating : Node
     internal List<Func<float, ValidationResult>> ValidationRules { get; } = [];
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
     internal bool IsDisabled { get; set; }
-    internal LocKey AccessibleLabelValue { get; set; }
 
     /// <summary>
     /// Absolute bounds set by the painter during rendering.
@@ -175,7 +174,7 @@ public static class RatingExtensions
     /// <summary>Sets the accessible label for screen readers.</summary>
     public static Rating AccessibleLabel(this Rating rating, LocKey label)
     {
-        rating.AccessibleLabelValue = label;
+        rating.LayoutData.A11yLabel = label.Resolve();
         return rating;
     }
 }

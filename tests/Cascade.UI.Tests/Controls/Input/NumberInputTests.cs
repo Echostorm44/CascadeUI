@@ -145,7 +145,7 @@ public sealed class NumberInputTests
     {
         var input = CreateDefaultInput().AccessibleLabel("Amount");
 
-        string label = input.AccessibleLabelValue.Value;
+        string label = input.LayoutData.A11yLabel!;
         await Assert.That(label).IsEqualTo("Amount");
     }
 

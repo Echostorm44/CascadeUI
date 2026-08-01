@@ -49,7 +49,6 @@ public sealed class DateTimePicker : Node
     internal bool IsDisabled { get; set; }
 
     /// <summary>Accessible label for screen readers.</summary>
-    internal LocKey AccessibleLabelValue { get; set; }
 
     /// <summary>Placeholder text shown when no date-time is selected.</summary>
     internal LocKey PlaceholderText { get; set; }
@@ -260,7 +259,7 @@ public static class DateTimePickerExtensions
     public static DateTimePicker AccessibleLabel(this DateTimePicker picker, LocKey label)
     {
         ArgumentNullException.ThrowIfNull(picker);
-        picker.AccessibleLabelValue = label;
+        picker.LayoutData.A11yLabel = label.Resolve();
         return picker;
     }
 

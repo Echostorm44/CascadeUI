@@ -41,7 +41,6 @@ public sealed class SplitButton : Node
     // ── Internal modifier state set by extension methods ──────────────
 
     internal bool IsDisabled { get; set; }
-    internal LocKey AccessibleLabelValue { get; set; }
 
     // ── Runtime state for dropdown (set by painter/input dispatcher) ──
 
@@ -96,7 +95,7 @@ public static class SplitButtonExtensions
     /// <summary>Sets the accessible label for screen readers.</summary>
     public static SplitButton AccessibleLabel(this SplitButton button, LocKey label)
     {
-        button.AccessibleLabelValue = label;
+        button.LayoutData.A11yLabel = label.Resolve();
         return button;
     }
 }

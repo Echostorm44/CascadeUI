@@ -39,7 +39,6 @@ public sealed class Toggle : Node
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
-    internal LocKey AccessibleLabelValue { get; set; }
 
     /// <summary>
     /// Runs all registered validation rules against the current value.
@@ -104,7 +103,7 @@ public static class ToggleExtensions
     /// <summary>Sets the accessible label for screen readers.</summary>
     public static Toggle AccessibleLabel(this Toggle toggle, LocKey label)
     {
-        toggle.AccessibleLabelValue = label;
+        toggle.LayoutData.A11yLabel = label.Resolve();
         return toggle;
     }
 }

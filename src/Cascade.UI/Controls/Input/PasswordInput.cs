@@ -257,7 +257,6 @@ public sealed class PasswordInput : Node
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
-    internal LocKey AccessibleLabelValue { get; set; }
 
     /// <summary>Absolute viewport bounds, set by the painter each frame for input hit-testing.</summary>
     internal Rect AbsoluteBounds { get; set; }
@@ -346,7 +345,7 @@ public static class PasswordInputExtensions
     /// <summary>Sets the accessible label for screen readers.</summary>
     public static PasswordInput AccessibleLabel(this PasswordInput input, LocKey label)
     {
-        input.AccessibleLabelValue = label;
+        input.LayoutData.A11yLabel = label.Resolve();
         return input;
     }
 }

@@ -125,7 +125,6 @@ public sealed class Select<T> : Node, ISelectNode where T : notnull
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
-    internal LocKey AccessibleLabelValue { get; set; }
 
     bool ISelectNode.IsNodeDisabled => IsDisabled;
 
@@ -444,7 +443,7 @@ public static class SelectExtensions
     public static Select<T> AccessibleLabel<T>(this Select<T> select, LocKey label)
         where T : notnull
     {
-        select.AccessibleLabelValue = label;
+        select.LayoutData.A11yLabel = label.Resolve();
         return select;
     }
 }

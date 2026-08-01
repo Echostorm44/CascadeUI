@@ -147,7 +147,7 @@ public class CheckboxTests
         var binding = CreateBoolBinding(false);
         var checkbox = new Checkbox(binding).AccessibleLabel("Terms checkbox");
 
-        string label = checkbox.AccessibleLabelValue.Value;
+        string label = checkbox.LayoutData.A11yLabel!;
         await Assert.That(label).IsEqualTo("Terms checkbox");
     }
 

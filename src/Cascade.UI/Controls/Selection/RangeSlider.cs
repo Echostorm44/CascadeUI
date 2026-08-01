@@ -59,7 +59,6 @@ public sealed class RangeSlider : Node
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
-    internal LocKey AccessibleLabelValue { get; set; }
 
     /// <summary>
     /// Absolute bounds in window coordinates, set by the painter each frame.
@@ -145,7 +144,7 @@ public static class RangeSliderExtensions
     /// <summary>Sets the accessible label for screen readers.</summary>
     public static RangeSlider AccessibleLabel(this RangeSlider slider, LocKey label)
     {
-        slider.AccessibleLabelValue = label;
+        slider.LayoutData.A11yLabel = label.Resolve();
         return slider;
     }
 }

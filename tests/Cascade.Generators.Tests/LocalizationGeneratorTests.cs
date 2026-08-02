@@ -147,9 +147,51 @@ public class LocalizationGeneratorTests
         return RunGenerator(ImmutableArray<AdditionalText>.Empty);
     }
 
-    private static GeneratorRunResult RunGenerator(ImmutableArray<AdditionalText> additionalTexts)
+    private const string LocKeyStub = @"
+namespace Cascade.UI { public readonly struct LocKey { public LocKey(string key) { } } }
+";
+
+    [TUnit.Core.Test]
+    public async Task LocKeyLiteral_UnknownKey_ReportsLOC002()
     {
-        var source = "// Empty compilation";
+        string json = @"{ ""greeting"": { ""hello"": ""Hi"" } }";
+        string src = LocKeyStub + @"namespace T { static class U { static void M() { _ = new Cascade.UI.LocKey(""nope.missing""); } } }";
+
+        var result = RunGenerator(
+            ImmutableArray.Create<AdditionalText>(new InMemoryAdditionalText("strings/en.json", json)), src);
+
+        await TUnit.Assertions.Assert.That(
+            result.Diagnostics.Count(d => d.Id == "CASCADELOC002")).IsGreaterThan(0);
+    }
+
+    [TUnit.Core.Test]
+    public async Task LocKeyLiteral_KnownKey_NoLOC002()
+    {
+        string json = @"{ ""greeting"": { ""hello"": ""Hi"" } }";
+        string src = LocKeyStub + @"namespace T { static class U { static void M() { _ = new Cascade.UI.LocKey(""greeting.hello""); } } }";
+
+        var result = RunGenerator(
+            ImmutableArray.Create<AdditionalText>(new InMemoryAdditionalText("strings/en.json", json)), src);
+
+        await TUnit.Assertions.Assert.That(
+            result.Diagnostics.Count(d => d.Id == "CASCADELOC002")).IsEqualTo(0);
+    }
+
+    [TUnit.Core.Test]
+    public async Task LocKeyLiteral_NoResourceFiles_NoLOC002()
+    {
+        // With no strings/*.json declared, there's nothing to validate against — stay quiet.
+        string src = LocKeyStub + @"namespace T { static class U { static void M() { _ = new Cascade.UI.LocKey(""anything.here""); } } }";
+
+        var result = RunGenerator(ImmutableArray<AdditionalText>.Empty, src);
+
+        await TUnit.Assertions.Assert.That(
+            result.Diagnostics.Count(d => d.Id == "CASCADELOC002")).IsEqualTo(0);
+    }
+
+    private static GeneratorRunResult RunGenerator(
+        ImmutableArray<AdditionalText> additionalTexts, string source = "// Empty compilation")
+    {
         var syntaxTree = CSharpSyntaxTree.ParseText(source);
 
         var references = new List<MetadataReference>();

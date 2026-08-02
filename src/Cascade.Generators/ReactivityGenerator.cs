@@ -192,10 +192,11 @@ internal static class ReactivityGenerator
             needsSeparator = true;
         }
 
-        // Framework hook — calls Invalidate() to schedule a re-render when a
-        // reactive field is set via the generated __Set_* method. This connects
-        // the source-generated reactive setters (used by Bind() and future
-        // automatic field interception) to the runtime re-render pipeline.
+        // Framework hook — calls Invalidate() to schedule a re-render when a reactive
+        // field is set via the generated __Set_* method. Those setters are driven by
+        // Bind() (two-way binding). Plain `field = x` writes are NOT auto-reactive — a
+        // source generator cannot intercept an assignment — so a handler that mutates a
+        // field directly must call Invalidate() itself.
         if (needsSeparator)
         {
             sb.AppendLine();
@@ -226,22 +227,17 @@ internal static class ReactivityGenerator
         Dictionary<string, List<string>> fieldToComputedDeps,
         string indent)
     {
-        string initSuffix = field.Initializer is not null
-            ? $" = {field.Initializer}"
-            : " = default!";
-
-        // Backing field
-        sb.AppendLine($"{indent}    private {field.TypeName} __{field.Name}{initSuffix};");
-        sb.AppendLine();
-
-        // Reactive setter with change detection
+        // Reactive setter with change detection. It writes the USER's field directly —
+        // there is no shadow backing field, so the user's field is the single source of
+        // truth. Bind() routes writes through this setter; plain `field = x` writes do NOT
+        // (a source generator can't intercept an assignment), so they still need Invalidate().
         sb.AppendLine($"{indent}    private void __Set_{field.Name}({field.TypeName} value)");
         sb.AppendLine($"{indent}    {{");
-        sb.AppendLine($"{indent}        if (global::System.Collections.Generic.EqualityComparer<{field.TypeName}>.Default.Equals(__{field.Name}, value))");
+        sb.AppendLine($"{indent}        if (global::System.Collections.Generic.EqualityComparer<{field.TypeName}>.Default.Equals({field.Name}, value))");
         sb.AppendLine($"{indent}        {{");
         sb.AppendLine($"{indent}            return;");
         sb.AppendLine($"{indent}        }}");
-        sb.AppendLine($"{indent}        __{field.Name} = value;");
+        sb.AppendLine($"{indent}        {field.Name} = value;");
 
         // Invalidate dependent computed properties
         if (fieldToComputedDeps.TryGetValue(field.Name, out var deps))
@@ -315,7 +311,7 @@ internal static class ReactivityGenerator
     {
         sb.AppendLine($"{indent}    private global::Cascade.UI.Bindable<{bind.TypeName}> __Bind_{bind.FieldName}()");
         sb.AppendLine($"{indent}    {{");
-        sb.AppendLine($"{indent}        return new global::Cascade.UI.Bindable<{bind.TypeName}>(__{bind.FieldName}, __Set_{bind.FieldName});");
+        sb.AppendLine($"{indent}        return new global::Cascade.UI.Bindable<{bind.TypeName}>({bind.FieldName}, __Set_{bind.FieldName});");
         sb.AppendLine($"{indent}    }}");
     }
 }

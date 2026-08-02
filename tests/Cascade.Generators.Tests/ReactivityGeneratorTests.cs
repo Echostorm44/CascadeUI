@@ -87,7 +87,7 @@ namespace TestApp
     }
 
     [TUnit.Core.Test]
-    public async Task ReactiveField_PreservesInitializer()
+    public async Task ReactiveField_SetterWritesUserFieldDirectly()
     {
         string source = StubTypes + @"
 namespace TestApp
@@ -109,7 +109,9 @@ namespace TestApp
         var generated = GetGeneratedSource(result);
 
         await TUnit.Assertions.Assert.That(generated).IsNotNull();
-        await TUnit.Assertions.Assert.That(Has(generated, "__count = 42")).IsTrue();
+        // Single source of truth: the setter writes the user's field, not a shadow backing.
+        await TUnit.Assertions.Assert.That(Has(generated, "__Set_count")).IsTrue();
+        await TUnit.Assertions.Assert.That(Has(generated, "count = value")).IsTrue();
     }
 
     // ── Readonly field skipping ───────────────────────────────────────
@@ -202,7 +204,7 @@ namespace TestApp
     }
 
     [TUnit.Core.Test]
-    public async Task ComputedProperty_RewritesFieldRefsToBackingFields()
+    public async Task ComputedProperty_ReadsUserFieldDirectly()
     {
         string source = StubTypes + @"
 namespace TestApp
@@ -225,8 +227,8 @@ namespace TestApp
         var generated = GetGeneratedSource(result);
 
         await TUnit.Assertions.Assert.That(generated).IsNotNull();
-        // The compute method should reference __email, not email
-        await TUnit.Assertions.Assert.That(Has(generated, "__email.Contains")).IsTrue();
+        // The compute method reads the user's field directly — there is no shadow backing.
+        await TUnit.Assertions.Assert.That(Has(generated, "email.Contains")).IsTrue();
     }
 
     [TUnit.Core.Test]
@@ -574,10 +576,11 @@ namespace TestApp
         var generated = GetGeneratedSource(result);
 
         await TUnit.Assertions.Assert.That(generated).IsNotNull();
-        await TUnit.Assertions.Assert.That(Has(generated, "__email")).IsTrue();
-        await TUnit.Assertions.Assert.That(Has(generated, "__count")).IsTrue();
+        // Each reactive field gets its own setter that writes the user's field directly.
         await TUnit.Assertions.Assert.That(Has(generated, "__Set_email")).IsTrue();
         await TUnit.Assertions.Assert.That(Has(generated, "__Set_count")).IsTrue();
+        await TUnit.Assertions.Assert.That(Has(generated, "email = value")).IsTrue();
+        await TUnit.Assertions.Assert.That(Has(generated, "count = value")).IsTrue();
     }
 
     [TUnit.Core.Test]

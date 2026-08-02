@@ -168,14 +168,14 @@ internal static class ComputedMemoizer
                 }
             }
 
-            // Rewrite field references in the expression to use __ backing fields
-            var rewrittenExpression = RewriteFieldReferences(
-                candidate.expressionNode, reactiveFieldNames);
+            // Read the user's fields directly — there is no shadow backing field. The
+            // memoization cache is invalidated by Bind()-driven writes (see __Set_*).
+            var expressionText = candidate.expressionNode.ToString();
 
             results.Add(new ComputedPropertyInfo(
                 candidate.symbol.Name,
                 candidate.symbol.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
-                rewrittenExpression,
+                expressionText,
                 new EquatableArray<string>(candidate.fieldDeps),
                 new EquatableArray<string>(computedDeps.Distinct().ToArray())));
         }
@@ -255,32 +255,5 @@ internal static class ComputedMemoizer
         }
 
         return dependencies.ToArray();
-    }
-
-    /// <summary>
-    /// Rewrites reactive field references in an expression to use the __ backing prefix.
-    /// For example, <c>email.Contains('@')</c> becomes <c>__email.Contains('@')</c>.
-    /// </summary>
-    private static string RewriteFieldReferences(
-        SyntaxNode expression,
-        HashSet<string> reactiveFieldNames)
-    {
-        var identifiersToReplace = expression
-            .DescendantNodesAndSelf()
-            .OfType<IdentifierNameSyntax>()
-            .Where(id => reactiveFieldNames.Contains(id.Identifier.Text))
-            .ToList();
-
-        if (identifiersToReplace.Count == 0)
-        {
-            return expression.ToFullString().Trim();
-        }
-
-        var rewritten = expression.ReplaceNodes(
-            identifiersToReplace,
-            (original, _) => SyntaxFactory.IdentifierName("__" + original.Identifier.Text)
-                .WithTriviaFrom(original));
-
-        return rewritten.ToFullString().Trim();
     }
 }

@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Text;
 
 namespace Cascade.Generators;
@@ -60,6 +61,97 @@ internal static class IconPackGenerator
                 spc.AddSource($"{pack.Key}Icons.g.cs", SourceText.From(source, Encoding.UTF8));
             }
         });
+
+        // CASCADEICON001: validate literal icon names passed to a generated pack's
+        // Get/Has/TryGet against the icons that actually exist in that pack.
+        var usages = context.SyntaxProvider
+            .CreateSyntaxProvider(
+                predicate: static (node, _) => IsIconLookupCandidate(node),
+                transform: static (ctx, ct) => ExtractIconUsage(ctx))
+            .Where(static u => u is not null)
+            .Collect();
+
+        context.RegisterSourceOutput(usages.Combine(collected), static (spc, pair) =>
+        {
+            var (calls, files) = pair;
+            if (calls.Length == 0 || files.Length == 0)
+            {
+                return;
+            }
+
+            var namesByPack = BuildNameMap(files);
+            foreach (var call in calls)
+            {
+                if (call is null || !namesByPack.TryGetValue(call.Value.PackClass, out var names))
+                {
+                    continue; // not a known generated pack — leave it alone
+                }
+
+                if (!names.Contains(call.Value.IconName))
+                {
+                    var available = string.Join(", ", names.OrderBy(n => n, System.StringComparer.Ordinal));
+                    spc.ReportDiagnostic(Diagnostic.Create(
+                        IconDiagnostics.IconNotFound,
+                        call.Value.Location,
+                        call.Value.IconName,
+                        call.Value.PackClass,
+                        available));
+                }
+            }
+        });
+    }
+
+    private readonly struct IconUsage
+    {
+        public IconUsage(string packClass, string iconName, Location location)
+        {
+            PackClass = packClass;
+            IconName = iconName;
+            Location = location;
+        }
+
+        public string PackClass { get; }
+        public string IconName { get; }
+        public Location Location { get; }
+    }
+
+    private static bool IsIconLookupCandidate(SyntaxNode node)
+    {
+        // `SomethingIcons.Get("x")` / `.Has("x")` / `.TryGet("x", out _)` with a string literal.
+        return node is InvocationExpressionSyntax inv
+            && inv.Expression is MemberAccessExpressionSyntax ma
+            && ma.Name.Identifier.Text is "Get" or "Has" or "TryGet"
+            && ma.Expression is IdentifierNameSyntax recv
+            && recv.Identifier.Text.EndsWith("Icons", System.StringComparison.Ordinal)
+            && inv.ArgumentList.Arguments.Count >= 1
+            && inv.ArgumentList.Arguments[0].Expression is LiteralExpressionSyntax lit
+            && lit.Token.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.StringLiteralToken);
+    }
+
+    private static IconUsage? ExtractIconUsage(GeneratorSyntaxContext ctx)
+    {
+        var inv = (InvocationExpressionSyntax)ctx.Node;
+        var ma = (MemberAccessExpressionSyntax)inv.Expression;
+        var recv = (IdentifierNameSyntax)ma.Expression;
+        var lit = (LiteralExpressionSyntax)inv.ArgumentList.Arguments[0].Expression;
+        return new IconUsage(recv.Identifier.Text, lit.Token.ValueText, lit.GetLocation());
+    }
+
+    private static Dictionary<string, HashSet<string>> BuildNameMap(
+        System.Collections.Immutable.ImmutableArray<IconFileModel> files)
+    {
+        var map = new Dictionary<string, HashSet<string>>(System.StringComparer.Ordinal);
+        foreach (var file in files)
+        {
+            string packClass = GetPackName(file.Path!) + "Icons";
+            if (!map.TryGetValue(packClass, out var names))
+            {
+                names = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+                map[packClass] = names;
+            }
+            names.Add(GetIconFieldName(file.Path!));
+        }
+        return map;
     }
 
     private static bool IsIconFile(AdditionalText file)
@@ -248,6 +340,7 @@ internal static class IconPackGenerator
         sb.AppendLine($"public static partial class {packName}Icons");
         sb.AppendLine("{");
 
+        var fieldNames = new List<string>();
         for (int i = 0; i < icons.Count; i++)
         {
             var icon = icons[i];
@@ -259,6 +352,8 @@ internal static class IconPackGenerator
             {
                 continue;
             }
+
+            fieldNames.Add(fieldName);
 
             if (i > 0)
             {
@@ -291,6 +386,32 @@ internal static class IconPackGenerator
                 sb.AppendLine($"        \"{fieldName}\");");
             }
         }
+
+        // Dynamic, case-insensitive lookup by name — for data-driven icon references that
+        // can't use the typed fields. CASCADEICON001 validates literal names against this set.
+        sb.AppendLine();
+        sb.AppendLine("    private static readonly global::System.Collections.Generic.Dictionary<string, global::Cascade.UI.Icon> _byName =");
+        sb.AppendLine("        new global::System.Collections.Generic.Dictionary<string, global::Cascade.UI.Icon>(global::System.StringComparer.OrdinalIgnoreCase)");
+        sb.AppendLine("        {");
+        foreach (var name in fieldNames)
+        {
+            sb.AppendLine($"            {{ \"{name}\", {name} }},");
+        }
+        sb.AppendLine("        };");
+        sb.AppendLine();
+        sb.AppendLine("    /// <summary>All icon names available in this pack (case-insensitive).</summary>");
+        sb.AppendLine("    public static global::System.Collections.Generic.IReadOnlyCollection<string> Names => _byName.Keys;");
+        sb.AppendLine();
+        sb.AppendLine("    /// <summary>True if an icon with the given name exists in this pack (case-insensitive).</summary>");
+        sb.AppendLine("    public static bool Has(string name) => _byName.ContainsKey(name);");
+        sb.AppendLine();
+        sb.AppendLine("    /// <summary>Looks up an icon by name (case-insensitive); returns true and the icon if found.</summary>");
+        sb.AppendLine("    public static bool TryGet(string name, out global::Cascade.UI.Icon icon) => _byName.TryGetValue(name, out icon);");
+        sb.AppendLine();
+        sb.AppendLine("    /// <summary>Looks up an icon by name (case-insensitive); throws if it does not exist.</summary>");
+        sb.AppendLine("    public static global::Cascade.UI.Icon Get(string name) =>");
+        sb.AppendLine("        _byName.TryGetValue(name, out var icon) ? icon");
+        sb.AppendLine($"            : throw new global::System.Collections.Generic.KeyNotFoundException(\"Icon '\" + name + \"' not found in {packName}Icons.\");");
 
         sb.AppendLine("}");
         return sb.ToString();

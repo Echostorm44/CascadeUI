@@ -138,6 +138,38 @@ public class IconPackGeneratorTests
         return source is not null && source.Contains(value, StringComparison.Ordinal);
     }
 
+    [TUnit.Core.Test]
+    public async Task IconLookup_UnknownLiteralName_ReportsICON001()
+    {
+        var result = RunWithSourceAndIcons(
+            @"namespace T { static class U { static void M() { _ = LucideIcons.Get(""nope""); } } }",
+            ("icons/lucide/bell.svg", MultiPathSvg));
+
+        await TUnit.Assertions.Assert.That(
+            result.Diagnostics.Count(d => d.Id == "CASCADEICON001")).IsGreaterThan(0);
+    }
+
+    [TUnit.Core.Test]
+    public async Task IconLookup_KnownLiteralName_NoICON001()
+    {
+        // 'bell.svg' generates the field 'Bell'; lookup is case-insensitive.
+        var result = RunWithSourceAndIcons(
+            @"namespace T { static class U { static void M() { _ = LucideIcons.Get(""bell""); } } }",
+            ("icons/lucide/bell.svg", MultiPathSvg));
+
+        await TUnit.Assertions.Assert.That(
+            result.Diagnostics.Count(d => d.Id == "CASCADEICON001")).IsEqualTo(0);
+    }
+
+    private static GeneratorRunResult RunWithSourceAndIcons(
+        string source, params (string Path, string Content)[] files)
+    {
+        var additionalTexts = files
+            .Select(f => (AdditionalText)new InMemoryAdditionalText(f.Path, f.Content))
+            .ToImmutableArray();
+        return RunGenerator(additionalTexts, source);
+    }
+
     private static GeneratorRunResult RunWithIconFiles(params (string Path, string Content)[] files)
     {
         var additionalTexts = files
@@ -152,9 +184,9 @@ public class IconPackGeneratorTests
         return RunGenerator(ImmutableArray<AdditionalText>.Empty);
     }
 
-    private static GeneratorRunResult RunGenerator(ImmutableArray<AdditionalText> additionalTexts)
+    private static GeneratorRunResult RunGenerator(
+        ImmutableArray<AdditionalText> additionalTexts, string source = "// Empty compilation")
     {
-        var source = "// Empty compilation";
         var syntaxTree = CSharpSyntaxTree.ParseText(source);
 
         var references = new List<MetadataReference>();

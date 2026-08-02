@@ -131,7 +131,8 @@ public class DiagnosticDescriptorTests
         var enabled = descriptor.IsEnabledByDefault;
 
         await TUnit.Assertions.Assert.That(id).IsEqualTo("CASCADELOC001");
-        await TUnit.Assertions.Assert.That(severity).IsEqualTo(DiagnosticSeverity.Warning);
+        // Info (not Warning): a gentle localization suggestion that never floods the build.
+        await TUnit.Assertions.Assert.That(severity).IsEqualTo(DiagnosticSeverity.Info);
         await TUnit.Assertions.Assert.That(category).IsEqualTo("Cascade.Localization");
         await TUnit.Assertions.Assert.That(enabled).IsTrue();
     }

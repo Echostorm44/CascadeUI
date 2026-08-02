@@ -28,9 +28,12 @@ internal static class LocalizationDiagnostics
     internal static readonly DiagnosticDescriptor HardcodedString = new(
         id: "CASCADELOC001",
         title: "Hardcoded user-visible string",
-        messageFormat: "Hardcoded string '{0}' detected where a localization key is expected. Consider using S.{1} for localization support.",
+        messageFormat: "Hardcoded string '{0}' is used where a localization key is expected. Add it to your strings/*.json and reference it via S.{1} so it can be translated.",
         category: Category,
-        defaultSeverity: DiagnosticSeverity.Warning,
+        // Info, not Warning: a gentle IDE suggestion that never clutters the build output.
+        // It also only fires when localization resources exist and only on multi-word
+        // display phrases — never a warning wall on every literal.
+        defaultSeverity: DiagnosticSeverity.Info,
         isEnabledByDefault: true);
 
     /// <summary>

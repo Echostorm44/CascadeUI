@@ -189,6 +189,56 @@ namespace Cascade.UI { public readonly struct LocKey { public LocKey(string key)
             result.Diagnostics.Count(d => d.Id == "CASCADELOC002")).IsEqualTo(0);
     }
 
+    private const string LocKeyImplicitStub = @"
+namespace Cascade.UI
+{
+    public readonly struct LocKey
+    {
+        public LocKey(string key) { }
+        public static implicit operator LocKey(string s) => new LocKey(s);
+    }
+}
+namespace UI { static class Ctl { public static void Label(Cascade.UI.LocKey k) { } } }
+";
+
+    [TUnit.Core.Test]
+    public async Task HardcodedPhraseAsLocKey_WithResources_ReportsLOC001()
+    {
+        string json = @"{ ""app"": { ""title"": ""X"" } }";
+        string src = LocKeyImplicitStub + @"namespace T { static class U { static void M() { UI.Ctl.Label(""Save changes now""); } } }";
+
+        var result = RunGenerator(
+            ImmutableArray.Create<AdditionalText>(new InMemoryAdditionalText("strings/en.json", json)), src);
+
+        await TUnit.Assertions.Assert.That(
+            result.Diagnostics.Count(d => d.Id == "CASCADELOC001")).IsGreaterThan(0);
+    }
+
+    [TUnit.Core.Test]
+    public async Task HardcodedPhrase_NoResources_NoLOC001()
+    {
+        string src = LocKeyImplicitStub + @"namespace T { static class U { static void M() { UI.Ctl.Label(""Save changes now""); } } }";
+
+        var result = RunGenerator(ImmutableArray<AdditionalText>.Empty, src);
+
+        await TUnit.Assertions.Assert.That(
+            result.Diagnostics.Count(d => d.Id == "CASCADELOC001")).IsEqualTo(0);
+    }
+
+    [TUnit.Core.Test]
+    public async Task SingleWordString_NoLOC001()
+    {
+        // No whitespace — not a display phrase, so not flagged (avoids flooding single-word labels).
+        string json = @"{ ""app"": { ""title"": ""X"" } }";
+        string src = LocKeyImplicitStub + @"namespace T { static class U { static void M() { UI.Ctl.Label(""Save""); } } }";
+
+        var result = RunGenerator(
+            ImmutableArray.Create<AdditionalText>(new InMemoryAdditionalText("strings/en.json", json)), src);
+
+        await TUnit.Assertions.Assert.That(
+            result.Diagnostics.Count(d => d.Id == "CASCADELOC001")).IsEqualTo(0);
+    }
+
     private static GeneratorRunResult RunGenerator(
         ImmutableArray<AdditionalText> additionalTexts, string source = "// Empty compilation")
     {

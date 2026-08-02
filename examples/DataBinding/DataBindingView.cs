@@ -22,12 +22,12 @@ namespace DataBinding;
 /// </para>
 ///
 /// <para>
-/// NOTE: a component that uses <c>Bind()</c> (or reactive fields) MUST be declared
-/// <c>partial</c> — the Cascade generator augments it with the reactive plumbing. Omit
-/// <c>partial</c> and you get diagnostic CASCADE003 telling you exactly that.
+/// NOTE: <c>Bind()</c> works on an ordinary component — no <c>partial</c> modifier and no
+/// generated plumbing are involved. <c>Bind(value, setter)</c> is a plain framework method
+/// that pairs the current value with a setter that runs and then calls <c>Invalidate()</c>.
 /// </para>
 /// </summary>
-internal sealed partial class DataBindingView : Component
+internal sealed class DataBindingView : Component
 {
     // Bound state — plain fields. Read them directly; write them through Bind().
     private string name = "";

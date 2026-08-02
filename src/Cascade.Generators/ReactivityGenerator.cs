@@ -1,35 +1,42 @@
-using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Text;
 
 namespace Cascade.Generators;
 
 /// <summary>
-/// Main reactivity analysis pipeline for the Cascade source generator.
-/// Registers an incremental pipeline that finds Component subclasses,
-/// analyzes reactive fields, computed properties, and Bind() calls,
-/// then generates partial classes with reactive infrastructure.
+/// Reactivity analysis pipeline for the Cascade source generator.
+///
+/// <para>
+/// This is a <b>diagnostics-only</b> pass — it emits no runtime code. Reactivity at
+/// runtime is provided entirely by <c>Component.Bind(value, setter)</c> plus the
+/// <c>SignalTracker</c>/<c>RenderScheduler</c> machinery; there is no generated reactive
+/// plumbing. (A source generator cannot intercept a plain <c>field = x</c> assignment, so
+/// "automatic" field interception is impossible; and computed properties run their own
+/// getter body — the generator cannot own it — so there is nothing to memoize from here.)
+/// </para>
+///
+/// <para>
+/// The single rule this pass enforces is <c>CASCADE001</c>: a reactive field must not be
+/// written inside <see cref="object"/> <c>Render()</c>, which must stay pure.
+/// </para>
 /// </summary>
 internal static class ReactivityGenerator
 {
     /// <summary>
-    /// Registers the reactivity pipeline with the incremental generator context.
+    /// Registers the reactivity diagnostic pipeline with the incremental generator context.
     /// Called from <see cref="CascadeGenerator.Initialize"/>.
     /// </summary>
     public static void Register(IncrementalGeneratorInitializationContext context)
     {
-        // Stage 1: Syntax collection — fast filter for class declarations with base types.
-        // This runs on every edit and must be allocation-minimal.
-        // Stage 2: Semantic enrichment — resolves Component inheritance, analyzes fields.
-        // Only runs when a candidate's syntax changes.
+        // Stage 1: syntax filter for class declarations with a base type (allocation-minimal).
+        // Stage 2: semantic analysis — resolves Component inheritance and finds writes-in-Render.
         var componentModels = context.SyntaxProvider
             .CreateSyntaxProvider(
                 predicate: SignalFieldRewriter.IsComponentCandidate,
                 transform: SignalFieldRewriter.Analyze)
             .Where(model => model is not null);
 
-        // Stage 3: Source output — generates code and reports diagnostics.
-        // Only runs when the semantic model output changes.
+        // Stage 3: report diagnostics. No source is produced.
         context.RegisterSourceOutput(componentModels, static (spc, model) =>
         {
             if (model is null)
@@ -38,28 +45,6 @@ internal static class ReactivityGenerator
             }
 
             ReportDiagnostics(spc, model);
-
-            // Only generate code if there are reactive fields or computed properties
-            if (model.ReactiveFields.Length == 0 && model.ComputedProperties.Length == 0)
-            {
-                return;
-            }
-
-            // The class needs a generated partial. If the user didn't declare it `partial`,
-            // emitting our partial would collide (CS0260) and bury the real cause. Instead
-            // report CASCADE003 pointing at the class and skip generation for this component.
-            if (!model.IsPartial)
-            {
-                spc.ReportDiagnostic(Diagnostic.Create(
-                    ReactivityDiagnostics.ComponentMustBePartial,
-                    CreateLocation(model.ClassFilePath, model.ClassLineNumber),
-                    model.ClassName));
-                return;
-            }
-
-            var source = GenerateReactivePartialClass(model);
-            var hintName = $"{model.FileName}.Reactive.g.cs";
-            spc.AddSource(hintName, source);
         });
     }
 
@@ -67,25 +52,13 @@ internal static class ReactivityGenerator
 
     private static void ReportDiagnostics(SourceProductionContext spc, ComponentReactivityModel model)
     {
-        // CS-CASCADE-001: reactive field written inside Render()
+        // CASCADE001: reactive field written inside Render(). Render() must be pure.
         foreach (var write in model.RenderWrites)
         {
             spc.ReportDiagnostic(Diagnostic.Create(
                 ReactivityDiagnostics.WriteInRender,
                 CreateLocation(write.FilePath, write.LineNumber),
                 write.FieldName));
-        }
-
-        // CS-CASCADE-002: Bind() on a readonly field
-        foreach (var bind in model.BindCalls)
-        {
-            if (bind.IsReadonly)
-            {
-                spc.ReportDiagnostic(Diagnostic.Create(
-                    ReactivityDiagnostics.BindOnReadonly,
-                    Location.None,
-                    bind.FieldName));
-            }
         }
     }
 
@@ -101,217 +74,5 @@ internal static class ReactivityGenerator
             filePath,
             TextSpan.FromBounds(0, 0),
             new LinePositionSpan(linePosition, linePosition));
-    }
-
-    // ── Code generation ───────────────────────────────────────────────
-
-    private static string GenerateReactivePartialClass(ComponentReactivityModel model)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("// <auto-generated/>");
-        sb.AppendLine("// Generated by Cascade.Generators — Reactivity Pipeline");
-        sb.AppendLine("#pragma warning disable");
-        sb.AppendLine("#nullable enable");
-        sb.AppendLine();
-
-        if (model.Namespace is not null)
-        {
-            sb.AppendLine($"namespace {model.Namespace}");
-            sb.AppendLine("{");
-        }
-
-        string indent = model.Namespace is not null ? "    " : "";
-        sb.AppendLine($"{indent}partial class {model.ClassName}");
-        sb.AppendLine($"{indent}{{");
-
-        // Build dependency maps for invalidation chains:
-        //   field → [computed properties that read it]
-        //   computed → [computed properties that read it]
-        var fieldToComputedDeps = new Dictionary<string, List<string>>();
-        var computedReverseDeps = new Dictionary<string, List<string>>();
-
-        foreach (var computed in model.ComputedProperties)
-        {
-            foreach (var fieldDep in computed.FieldDependencies)
-            {
-                if (!fieldToComputedDeps.TryGetValue(fieldDep, out var list))
-                {
-                    list = new List<string>();
-                    fieldToComputedDeps[fieldDep] = list;
-                }
-                list.Add(computed.Name);
-            }
-
-            foreach (var computedDep in computed.ComputedDependencies)
-            {
-                if (!computedReverseDeps.TryGetValue(computedDep, out var list))
-                {
-                    list = new List<string>();
-                    computedReverseDeps[computedDep] = list;
-                }
-                list.Add(computed.Name);
-            }
-        }
-
-        // Emit reactive field infrastructure
-        bool needsSeparator = false;
-        for (int i = 0; i < model.ReactiveFields.Length; i++)
-        {
-            if (needsSeparator)
-            {
-                sb.AppendLine();
-            }
-            EmitReactiveField(sb, model.ReactiveFields[i], fieldToComputedDeps, indent);
-            needsSeparator = true;
-        }
-
-        // Emit computed property memoization
-        for (int i = 0; i < model.ComputedProperties.Length; i++)
-        {
-            if (needsSeparator)
-            {
-                sb.AppendLine();
-            }
-            EmitComputedMemoization(sb, model.ComputedProperties[i], computedReverseDeps, indent);
-            needsSeparator = true;
-        }
-
-        // Emit Bind helpers for non-readonly reactive fields
-        foreach (var bind in model.BindCalls)
-        {
-            if (bind.IsReadonly)
-            {
-                continue;
-            }
-
-            if (needsSeparator)
-            {
-                sb.AppendLine();
-            }
-            EmitBindHelper(sb, bind, indent);
-            needsSeparator = true;
-        }
-
-        // Framework hook — calls Invalidate() to schedule a re-render when a reactive
-        // field is set via the generated __Set_* method. Those setters are driven by
-        // Bind() (two-way binding). Plain `field = x` writes are NOT auto-reactive — a
-        // source generator cannot intercept an assignment — so a handler that mutates a
-        // field directly must call Invalidate() itself.
-        if (needsSeparator)
-        {
-            sb.AppendLine();
-        }
-        sb.AppendLine($"{indent}    private void __ScheduleReactiveRender()");
-        sb.AppendLine($"{indent}    {{");
-        sb.AppendLine($"{indent}        Invalidate();");
-        sb.AppendLine($"{indent}    }}");
-
-        sb.AppendLine($"{indent}}}");
-
-        if (model.Namespace is not null)
-        {
-            sb.AppendLine("}");
-        }
-
-        return sb.ToString();
-    }
-
-    /// <summary>
-    /// Emits the backing field and reactive setter for a single reactive field.
-    /// The setter checks for equality, updates the backing field, invalidates
-    /// dependent computed properties, and schedules a re-render.
-    /// </summary>
-    private static void EmitReactiveField(
-        StringBuilder sb,
-        ReactiveFieldInfo field,
-        Dictionary<string, List<string>> fieldToComputedDeps,
-        string indent)
-    {
-        // Reactive setter with change detection. It writes the USER's field directly —
-        // there is no shadow backing field, so the user's field is the single source of
-        // truth. Bind() routes writes through this setter; plain `field = x` writes do NOT
-        // (a source generator can't intercept an assignment), so they still need Invalidate().
-        sb.AppendLine($"{indent}    private void __Set_{field.Name}({field.TypeName} value)");
-        sb.AppendLine($"{indent}    {{");
-        sb.AppendLine($"{indent}        if (global::System.Collections.Generic.EqualityComparer<{field.TypeName}>.Default.Equals({field.Name}, value))");
-        sb.AppendLine($"{indent}        {{");
-        sb.AppendLine($"{indent}            return;");
-        sb.AppendLine($"{indent}        }}");
-        sb.AppendLine($"{indent}        {field.Name} = value;");
-
-        // Invalidate dependent computed properties
-        if (fieldToComputedDeps.TryGetValue(field.Name, out var deps))
-        {
-            foreach (var dep in deps)
-            {
-                sb.AppendLine($"{indent}        __Invalidate_{dep}();");
-            }
-        }
-
-        sb.AppendLine($"{indent}        __ScheduleReactiveRender();");
-        sb.AppendLine($"{indent}    }}");
-    }
-
-    /// <summary>
-    /// Emits computed property memoization: dirty flag, cache, compute method,
-    /// invalidation method, and memoized getter.
-    /// </summary>
-    private static void EmitComputedMemoization(
-        StringBuilder sb,
-        ComputedPropertyInfo computed,
-        Dictionary<string, List<string>> computedReverseDeps,
-        string indent)
-    {
-        string lowerName = char.ToLowerInvariant(computed.Name[0]) + computed.Name.Substring(1);
-
-        // Dirty flag and cache
-        sb.AppendLine($"{indent}    private bool __{lowerName}_dirty = true;");
-        sb.AppendLine($"{indent}    private {computed.TypeName} __{lowerName}_cached = default!;");
-        sb.AppendLine();
-
-        // Compute method — evaluates the expression using backing fields
-        sb.AppendLine($"{indent}    private {computed.TypeName} __Compute_{computed.Name}()");
-        sb.AppendLine($"{indent}    {{");
-        sb.AppendLine($"{indent}        return {computed.Expression};");
-        sb.AppendLine($"{indent}    }}");
-        sb.AppendLine();
-
-        // Invalidation method — marks dirty and cascades to dependents
-        sb.AppendLine($"{indent}    private void __Invalidate_{computed.Name}()");
-        sb.AppendLine($"{indent}    {{");
-        sb.AppendLine($"{indent}        __{lowerName}_dirty = true;");
-        if (computedReverseDeps.TryGetValue(computed.Name, out var dependents))
-        {
-            foreach (var dep in dependents)
-            {
-                sb.AppendLine($"{indent}        __Invalidate_{dep}();");
-            }
-        }
-        sb.AppendLine($"{indent}    }}");
-        sb.AppendLine();
-
-        // Memoized getter — recomputes only when dirty
-        sb.AppendLine($"{indent}    private {computed.TypeName} __Get_{computed.Name}()");
-        sb.AppendLine($"{indent}    {{");
-        sb.AppendLine($"{indent}        if (__{lowerName}_dirty)");
-        sb.AppendLine($"{indent}        {{");
-        sb.AppendLine($"{indent}            __{lowerName}_cached = __Compute_{computed.Name}();");
-        sb.AppendLine($"{indent}            __{lowerName}_dirty = false;");
-        sb.AppendLine($"{indent}        }}");
-        sb.AppendLine($"{indent}        return __{lowerName}_cached;");
-        sb.AppendLine($"{indent}    }}");
-    }
-
-    /// <summary>
-    /// Emits a <c>__Bind_{fieldName}()</c> helper that returns a
-    /// <c>Bindable&lt;T&gt;</c> pairing the backing field's current value
-    /// with the reactive setter as the onChange callback.
-    /// </summary>
-    private static void EmitBindHelper(StringBuilder sb, BindCallInfo bind, string indent)
-    {
-        sb.AppendLine($"{indent}    private global::Cascade.UI.Bindable<{bind.TypeName}> __Bind_{bind.FieldName}()");
-        sb.AppendLine($"{indent}    {{");
-        sb.AppendLine($"{indent}        return new global::Cascade.UI.Bindable<{bind.TypeName}>({bind.FieldName}, __Set_{bind.FieldName});");
-        sb.AppendLine($"{indent}    }}");
     }
 }

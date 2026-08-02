@@ -78,51 +78,7 @@ internal readonly struct EquatableArray<T> : IEquatable<EquatableArray<T>>, IEnu
 }
 
 /// <summary>
-/// Metadata about a reactive field identified in a Component subclass.
-/// </summary>
-internal sealed class ReactiveFieldInfo : IEquatable<ReactiveFieldInfo>
-{
-    public string Name { get; }
-    public string TypeName { get; }
-    public string? Initializer { get; }
-
-    public ReactiveFieldInfo(string name, string typeName, string? initializer)
-    {
-        Name = name;
-        TypeName = typeName;
-        Initializer = initializer;
-    }
-
-    public bool Equals(ReactiveFieldInfo? other)
-    {
-        if (other is null)
-        {
-            return false;
-        }
-        return Name == other.Name
-            && TypeName == other.TypeName
-            && Initializer == other.Initializer;
-    }
-
-    public override bool Equals(object? obj)
-    {
-        return Equals(obj as ReactiveFieldInfo);
-    }
-
-    public override int GetHashCode()
-    {
-        unchecked
-        {
-            int hash = Name.GetHashCode();
-            hash = hash * 397 + TypeName.GetHashCode();
-            hash = hash * 397 + (Initializer?.GetHashCode() ?? 0);
-            return hash;
-        }
-    }
-}
-
-/// <summary>
-/// Records a field write detected inside Render() for CS-CASCADE-001 reporting.
+/// Records a field write detected inside Render() for CASCADE001 reporting.
 /// </summary>
 internal sealed class RenderWriteInfo : IEquatable<RenderWriteInfo>
 {
@@ -166,52 +122,18 @@ internal sealed class RenderWriteInfo : IEquatable<RenderWriteInfo>
 }
 
 /// <summary>
-/// Complete reactivity model for a single Component subclass.
-/// This is the equatable data flowing through the incremental pipeline —
-/// changes are detected by comparing models, and downstream stages only
-/// re-run when the model changes.
+/// Reactivity diagnostic model for a single Component subclass — the equatable data
+/// flowing through the incremental pipeline. Reactivity is a diagnostics-only pass
+/// (no code is generated), so the model carries only the writes-in-Render used for
+/// CASCADE001.
 /// </summary>
 internal sealed class ComponentReactivityModel : IEquatable<ComponentReactivityModel>
 {
-    public string? Namespace { get; }
-    public string ClassName { get; }
-    public string FileName { get; }
-    public EquatableArray<ReactiveFieldInfo> ReactiveFields { get; }
-    public EquatableArray<ComputedPropertyInfo> ComputedProperties { get; }
-    public EquatableArray<BindCallInfo> BindCalls { get; }
     public EquatableArray<RenderWriteInfo> RenderWrites { get; }
 
-    /// <summary>Whether the user's class declaration has the <c>partial</c> modifier.</summary>
-    public bool IsPartial { get; }
-
-    /// <summary>File path of the class declaration, for the "must be partial" diagnostic.</summary>
-    public string ClassFilePath { get; }
-
-    /// <summary>1-based line of the class declaration, for the "must be partial" diagnostic.</summary>
-    public int ClassLineNumber { get; }
-
-    public ComponentReactivityModel(
-        string? ns,
-        string className,
-        string fileName,
-        EquatableArray<ReactiveFieldInfo> reactiveFields,
-        EquatableArray<ComputedPropertyInfo> computedProperties,
-        EquatableArray<BindCallInfo> bindCalls,
-        EquatableArray<RenderWriteInfo> renderWrites,
-        bool isPartial,
-        string classFilePath,
-        int classLineNumber)
+    public ComponentReactivityModel(EquatableArray<RenderWriteInfo> renderWrites)
     {
-        Namespace = ns;
-        ClassName = className;
-        FileName = fileName;
-        ReactiveFields = reactiveFields;
-        ComputedProperties = computedProperties;
-        BindCalls = bindCalls;
         RenderWrites = renderWrites;
-        IsPartial = isPartial;
-        ClassFilePath = classFilePath;
-        ClassLineNumber = classLineNumber;
     }
 
     public bool Equals(ComponentReactivityModel? other)
@@ -220,16 +142,7 @@ internal sealed class ComponentReactivityModel : IEquatable<ComponentReactivityM
         {
             return false;
         }
-        return Namespace == other.Namespace
-            && ClassName == other.ClassName
-            && FileName == other.FileName
-            && IsPartial == other.IsPartial
-            && ClassFilePath == other.ClassFilePath
-            && ClassLineNumber == other.ClassLineNumber
-            && ReactiveFields.Equals(other.ReactiveFields)
-            && ComputedProperties.Equals(other.ComputedProperties)
-            && BindCalls.Equals(other.BindCalls)
-            && RenderWrites.Equals(other.RenderWrites);
+        return RenderWrites.Equals(other.RenderWrites);
     }
 
     public override bool Equals(object? obj)
@@ -239,20 +152,7 @@ internal sealed class ComponentReactivityModel : IEquatable<ComponentReactivityM
 
     public override int GetHashCode()
     {
-        unchecked
-        {
-            int hash = Namespace?.GetHashCode() ?? 0;
-            hash = hash * 397 + ClassName.GetHashCode();
-            hash = hash * 397 + FileName.GetHashCode();
-            hash = hash * 397 + IsPartial.GetHashCode();
-            hash = hash * 397 + ClassFilePath.GetHashCode();
-            hash = hash * 397 + ClassLineNumber;
-            hash = hash * 397 + ReactiveFields.GetHashCode();
-            hash = hash * 397 + ComputedProperties.GetHashCode();
-            hash = hash * 397 + BindCalls.GetHashCode();
-            hash = hash * 397 + RenderWrites.GetHashCode();
-            return hash;
-        }
+        return RenderWrites.GetHashCode();
     }
 }
 
@@ -261,9 +161,10 @@ internal sealed class ComponentReactivityModel : IEquatable<ComponentReactivityM
 // ═══════════════════════════════════════════════════════════════════════
 
 /// <summary>
-/// Identifies reactive fields in Component subclasses by analyzing field usage
-/// within the Render() call graph. This is the core analysis engine for the
-/// reactivity inference system.
+/// Analyzes Component subclasses for the one reactivity rule the generator enforces:
+/// CASCADE001 — a mutable field read in Render() must not also be written inside Render()
+/// (Render must be pure). Field reads/writes are followed transitively through the Render()
+/// call graph; writes inside deferred event-handler lambdas are excluded.
 /// </summary>
 internal static class SignalFieldRewriter
 {
@@ -283,7 +184,7 @@ internal static class SignalFieldRewriter
     }
 
     /// <summary>
-    /// Semantic analysis: builds the complete reactivity model for a Component subclass.
+    /// Semantic analysis: builds the reactivity diagnostic model for a Component subclass.
     /// Returns null if the class does not inherit from Component or has no Render() method.
     /// </summary>
     public static ComponentReactivityModel? Analyze(
@@ -292,14 +193,6 @@ internal static class SignalFieldRewriter
     {
         var classDecl = (ClassDeclarationSyntax)context.Node;
         var semanticModel = context.SemanticModel;
-
-        // Capture whether the user declared the class `partial` and where — the reactivity
-        // pipeline augments the class with a generated partial, so a non-partial declaration
-        // must produce a clear diagnostic (CS-CASCADE-003) rather than a CS0260 collision.
-        bool isPartial = classDecl.Modifiers.Any(SyntaxKind.PartialKeyword);
-        var classLineSpan = classDecl.Identifier.GetLocation().GetLineSpan();
-        string classFilePath = classLineSpan.Path ?? string.Empty;
-        int classLineNumber = classLineSpan.StartLinePosition.Line + 1;
 
         var classSymbol = semanticModel.GetDeclaredSymbol(classDecl, ct);
         if (classSymbol is null)
@@ -312,7 +205,7 @@ internal static class SignalFieldRewriter
             return null;
         }
 
-        // Skip nested types — they require more complex partial class generation
+        // Skip nested types.
         if (classSymbol.ContainingType is not null)
         {
             return null;
@@ -320,20 +213,19 @@ internal static class SignalFieldRewriter
 
         ct.ThrowIfCancellationRequested();
 
-        // Find all non-static instance fields declared in this class
+        // Find all non-static instance fields declared in this class.
         var allFields = classSymbol.GetMembers()
             .OfType<IFieldSymbol>()
             .Where(f => !f.IsStatic && !f.IsImplicitlyDeclared)
             .ToList();
 
-        // Find the Render() method
         var renderMethod = FindRenderMethod(classDecl);
         if (renderMethod is null)
         {
             return null;
         }
 
-        // Walk the transitive Render() call graph to find field reads and writes
+        // Walk the transitive Render() call graph to find field reads and writes.
         var fieldsReadInRender = new HashSet<string>();
         var fieldsWrittenInRender = new List<(string name, Location location)>();
 
@@ -349,72 +241,23 @@ internal static class SignalFieldRewriter
 
         ct.ThrowIfCancellationRequested();
 
-        // Candidate fields: non-readonly, non-static, read in Render, not [NotReactive].
-        // These are the fields eligible for reactive plumbing — but we only KEEP the ones
-        // that a feature actually uses (Bind() target or computed-property dependency).
-        // A plain field the component just mutates + Invalidate()s itself needs no
-        // generated code and must not force `partial` (CASCADE003). See below.
-        var candidateFields = new List<ReactiveFieldInfo>();
+        // CASCADE001 targets mutable state fields that are read in Render: writing one during
+        // Render is impure. Readonly and [NotReactive] fields are not state, so they are exempt.
+        var stateFieldNames = new HashSet<string>();
         foreach (var field in allFields)
         {
-            if (field.IsReadOnly)
+            if (field.IsReadOnly || HasAttribute(field, NotReactiveAttributeName))
             {
                 continue;
             }
-
-            if (HasAttribute(field, NotReactiveAttributeName))
-            {
-                continue;
-            }
-
             if (fieldsReadInRender.Contains(field.Name))
             {
-                var initializer = GetFieldInitializer(field, classDecl);
-                candidateFields.Add(new ReactiveFieldInfo(
-                    field.Name,
-                    field.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
-                    initializer));
+                stateFieldNames.Add(field.Name);
             }
         }
 
-        // Analyze computed properties (dependencies resolved against the candidate set)
-        var computedProperties = ComputedMemoizer.AnalyzeComputedProperties(
-            classDecl, semanticModel, classSymbol, candidateFields, ct);
-
-        // Analyze Bind() calls
-        var bindCalls = BindRewriter.AnalyzeBindCalls(
-            renderMethod, semanticModel, classSymbol, ct);
-
-        ct.ThrowIfCancellationRequested();
-
-        // Keep only candidates the generated plumbing actually uses: a Bind() target, or a
-        // dependency of a computed property. Everything else is a plain field the component
-        // manages itself — generating a shadow setter for it is dead code, and forcing the
-        // class to be `partial` for it is pure friction. This is what makes CASCADE003 fire
-        // only when the reactive infrastructure is genuinely needed.
-        var usedFieldNames = new HashSet<string>();
-        foreach (var bind in bindCalls)
-        {
-            usedFieldNames.Add(bind.FieldName);
-        }
-        foreach (var computed in computedProperties)
-        {
-            foreach (var dep in computed.FieldDependencies)
-            {
-                usedFieldNames.Add(dep);
-            }
-        }
-
-        var reactiveFields = candidateFields
-            .Where(f => usedFieldNames.Contains(f.Name))
-            .ToList();
-
-        // CASCADE001 (write-in-render purity) applies to ANY mutable state field read in
-        // Render, not just the ones that get generated plumbing — writing state during
-        // Render is impure regardless of whether the field is Bind()-backed.
-        var candidateFieldNames = new HashSet<string>(candidateFields.Select(f => f.Name));
         var renderWrites = fieldsWrittenInRender
-            .Where(w => candidateFieldNames.Contains(w.name))
+            .Where(w => stateFieldNames.Contains(w.name))
             .Select(w =>
             {
                 var lineSpan = w.location.GetLineSpan();
@@ -425,29 +268,8 @@ internal static class SignalFieldRewriter
             })
             .ToArray();
 
-        // Determine the file name for the generated output hint
-        var filePath = classDecl.SyntaxTree.FilePath;
-        var fileName = System.IO.Path.GetFileNameWithoutExtension(filePath);
-        if (string.IsNullOrEmpty(fileName))
-        {
-            fileName = classSymbol.Name;
-        }
-
-        var ns = classSymbol.ContainingNamespace.IsGlobalNamespace
-            ? null
-            : classSymbol.ContainingNamespace.ToDisplayString();
-
         return new ComponentReactivityModel(
-            ns,
-            classSymbol.Name,
-            fileName,
-            new EquatableArray<ReactiveFieldInfo>(reactiveFields.ToArray()),
-            new EquatableArray<ComputedPropertyInfo>(computedProperties),
-            new EquatableArray<BindCallInfo>(bindCalls),
-            new EquatableArray<RenderWriteInfo>(renderWrites),
-            isPartial,
-            classFilePath,
-            classLineNumber);
+            new EquatableArray<RenderWriteInfo>(renderWrites));
     }
 
     // ── Helpers ────────────────────────────────────────────────────────
@@ -482,7 +304,7 @@ internal static class SignalFieldRewriter
     }
 
     /// <summary>
-    /// Walks a method body to find field reads, field writes, and allocations.
+    /// Walks a method body to find field reads and writes.
     /// Transitively follows calls to methods declared in the same class.
     /// </summary>
     private static void AnalyzeMethodBody(
@@ -665,25 +487,6 @@ internal static class SignalFieldRewriter
                 calledMethod, classDecl, semanticModel, classSymbol,
                 fieldsRead, fieldsWritten, visitedMethods, ct);
         }
-    }
-
-    private static string? GetFieldInitializer(IFieldSymbol field, ClassDeclarationSyntax classDecl)
-    {
-        foreach (var member in classDecl.Members)
-        {
-            if (member is FieldDeclarationSyntax fieldDecl)
-            {
-                foreach (var variable in fieldDecl.Declaration.Variables)
-                {
-                    if (variable.Identifier.Text == field.Name
-                        && variable.Initializer is not null)
-                    {
-                        return variable.Initializer.Value.ToFullString().Trim();
-                    }
-                }
-            }
-        }
-        return null;
     }
 
     private static bool HasAttribute(ISymbol symbol, string attributeFullName)

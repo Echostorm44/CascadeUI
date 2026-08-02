@@ -111,6 +111,97 @@ internal static class LocalizationGenerator
                 }
             }
         });
+
+        // CASCADELOC001: a multi-word display phrase used where a LocKey is expected is
+        // probably a hardcoded string that should be localized. Info severity, and only
+        // when localization resources exist — never a warning wall on every literal.
+        var hardcoded = context.SyntaxProvider
+            .CreateSyntaxProvider(
+                predicate: static (node, _) => IsHardcodedCandidate(node),
+                transform: static (ctx, ct) => ExtractHardcoded(ctx, ct))
+            .Where(static h => h is not null)
+            .Collect();
+
+        context.RegisterSourceOutput(hardcoded.Combine(collected), static (spc, pair) =>
+        {
+            var (phrases, files) = pair;
+            if (phrases.Length == 0 || files.Length == 0)
+            {
+                return; // no resources declared — don't nag about hardcoded strings
+            }
+
+            foreach (var phrase in phrases)
+            {
+                if (phrase is not null)
+                {
+                    spc.ReportDiagnostic(Diagnostic.Create(
+                        LocalizationDiagnostics.HardcodedString,
+                        phrase.Value.Location,
+                        phrase.Value.Text,
+                        phrase.Value.Suggestion));
+                }
+            }
+        });
+    }
+
+    private static bool IsHardcodedCandidate(SyntaxNode node)
+    {
+        // Fast syntax filter: a string literal that contains whitespace (a display phrase).
+        return node is LiteralExpressionSyntax lit
+            && lit.Token.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.StringLiteralToken)
+            && lit.Token.ValueText.Any(char.IsWhiteSpace);
+    }
+
+    private static HardcodedUsage? ExtractHardcoded(GeneratorSyntaxContext ctx, System.Threading.CancellationToken ct)
+    {
+        var lit = (LiteralExpressionSyntax)ctx.Node;
+        // Only flag when the literal is actually used as a LocKey (implicit conversion).
+        var converted = ctx.SemanticModel.GetTypeInfo(lit, ct).ConvertedType;
+        if (converted?.ToDisplayString() != "Cascade.UI.LocKey")
+        {
+            return null;
+        }
+
+        string text = lit.Token.ValueText;
+        return new HardcodedUsage(text, SuggestKey(text), lit.GetLocation());
+    }
+
+    private static readonly char[] WhitespaceChars = { ' ', '\t', '\n', '\r' };
+
+    private static string SuggestKey(string text)
+    {
+        var words = text.Split(WhitespaceChars, System.StringSplitOptions.RemoveEmptyEntries)
+            .Take(4);
+        var sb = new StringBuilder();
+        foreach (var w in words)
+        {
+            bool first = true;
+            foreach (var ch in w)
+            {
+                if (!char.IsLetterOrDigit(ch))
+                {
+                    continue;
+                }
+
+                sb.Append(first ? char.ToUpperInvariant(ch) : ch);
+                first = false;
+            }
+        }
+        return sb.Length == 0 ? "Key" : sb.ToString();
+    }
+
+    private readonly struct HardcodedUsage
+    {
+        public HardcodedUsage(string text, string suggestion, Location location)
+        {
+            Text = text;
+            Suggestion = suggestion;
+            Location = location;
+        }
+
+        public string Text { get; }
+        public string Suggestion { get; }
+        public Location Location { get; }
     }
 
     private readonly struct LocKeyUsage

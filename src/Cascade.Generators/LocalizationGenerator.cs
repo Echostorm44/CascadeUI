@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Text;
 
 namespace Cascade.Generators;
@@ -76,7 +77,99 @@ internal static class LocalizationGenerator
             var source = GenerateSClass(namespaces);
             spc.AddSource("S.g.cs", SourceText.From(source, Encoding.UTF8));
         });
+
+        // CASCADELOC002: a string-literal LocKey (new LocKey("ns.key")) must reference a
+        // key declared in the strings/*.json resources. Only validated when resources exist
+        // (the typed S.Ns.Key accessors are already compile-safe; this covers raw strings).
+        var usages = context.SyntaxProvider
+            .CreateSyntaxProvider(
+                predicate: static (node, _) => IsLocKeyCreation(node),
+                transform: static (ctx, ct) => ExtractLocKeyUsage(ctx, ct))
+            .Where(static u => u is not null)
+            .Collect();
+
+        context.RegisterSourceOutput(usages.Combine(collected), static (spc, pair) =>
+        {
+            var (calls, files) = pair;
+            if (calls.Length == 0 || files.Length == 0)
+            {
+                return;
+            }
+
+            var keys = BuildKeySet(files);
+            if (keys.Count == 0)
+            {
+                return; // no declared keys — nothing to validate against
+            }
+
+            foreach (var call in calls)
+            {
+                if (call is not null && !keys.Contains(call.Value.Key))
+                {
+                    spc.ReportDiagnostic(Diagnostic.Create(
+                        LocalizationDiagnostics.MissingLocalizationKey, call.Value.Location, call.Value.Key));
+                }
+            }
+        });
     }
+
+    private readonly struct LocKeyUsage
+    {
+        public LocKeyUsage(string key, Location location)
+        {
+            Key = key;
+            Location = location;
+        }
+
+        public string Key { get; }
+        public Location Location { get; }
+    }
+
+    private static bool IsLocKeyCreation(SyntaxNode node)
+    {
+        return node is ObjectCreationExpressionSyntax oc
+            && LastName(oc.Type) == "LocKey"
+            && oc.ArgumentList is { Arguments.Count: >= 1 }
+            && oc.ArgumentList.Arguments[0].Expression is LiteralExpressionSyntax lit
+            && lit.Token.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.StringLiteralToken);
+    }
+
+    private static LocKeyUsage? ExtractLocKeyUsage(GeneratorSyntaxContext ctx, System.Threading.CancellationToken ct)
+    {
+        var oc = (ObjectCreationExpressionSyntax)ctx.Node;
+        var type = ctx.SemanticModel.GetTypeInfo(oc, ct).Type;
+        if (type?.ToDisplayString() != "Cascade.UI.LocKey")
+        {
+            return null;
+        }
+
+        var lit = (LiteralExpressionSyntax)oc.ArgumentList!.Arguments[0].Expression;
+        return new LocKeyUsage(lit.Token.ValueText, lit.GetLocation());
+    }
+
+    private static HashSet<string> BuildKeySet(
+        System.Collections.Immutable.ImmutableArray<LocaleFileModel> files)
+    {
+        var keys = new HashSet<string>(System.StringComparer.Ordinal);
+        foreach (var file in files)
+        {
+            foreach (var ns in ParseLocaleJson(file.Content))
+            {
+                foreach (var entry in ns.Value)
+                {
+                    keys.Add(ns.Key + "." + entry.Key);
+                }
+            }
+        }
+        return keys;
+    }
+
+    private static string? LastName(TypeSyntax type) => type switch
+    {
+        IdentifierNameSyntax id => id.Identifier.Text,
+        QualifiedNameSyntax q => q.Right.Identifier.Text,
+        _ => null,
+    };
 
     private static bool IsLocaleFile(AdditionalText file)
     {

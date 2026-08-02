@@ -198,7 +198,7 @@ internal sealed partial class RouteResolver
         {
             if (segment.StartsWith('{') && segment.EndsWith('}'))
             {
-                regexParts.Add("(?<" + segment[1..^1] + ">[^/]+)");
+                regexParts.Add("(?<" + ParamName(segment[1..^1]) + ">[^/]+)");
             }
             else
             {
@@ -207,6 +207,15 @@ internal sealed partial class RouteResolver
         }
 
         return new Regex("^" + string.Join("/", regexParts) + "$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    }
+
+    // A route parameter may declare a type constraint (e.g. {id:int}); that type is used by
+    // the CASCADENAV002 analyzer to check the target property. The value is bound at runtime
+    // by converting to the property's own type, so the constraint is stripped for matching.
+    private static string ParamName(string inner)
+    {
+        int colon = inner.IndexOf(':');
+        return colon < 0 ? inner : inner.Substring(0, colon);
     }
 
     private static Dictionary<string, string> ExtractParameters(string originalPattern, Match match)
@@ -219,7 +228,7 @@ internal sealed partial class RouteResolver
         {
             if (segment.StartsWith('{') && segment.EndsWith('}'))
             {
-                var paramName = segment[1..^1];
+                var paramName = ParamName(segment[1..^1]);
                 var group = match.Groups[paramName];
                 if (group.Success)
                 {

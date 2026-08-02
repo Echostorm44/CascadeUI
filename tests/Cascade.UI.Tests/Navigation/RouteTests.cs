@@ -222,4 +222,36 @@ public class RouteTests
         int expected = 1;
         await Assert.That(count).IsEqualTo(expected);
     }
+
+    private sealed class TypedUserRoutePage : Component
+    {
+        public int Id { get; set; }
+        protected override Node Render() => Node.Empty;
+    }
+
+    [Test]
+    public async Task TypedRouteParam_BindsToTypedProperty()
+    {
+        // A component with a public parameterless ctor + matching typed property gets the
+        // route value converted and bound (the contract CASCADENAV002 validates).
+        var page = Navigator.CreateComponentFromRoute(
+            typeof(TypedUserRoutePage),
+            new System.Collections.Generic.Dictionary<string, string> { ["id"] = "42" });
+
+        await Assert.That(page is TypedUserRoutePage).IsTrue();
+        await Assert.That(((TypedUserRoutePage)page).Id).IsEqualTo(42);
+    }
+
+    [Test]
+    public async Task TypedRoutePattern_ParsesAndMatches()
+    {
+        var resolver = new RouteResolver();
+        resolver.Reset();
+        resolver.Register(typeof(TypedUserRoutePage), "/users/{id:int}");
+        resolver.MarkScanned();
+
+        var match = resolver.Resolve("/users/42");
+        await Assert.That(match).IsNotNull();
+        await Assert.That(match!.Parameters["id"]).IsEqualTo("42");
+    }
 }

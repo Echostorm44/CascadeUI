@@ -214,7 +214,7 @@ internal sealed partial class RouteResolver
     // by converting to the property's own type, so the constraint is stripped for matching.
     private static string ParamName(string inner)
     {
-        int colon = inner.IndexOf(':');
+        int colon = inner.IndexOf(':', System.StringComparison.Ordinal);
         return colon < 0 ? inner : inner.Substring(0, colon);
     }
 

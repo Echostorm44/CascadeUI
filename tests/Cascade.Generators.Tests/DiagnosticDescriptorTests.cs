@@ -80,23 +80,9 @@ public class DiagnosticDescriptorTests
         await TUnit.Assertions.Assert.That(enabled).IsTrue();
     }
 
-    // ── AOT diagnostics ───────────────────────────────────────────────
-
-    [TUnit.Core.Test]
-    public async Task AotIncompatiblePattern_HasCorrectProperties()
-    {
-        var descriptor = AotDiagnostics.AotIncompatiblePattern;
-
-        var id = descriptor.Id;
-        var severity = descriptor.DefaultSeverity;
-        var category = descriptor.Category;
-        var enabled = descriptor.IsEnabledByDefault;
-
-        await TUnit.Assertions.Assert.That(id).IsEqualTo("CASCADEAOT001");
-        await TUnit.Assertions.Assert.That(severity).IsEqualTo(DiagnosticSeverity.Error);
-        await TUnit.Assertions.Assert.That(category).IsEqualTo("Cascade.AOT");
-        await TUnit.Assertions.Assert.That(enabled).IsTrue();
-    }
+    // AOT diagnostics were removed: CASCADEAOT001 duplicated the .NET SDK's own
+    // IL2xxx/IL3xxx AOT/trim analyzers (enabled via <IsAotCompatible>), so it was dropped
+    // rather than reimplemented as a weaker copy.
 
     // ── Accessibility diagnostics ─────────────────────────────────────
 
@@ -210,7 +196,6 @@ public class DiagnosticDescriptorTests
             typeof(NavigationDiagnostics),
             typeof(IconDiagnostics),
             typeof(ThemeDiagnostics),
-            typeof(AotDiagnostics),
             typeof(AccessibilityDiagnostics),
         };
 

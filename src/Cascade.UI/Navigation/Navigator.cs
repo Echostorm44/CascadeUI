@@ -1,4 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
+using System.Reflection;
 
 namespace Cascade.UI;
 
@@ -241,8 +243,8 @@ public partial class Navigator : Component, INavigator
 
         CaptureOutgoingState();
 
+        var instance = CreateComponentFromRoute(match.ComponentType, match.Parameters);
         var args = match.Parameters.Values.Cast<object>().ToArray();
-        var instance = CreateComponentFromRoute(match.ComponentType, args);
         var entry = new NavigationEntry(match.ComponentType, instance, args);
         stack.Push(entry);
         PagePushed?.Invoke(instance);
@@ -456,9 +458,31 @@ public partial class Navigator : Component, INavigator
     }
 
     [UnconditionalSuppressMessage("Trimming", "IL2067", Justification = "Route-resolved types are discovered via reflection and always have public constructors.")]
-    private static Component CreateComponentFromRoute(Type componentType, object[] args)
+    [UnconditionalSuppressMessage("Trimming", "IL2070", Justification = "Route-resolved component types are discovered via reflection and kept; their ctors/properties are preserved.")]
+    [UnconditionalSuppressMessage("Trimming", "IL2072", Justification = "Route-resolved component types are discovered via reflection and kept.")]
+    [UnconditionalSuppressMessage("Trimming", "IL2075", Justification = "Route parameter binding reflects over the resolved component's public properties.")]
+    internal static Component CreateComponentFromRoute(Type componentType, IReadOnlyDictionary<string, string> parameters)
     {
-        var instance = Activator.CreateInstance(componentType, args);
+        object? instance;
+
+        // Typed model: if the component has a public parameterless constructor, default-
+        // construct it and bind each route parameter to a matching public property
+        // (converting to the property's own type — this is what CASCADENAV002 validates).
+        // Otherwise fall back to the legacy model of passing values as constructor args.
+        if (componentType.GetConstructor(Type.EmptyTypes) is not null)
+        {
+            instance = Activator.CreateInstance(componentType);
+            if (instance is Component c)
+            {
+                BindRouteParameters(c, parameters);
+            }
+        }
+        else
+        {
+            var args = parameters.Values.Cast<object>().ToArray();
+            instance = Activator.CreateInstance(componentType, args);
+        }
+
         if (instance is not Component component)
         {
             throw new InvalidOperationException(
@@ -466,6 +490,47 @@ public partial class Navigator : Component, INavigator
         }
 
         return component;
+    }
+
+    [UnconditionalSuppressMessage("Trimming", "IL2075", Justification = "Route parameter binding reflects over the resolved component's public properties.")]
+    private static void BindRouteParameters(Component component, IReadOnlyDictionary<string, string> parameters)
+    {
+        var type = component.GetType();
+        foreach (var kvp in parameters)
+        {
+            var prop = type.GetProperty(
+                kvp.Key,
+                BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+            if (prop is null || !prop.CanWrite)
+            {
+                continue;
+            }
+
+            try
+            {
+                prop.SetValue(component, ConvertRouteValue(kvp.Value, prop.PropertyType));
+            }
+            catch (Exception ex) when (ex is FormatException or InvalidCastException or OverflowException or ArgumentException)
+            {
+                // Leave the property at its default if the URL value can't convert.
+            }
+        }
+    }
+
+    private static object? ConvertRouteValue(string value, Type target)
+    {
+        if (target == typeof(string))
+        {
+            return value;
+        }
+
+        var underlying = Nullable.GetUnderlyingType(target) ?? target;
+        if (underlying == typeof(Guid))
+        {
+            return Guid.Parse(value);
+        }
+
+        return Convert.ChangeType(value, underlying, CultureInfo.InvariantCulture);
     }
 
     private static void CompleteResult(NavigationEntry entry, object? result)

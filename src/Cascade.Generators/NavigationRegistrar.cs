@@ -77,6 +77,172 @@ internal static class NavigationRegistrar
             var source = GenerateRouteRegistration(validRoutes);
             spc.AddSource("RouteRegistration.g.cs", SourceText.From(source, Encoding.UTF8));
         });
+
+        // CASCADENAV002: a typed route parameter {name:type} must match the type of the
+        // target component's same-named property (the property the router binds it to).
+        var paramFindings = context.SyntaxProvider
+            .CreateSyntaxProvider(
+                predicate: IsRouteCandidate,
+                transform: AnalyzeRouteParams)
+            .Where(m => m is not null);
+
+        context.RegisterSourceOutput(paramFindings, static (spc, model) =>
+        {
+            if (model is null)
+            {
+                return;
+            }
+
+            foreach (var mm in model.Mismatches)
+            {
+                spc.ReportDiagnostic(Diagnostic.Create(
+                    NavigationDiagnostics.RouteParameterTypeMismatch,
+                    mm.Location,
+                    mm.ParamName, mm.ParamType, mm.PropertyName, mm.PropertyType));
+            }
+        });
+    }
+
+    // ── CASCADENAV002 route-parameter type checking ───────────────────
+
+    private sealed class RouteParamModel : System.IEquatable<RouteParamModel>
+    {
+        public RouteParamModel(List<ParamMismatch> mismatches) => Mismatches = mismatches;
+        public List<ParamMismatch> Mismatches { get; }
+        public bool Equals(RouteParamModel? other) => other is not null && Mismatches.SequenceEqual(other.Mismatches);
+        public override bool Equals(object? o) => Equals(o as RouteParamModel);
+        public override int GetHashCode()
+        {
+            int h = 17;
+            foreach (var m in Mismatches)
+            {
+                h = (h * 31) + m.GetHashCode();
+            }
+            return h;
+        }
+    }
+
+    private readonly struct ParamMismatch : System.IEquatable<ParamMismatch>
+    {
+        public ParamMismatch(string paramName, string paramType, string propName, string propType, Location loc)
+        {
+            ParamName = paramName;
+            ParamType = paramType;
+            PropertyName = propName;
+            PropertyType = propType;
+            Location = loc;
+        }
+
+        public string ParamName { get; }
+        public string ParamType { get; }
+        public string PropertyName { get; }
+        public string PropertyType { get; }
+        public Location Location { get; }
+
+        public bool Equals(ParamMismatch o) =>
+            ParamName == o.ParamName && ParamType == o.ParamType
+            && PropertyName == o.PropertyName && PropertyType == o.PropertyType && Location.Equals(o.Location);
+        public override bool Equals(object? o) => o is ParamMismatch m && Equals(m);
+        public override int GetHashCode() =>
+            ((ParamName.GetHashCode() * 397) ^ PropertyName.GetHashCode()) ^ Location.GetHashCode();
+    }
+
+    private static RouteParamModel? AnalyzeRouteParams(
+        GeneratorSyntaxContext ctx, System.Threading.CancellationToken ct)
+    {
+        var classDecl = (ClassDeclarationSyntax)ctx.Node;
+        var classSymbol = ctx.SemanticModel.GetDeclaredSymbol(classDecl, ct);
+        if (classSymbol is null)
+        {
+            return null;
+        }
+
+        string? pattern = null;
+        Location? attrLocation = null;
+        foreach (var attrList in classDecl.AttributeLists)
+        {
+            foreach (var attr in attrList.Attributes)
+            {
+                var symbol = ctx.SemanticModel.GetSymbolInfo(attr, ct).Symbol;
+                if (symbol?.ContainingType?.ToDisplayString() != RouteAttributeFullName)
+                {
+                    continue;
+                }
+
+                var arg = attr.ArgumentList?.Arguments.FirstOrDefault();
+                if (arg?.Expression is LiteralExpressionSyntax lit
+                    && lit.Token.IsKind(SyntaxKind.StringLiteralToken))
+                {
+                    pattern = lit.Token.ValueText;
+                    attrLocation = attr.GetLocation();
+                }
+                break;
+            }
+        }
+
+        if (pattern is null)
+        {
+            return null;
+        }
+
+        var location = attrLocation ?? classDecl.Identifier.GetLocation();
+        var mismatches = new List<ParamMismatch>();
+        foreach (var (paramName, paramType) in ParseTypedParams(pattern))
+        {
+            var prop = classSymbol.GetMembers()
+                .OfType<IPropertySymbol>()
+                .FirstOrDefault(p => string.Equals(p.Name, paramName, System.StringComparison.OrdinalIgnoreCase));
+            if (prop is null)
+            {
+                continue; // no bound property — nothing to type-check (ctor-arg route)
+            }
+
+            var effective = (prop.Type is INamedTypeSymbol nt
+                && nt.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T)
+                ? nt.TypeArguments[0]
+                : prop.Type;
+
+            if (!RouteTypeMatches(effective, paramType))
+            {
+                mismatches.Add(new ParamMismatch(
+                    paramName, paramType, prop.Name, effective.ToDisplayString(), location));
+            }
+        }
+
+        return mismatches.Count == 0 ? null : new RouteParamModel(mismatches);
+    }
+
+    private static IEnumerable<(string Name, string Type)> ParseTypedParams(string pattern)
+    {
+        foreach (var seg in pattern.Split('/'))
+        {
+            if (seg.Length > 2 && seg[0] == '{' && seg[seg.Length - 1] == '}')
+            {
+                var inner = seg.Substring(1, seg.Length - 2);
+                int colon = inner.IndexOf(':');
+                if (colon > 0 && colon < inner.Length - 1)
+                {
+                    yield return (inner.Substring(0, colon), inner.Substring(colon + 1));
+                }
+            }
+        }
+    }
+
+    // Returns true if the property type is compatible with the declared route-param type,
+    // or if the route type is unrecognised (then we don't flag — the constraint is free-form).
+    private static bool RouteTypeMatches(ITypeSymbol propType, string routeType)
+    {
+        switch (routeType.ToUpperInvariant())
+        {
+            case "INT": return propType.SpecialType == SpecialType.System_Int32;
+            case "LONG": return propType.SpecialType == SpecialType.System_Int64;
+            case "BOOL": return propType.SpecialType == SpecialType.System_Boolean;
+            case "DOUBLE": return propType.SpecialType == SpecialType.System_Double;
+            case "FLOAT": return propType.SpecialType == SpecialType.System_Single;
+            case "STRING": return propType.SpecialType == SpecialType.System_String;
+            case "GUID": return propType.Name == "Guid" && propType.ContainingNamespace?.ToDisplayString() == "System";
+            default: return true;
+        }
     }
 
     // ── Syntax filtering ──────────────────────────────────────────────

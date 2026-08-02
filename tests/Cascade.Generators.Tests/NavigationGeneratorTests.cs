@@ -50,6 +50,63 @@ namespace TestApp
         await TUnit.Assertions.Assert.That(diags.Count(d => d.Id == "CASCADENAV001")).IsEqualTo(0);
     }
 
+    [TUnit.Core.Test]
+    public async Task TypedParam_PropertyTypeMismatch_ReportsNAV002()
+    {
+        string source = StubTypes + @"
+namespace TestApp
+{
+    [Cascade.UI.Route(""/user/{id:int}"")]
+    public class UserPage { public string Id { get; set; } = """"; }
+}
+";
+        var diags = RunGenerator(source).Diagnostics;
+        await TUnit.Assertions.Assert.That(diags.Count(d => d.Id == "CASCADENAV002")).IsGreaterThan(0);
+    }
+
+    [TUnit.Core.Test]
+    public async Task TypedParam_MatchingProperty_NoNAV002()
+    {
+        string source = StubTypes + @"
+namespace TestApp
+{
+    [Cascade.UI.Route(""/user/{id:int}"")]
+    public class UserPage { public int Id { get; set; } }
+}
+";
+        var diags = RunGenerator(source).Diagnostics;
+        await TUnit.Assertions.Assert.That(diags.Count(d => d.Id == "CASCADENAV002")).IsEqualTo(0);
+    }
+
+    [TUnit.Core.Test]
+    public async Task UntypedParam_NoNAV002()
+    {
+        string source = StubTypes + @"
+namespace TestApp
+{
+    [Cascade.UI.Route(""/user/{id}"")]
+    public class UserPage { public string Id { get; set; } = """"; }
+}
+";
+        var diags = RunGenerator(source).Diagnostics;
+        await TUnit.Assertions.Assert.That(diags.Count(d => d.Id == "CASCADENAV002")).IsEqualTo(0);
+    }
+
+    [TUnit.Core.Test]
+    public async Task TypedParam_NoMatchingProperty_NoNAV002()
+    {
+        // Constructor-arg routes (no bound property) aren't type-checked.
+        string source = StubTypes + @"
+namespace TestApp
+{
+    [Cascade.UI.Route(""/user/{id:int}"")]
+    public class UserPage { public UserPage(string id) { } }
+}
+";
+        var diags = RunGenerator(source).Diagnostics;
+        await TUnit.Assertions.Assert.That(diags.Count(d => d.Id == "CASCADENAV002")).IsEqualTo(0);
+    }
+
     private static GeneratorRunResult RunGenerator(string source)
     {
         var syntaxTree = CSharpSyntaxTree.ParseText(source);

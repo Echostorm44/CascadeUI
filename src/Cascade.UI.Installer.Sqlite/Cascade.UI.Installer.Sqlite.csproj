@@ -3,13 +3,12 @@
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>Cascade.UI.Installer.Sqlite</RootNamespace>
     <Description>SQLite install-time database provider for Cascade UI installers (ctx.Sql.For&lt;SqliteInstallerProvider&gt;()).</Description>
-    <!-- NU1903: the transitive SQLitePCLRaw native SQLite bundle (GHSA-2m69-gcr7-jv3q) has no fixed
-         release available yet. This is an OPT-IN provider; the same native lib is pulled by any app
-         that uses SQLite. REVISIT and bump SQLitePCLRaw once a fixed version ships. -->
-    <NoWarn>$(NoWarn);NU1903</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Cascade.UI.Installer\Cascade.UI.Installer.csproj" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.10" />
+    <!-- Override the native SQLite bundle Microsoft.Data.Sqlite pulls transitively (e_sqlite3
+         2.1.11) with a patched build, clearing NU1903 / GHSA-2m69-gcr7-jv3q. -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
   </ItemGroup>
 </Project>

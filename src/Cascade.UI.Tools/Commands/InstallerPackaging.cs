@@ -115,6 +115,14 @@ internal static class InstallerPackaging
             return 1;
         }
 
+        Console.WriteLine($"  Step 1b: building the update shim (cascade-update){(aot ? " (AOT)" : "")}...");
+        // Delivers cascade-update[.exe] next to the app so Updater.RequestUpdate()/rollback can hand
+        // off to it — without this the auto-update path throws "Update shim not found next to the app".
+        if (BuildUpdateShim(work, publishDir, rid, configuration, aot) != 0)
+        {
+            return 1;
+        }
+
         Console.WriteLine($"  Step 2: building the embedded payload (trimming .pdb/.xml{(keepLocales ? "" : " + locale satellites")})...");
         // The payload is copied verbatim to the user's install dir, so strip debug symbols and XML docs
         // (some native packages ship large .pdb — e.g. wgpu_native.pdb — the runtime never needs), and
@@ -203,6 +211,100 @@ internal static class InstallerPackaging
         long mb = new FileInfo(finalExe).Length / (1024 * 1024);
         Console.WriteLine($"  ✓ Installer (single file, {mb} MB{(sign is not null ? ", signed" : "")}): {finalExe}");
         return 0;
+    }
+
+    /// <summary>
+    /// Builds the standalone update shim (<c>cascade-update[.exe]</c>) and copies it into the app
+    /// payload so it lands next to the installed app — <c>Updater.RequestUpdate()</c>/rollback hand
+    /// off to it. The shim references the app's shipped <c>Cascade.UI.Updater.Core.dll</c> (present
+    /// because the app depends on the Echostorm.Cascade.UI package), so it stays tiny. Its source is
+    /// embedded in this tool ("cascade-update-shim.cs") — one source of truth with the real
+    /// Cascade.UI.Updater.Shim project.
+    /// </summary>
+    private static int BuildUpdateShim(string work, string publishDir, string rid, string configuration, bool aot)
+    {
+        string updaterCore = IOPath.Combine(publishDir, "Cascade.UI.Updater.Core.dll");
+        if (!File.Exists(updaterCore))
+        {
+            Console.Error.WriteLine(
+                "  ✗ Cascade.UI.Updater.Core.dll not found in the app output. The app must reference the "
+                + "Echostorm.Cascade.UI package (which ships it) for the update shim to build.");
+            return 1;
+        }
+
+        string shimProjDir = IOPath.Combine(work, "shim");
+        Directory.CreateDirectory(shimProjDir);
+        File.WriteAllText(IOPath.Combine(shimProjDir, "shim.csproj"), ShimCsproj(aot, updaterCore));
+        File.WriteAllText(IOPath.Combine(shimProjDir, "Program.cs"), ReadEmbeddedText("cascade-update-shim.cs"));
+
+        // aot → self-contained native single file; otherwise framework-dependent to match the app
+        // (published --self-contained false) and stay small.
+        string scFlag = aot ? "" : " --self-contained false";
+        string shimOut = IOPath.Combine(work, "shim-out");
+        if (RunDotnet($"publish \"{IOPath.Combine(shimProjDir, "shim.csproj")}\" -c {configuration} -r {rid}{scFlag} -o \"{shimOut}\"") != 0)
+        {
+            return 1;
+        }
+
+        // Place the shim next to the app (into publishDir, so Step 2 stages it). Updater.Core.dll is
+        // already present (shipped by the app), so it is not recopied.
+        string exeName = OperatingSystem.IsWindows() ? "cascade-update.exe" : "cascade-update";
+        if (!CopyIfExists(IOPath.Combine(shimOut, exeName), IOPath.Combine(publishDir, exeName)))
+        {
+            Console.Error.WriteLine($"  ✗ Update shim exe not found at {IOPath.Combine(shimOut, exeName)}");
+            return 1;
+        }
+        if (!aot)
+        {
+            foreach (string extra in new[] { "cascade-update.dll", "cascade-update.runtimeconfig.json", "cascade-update.deps.json" })
+            {
+                CopyIfExists(IOPath.Combine(shimOut, extra), IOPath.Combine(publishDir, extra));
+            }
+        }
+        return 0;
+    }
+
+    private static string ShimCsproj(bool aot, string updaterCoreDll)
+    {
+        string publishProps = aot ? "\n    <PublishAot>true</PublishAot>" : "";
+        return $"""
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <OutputType>Exe</OutputType>
+                <TargetFramework>net10.0</TargetFramework>
+                <AssemblyName>cascade-update</AssemblyName>
+                <Nullable>enable</Nullable>
+                <ImplicitUsings>enable</ImplicitUsings>
+                <InvariantGlobalization>true</InvariantGlobalization>{publishProps}
+              </PropertyGroup>
+              <ItemGroup>
+                <Reference Include="Cascade.UI.Updater.Core">
+                  <HintPath>{updaterCoreDll}</HintPath>
+                </Reference>
+              </ItemGroup>
+            </Project>
+            """;
+    }
+
+    private static bool CopyIfExists(string src, string dst)
+    {
+        if (!File.Exists(src))
+        {
+            return false;
+        }
+        File.Copy(src, dst, overwrite: true);
+        return true;
+    }
+
+    private static string ReadEmbeddedText(string logicalName)
+    {
+        using Stream? stream = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream(logicalName);
+        if (stream is null)
+        {
+            throw new InvalidOperationException($"Embedded resource '{logicalName}' not found in the cascade tool.");
+        }
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
     }
 
     /// <summary>Finds the full name of the public <c>[Installer]</c> class in the app's source (via Roslyn).</summary>

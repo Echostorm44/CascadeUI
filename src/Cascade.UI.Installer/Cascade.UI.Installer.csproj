@@ -5,6 +5,11 @@
     <IsAotCompatible>true</IsAotCompatible>
     <!-- Source-generated COM (IShellLink) + P/Invoke require unsafe code. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- This assembly ships INSIDE the Echostorm.Cascade.UI package (its .dll + .xml are packed
+         into that package's lib/), so generate the doc file for consumer IntelliSense. Silence the
+         incremental XML-doc diagnostics so CI's -warnaserror stays green (same set as Cascade.UI). -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1574;CS0419;CS1587;CS1734</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Cascade.UI\Cascade.UI.csproj" />

@@ -4,11 +4,15 @@
 # Triggered when a version tag (v*) is pushed. Uses NuGet Trusted Publishing
 # (GitHub Actions OIDC) — no API key stored in the repo. Same pattern as SharpImage.
 #
-# Publishes three packages, all at the tag version (IDs live under the reserved Echostorm.*
+# Publishes five packages, all at the tag version (IDs live under the reserved Echostorm.*
 # prefix — the assemblies/namespaces stay Cascade.UI, exactly like Echostorm.Etch ships Etch.*):
-#   • Echostorm.Cascade.UI            — the framework (depends on the Echostorm.Etch package)
-#   • Echostorm.Cascade.UI.Templates  — `dotnet new` project templates (content-only)
-#   • Echostorm.Cascade.UI.Tools      — the `cascade` CLI (dotnet tool)
+#   • Echostorm.Cascade.UI                 — the framework (depends on Echostorm.Etch). Also carries
+#                                            the installer authoring API (CascadeInstaller, [Installer],
+#                                            updater) so `cascade package` works with no extra package.
+#   • Echostorm.Cascade.UI.Templates       — `dotnet new` project templates (content-only)
+#   • Echostorm.Cascade.UI.Tools           — the `cascade` CLI (dotnet tool)
+#   • Echostorm.Cascade.UI.Testing         — opt-in test harness (reference from *.Tests projects)
+#   • Echostorm.Cascade.UI.Installer.Sqlite — opt-in SQLite install-time DB provider
 #
 # Prerequisite — NuGet Trusted Publishing must authorize this repo/workflow to push these
 # Echostorm.Cascade.* IDs (same coordinates as the working Echostorm.Etch policy):
@@ -67,6 +71,12 @@ jobs:
           echo "VERSION=$TAG" >> "$GITHUB_OUTPUT"
           echo "📦 Cascade.UI $TAG"
 
+      # Build the installer assemblies first: Cascade.UI packs the prebuilt Cascade.UI.Installer.dll
+      # + Cascade.UI.Updater.Core.dll into its lib/ (they can't be ProjectReferences — that would be
+      # circular). Building the installer project produces those + Cascade.UI itself.
+      - name: Build installer assemblies (Cascade.UI packs them)
+        run: dotnet build src/Cascade.UI.Installer/Cascade.UI.Installer.csproj -c ${{ env.CONFIGURATION }} -p:Version=${{ steps.version.outputs.VERSION }}
+
       # Pack each package to ./artifacts. UseEtchPackage=true (workflow env) makes the build
       # depend on the published Echostorm.Etch package instead of Etch source (not on the runner).
       - name: Pack Cascade.UI
@@ -77,6 +87,15 @@ jobs:
 
       - name: Pack Cascade.UI.Tools
         run: dotnet pack src/Cascade.UI.Tools/Cascade.UI.Tools.csproj -c ${{ env.CONFIGURATION }} -p:Version=${{ steps.version.outputs.VERSION }} -o ./artifacts
+
+      # Opt-in add-on packages (own IDs under the reserved Echostorm.* prefix). Each depends on the
+      # Echostorm.Cascade.UI package at this same version. Requires a NuGet Trusted Publishing policy
+      # for each ID (same coordinates as Echostorm.Cascade.UI).
+      - name: Pack Cascade.UI.Testing
+        run: dotnet pack src/Cascade.UI.Testing/Cascade.UI.Testing.csproj -c ${{ env.CONFIGURATION }} -p:Version=${{ steps.version.outputs.VERSION }} -o ./artifacts
+
+      - name: Pack Cascade.UI.Installer.Sqlite
+        run: dotnet pack src/Cascade.UI.Installer.Sqlite/Cascade.UI.Installer.Sqlite.csproj -c ${{ env.CONFIGURATION }} -p:Version=${{ steps.version.outputs.VERSION }} -o ./artifacts
 
       - name: NuGet login (OIDC Trusted Publishing)
         uses: NuGet/login@v1

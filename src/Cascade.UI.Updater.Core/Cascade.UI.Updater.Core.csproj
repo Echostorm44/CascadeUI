@@ -3,5 +3,9 @@
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>Cascade.UI.Updater.Core</RootNamespace>
     <IsAotCompatible>true</IsAotCompatible>
+    <!-- Ships inside the Echostorm.Cascade.UI package (.dll + .xml packed into lib/); generate
+         docs for consumer IntelliSense and silence the incremental XML-doc diagnostics. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1574;CS0419;CS1587;CS1734</NoWarn>
   </PropertyGroup>
 </Project>

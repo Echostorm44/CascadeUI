@@ -2,10 +2,24 @@
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>Cascade.UI.Installer.Sqlite</RootNamespace>
-    <Description>SQLite install-time database provider for Cascade UI installers (ctx.Sql.For&lt;SqliteInstallerProvider&gt;()).</Description>
+    <IsAotCompatible>true</IsAotCompatible>
+    <Description>SQLite install-time database provider for Cascade UI installers (ctx.Sql.For&lt;SqliteInstallerProvider&gt;()). Opt-in add-on to Echostorm.Cascade.UI.</Description>
+    <PackageId>Echostorm.Cascade.UI.Installer.Sqlite</PackageId>
+    <Authors>Cascade UI Contributors</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <Version Condition="'$(Version)' == ''">0.1.0-alpha.1</Version>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1574;CS0419;CS1587;CS1734</NoWarn>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\Cascade.UI.Installer\Cascade.UI.Installer.csproj" />
+    <!-- Package dependency: this add-on depends on the framework, which carries the installer API
+         (Cascade.UI.Installer.dll ships inside Echostorm.Cascade.UI). Packing a ProjectReference to
+         Cascade.UI emits a lockstep dependency on Echostorm.Cascade.UI at this build's version. -->
+    <ProjectReference Include="..\Cascade.UI\Cascade.UI.csproj" />
+    <!-- Compile-only: SqliteInstallerProvider implements ISqlInstallerProvider (defined in the
+         installer assembly). PrivateAssets=all keeps the installer project OUT of this package's
+         dependency list and excludes its DLL — consumers get those types from Echostorm.Cascade.UI. -->
+    <ProjectReference Include="..\Cascade.UI.Installer\Cascade.UI.Installer.csproj" PrivateAssets="all" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.10" />
     <!-- Override the native SQLite bundle Microsoft.Data.Sqlite pulls transitively (e_sqlite3
          2.1.11) with a patched build, clearing NU1903 / GHSA-2m69-gcr7-jv3q. -->

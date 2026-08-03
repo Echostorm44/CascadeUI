@@ -39,6 +39,10 @@
     <ProjectReference Include="..\..\src\Cascade.IDE.Shared\Cascade.IDE.Shared.csproj" />
     <ProjectReference Include="..\..\tools\perf-drift\PerfDrift.csproj" />
     <ProjectReference Include="..\..\tools\changelog-gen\ChangelogGen.csproj" />
+    <!-- VisualRegressionTests uses Cascade.Tools.SnapshotDiff directly. It used to arrive
+         transitively via Cascade.UI.Testing, but that project no longer references the tool (the
+         Testing NuGet package must not carry a phantom 'SnapshotDiff' dependency). -->
+    <ProjectReference Include="..\..\tools\snapshot-diff\SnapshotDiff.csproj" />
   </ItemGroup>
 
   <ItemGroup>

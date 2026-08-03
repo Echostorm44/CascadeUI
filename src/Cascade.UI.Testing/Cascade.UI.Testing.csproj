@@ -5,13 +5,20 @@
     <RootNamespace>Cascade.UI.Testing</RootNamespace>
     <AssemblyName>Cascade.UI.Testing</AssemblyName>
     <IsAotCompatible>true</IsAotCompatible>
-    <Description>Cascade UI test harness — utilities for testing Cascade components</Description>
+    <Description>Cascade UI test harness — utilities for testing Cascade components (TestHost, ComponentTestHarness, NodeAssertions, TestClock, MCP test runner). Reference from your *.Tests project.</Description>
     <PackageId>Echostorm.Cascade.UI.Testing</PackageId>
+    <Authors>Cascade UI Contributors</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <Version Condition="'$(Version)' == ''">0.1.0-alpha.1</Version>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1574;CS0419;CS1587;CS1734</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Depends on the framework (packs as a lockstep Echostorm.Cascade.UI dependency). The former
+         ProjectReference to the SnapshotDiff tool was dead (no type used) and is removed — it would
+         otherwise have packed as a phantom dependency on a non-existent 'SnapshotDiff' package. -->
     <ProjectReference Include="..\Cascade.UI\Cascade.UI.csproj" />
-    <ProjectReference Include="..\..\tools\snapshot-diff\SnapshotDiff.csproj" />
   </ItemGroup>
 
 </Project>

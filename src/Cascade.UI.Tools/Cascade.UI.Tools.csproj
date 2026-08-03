@@ -30,4 +30,14 @@
     <InternalsVisibleTo Include="Cascade.UI.Tests" />
   </ItemGroup>
 
+  <!-- Embed the real update-shim source so `cascade package` can emit + build cascade-update.exe
+       from a single source of truth (no drift-prone copy). At package time it is written next to a
+       generated project that references the app's shipped Cascade.UI.Updater.Core.dll. -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\Cascade.UI.Updater.Shim\Program.cs">
+      <LogicalName>cascade-update-shim.cs</LogicalName>
+      <Visible>false</Visible>
+    </EmbeddedResource>
+  </ItemGroup>
+
 </Project>

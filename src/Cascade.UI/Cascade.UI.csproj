@@ -54,6 +54,27 @@
           Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
   </ItemGroup>
 
+  <!-- Ship the installer authoring API (CascadeInstaller, [Installer], InstallEngine, updater)
+       INSIDE this package so a NuGet consumer can build an installer with `cascade package`
+       without adding a separate package. These two assemblies (+ their XML docs) are packed as
+       additional lib/ references — NuGet references every assembly under lib/<tfm>/.
+
+       They are packed as PREBUILT outputs rather than via <ProjectReference>: Cascade.UI.Installer
+       references Cascade.UI, so a project reference back would be circular. The solution build
+       (which release packing runs first) produces these before Cascade.UI is packed. The optional
+       SQLite provider stays a separate opt-in package (Echostorm.Cascade.UI.Installer.Sqlite) so
+       the native SQLite dependency is not forced on every consumer. -->
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)..\Cascade.UI.Installer\bin\$(Configuration)\net10.0\Cascade.UI.Installer.dll"
+          Pack="true" PackagePath="lib/net10.0" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)..\Cascade.UI.Installer\bin\$(Configuration)\net10.0\Cascade.UI.Installer.xml"
+          Pack="true" PackagePath="lib/net10.0" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)..\Cascade.UI.Updater.Core\bin\$(Configuration)\net10.0\Cascade.UI.Updater.Core.dll"
+          Pack="true" PackagePath="lib/net10.0" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)..\Cascade.UI.Updater.Core\bin\$(Configuration)\net10.0\Cascade.UI.Updater.Core.xml"
+          Pack="true" PackagePath="lib/net10.0" Visible="false" />
+  </ItemGroup>
+
   <!-- Release: depend on the Etch bundle package instead of the Etch source project refs.
        Set by the pack/publish step; the repo's normal build leaves it unset → project refs.
        PrivateAssets=none so Echostorm.Etch's build/ targets (which deliver the native binaries

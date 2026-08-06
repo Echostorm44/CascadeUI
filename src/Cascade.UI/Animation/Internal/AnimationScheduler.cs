@@ -19,6 +19,13 @@ internal sealed class AnimationScheduler
     /// </summary>
     internal event Action? FrameRequested;
 
+    /// <summary>
+    /// Requests a single repaint without registering an animation — used when async work (e.g. an
+    /// off-thread image decode) finishes and the result needs to appear. Must be called on the UI
+    /// thread (frame scheduling is UI-thread affine); marshal to it first if you are on a worker.
+    /// </summary>
+    internal void RequestFrame() => FrameRequested?.Invoke();
+
     /// <summary>The number of currently active (non-paused, non-complete) animations.</summary>
     internal int ActiveCount
     {

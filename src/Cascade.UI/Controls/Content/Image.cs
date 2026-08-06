@@ -110,6 +110,13 @@ public sealed class Image : Node
     // path only — assumes app image files don't change at runtime.
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, ImageSource?> PathCache = new(StringComparer.Ordinal);
 
+    // Paths whose decode is currently running on a background thread. Decoding a (possibly
+    // multi-megapixel) file is real work and must NEVER run on the UI thread — it would freeze the
+    // app (a large drag-dropped photo stalled the UI for seconds). We kick the decode to the thread
+    // pool, show the placeholder meanwhile, and request a repaint (marshalled to the UI thread) when
+    // it lands. This set stops us starting the same decode twice.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> DecodingPaths = new(StringComparer.Ordinal);
+
     /// <summary>
     /// Returns the decoded image to render, resolving lazily from the file
     /// <see cref="Path"/> or raw <see cref="Data"/> the first time it is needed
@@ -126,18 +133,47 @@ public sealed class Image : Node
 
         if (Path is not null)
         {
-            Source = PathCache.GetOrAdd(Path, static p =>
+            // Already decoded (a null entry marks a decode that failed — don't retry it).
+            if (PathCache.TryGetValue(Path, out var cached))
             {
-                try
+                Source = cached;
+                return Source;
+            }
+
+            // Not decoded yet — decode OFF the UI thread. Return null now so the caller shows the
+            // placeholder; the image appears on the next frame after the decode finishes.
+            if (DecodingPaths.TryAdd(Path, 0))
+            {
+                string path = Path;
+                var uiContext = System.Threading.SynchronizationContext.Current;
+                _ = System.Threading.Tasks.Task.Run(() =>
                 {
-                    return ImageSource.FromFile(p);
-                }
-                catch (Exception ex) when (ex is IOException or NotSupportedException or FormatException or UnauthorizedAccessException)
-                {
-                    return null;
-                }
-            });
-            return Source;
+                    ImageSource? decoded;
+                    try
+                    {
+                        decoded = ImageSource.FromFile(path);
+                    }
+                    catch (Exception ex) when (ex is IOException or NotSupportedException or FormatException or UnauthorizedAccessException)
+                    {
+                        decoded = null;
+                    }
+
+                    PathCache[path] = decoded;
+                    DecodingPaths.TryRemove(path, out _);
+
+                    // Frame scheduling is UI-thread affine — marshal the repaint request back.
+                    if (uiContext is not null)
+                    {
+                        uiContext.Post(static _ => SharedScheduler.Instance.RequestFrame(), null);
+                    }
+                    else
+                    {
+                        SharedScheduler.Instance.RequestFrame();
+                    }
+                });
+            }
+
+            return null;
         }
 
         if (Data is { } bytes)

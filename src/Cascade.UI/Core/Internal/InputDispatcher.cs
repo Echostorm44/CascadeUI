@@ -68,6 +68,11 @@ internal sealed class InputDispatcher
     private ITabularDataNode? columnReorderTdn;
     private float reorderStartMouseX;
     private float reorderStartMouseY;
+    // Pointer position at mouse-down, so a zero-movement release still counts as a tap even when the
+    // node under it is a DIFFERENT instance than at press (virtualized ListView/TreeView rows are
+    // rebuilt every frame, so ReferenceEquals to the pressed node fails for a legitimate tap).
+    private float mouseDownX;
+    private float mouseDownY;
     private int reorderPendingCol = -1;
     private bool reorderDragActive;
 
@@ -1220,6 +1225,8 @@ internal sealed class InputDispatcher
     {
         isMouseDown = true;
         lastMouseModifiers = evt.Modifiers;
+        mouseDownX = evt.X;
+        mouseDownY = evt.Y;
 
         // A ListView swipe is open: a left click either invokes a revealed action
         // button (fired on release) or, anywhere else, dismisses the swipe.
@@ -2400,8 +2407,17 @@ internal sealed class InputDispatcher
         var args = CreatePointerArgs(hitNode, evt);
         InvokeGesture(hitNode, g => g.PointerUp, args);
 
-        // If released on the same node as the press, it's a tap/click
-        if (hitNode is not null && ReferenceEquals(hitNode, previousPressed) && evt.Button == NativeMouseButton.Left)
+        // A left click is a tap when it lands on the node it started on. ReferenceEquals covers the
+        // normal (reconciled) tree. For virtualized ListView/TreeView rows, the built content is
+        // rebuilt every frame, so a press then release over the SAME on-screen button resolves to two
+        // different instances — treat a zero-movement release over an interactive node as a tap too,
+        // so per-row buttons (e.g. a row's "remove" X) actually fire.
+        bool sameNode = ReferenceEquals(hitNode, previousPressed);
+        bool tapWithoutMove = previousPressed != null
+            && IsInteractiveNode(hitNode)
+            && MathF.Abs(evt.X - mouseDownX) < 4f
+            && MathF.Abs(evt.Y - mouseDownY) < 4f;
+        if (hitNode is not null && (sameNode || tapWithoutMove) && evt.Button == NativeMouseButton.Left)
         {
             InvokeTap(hitNode);
 

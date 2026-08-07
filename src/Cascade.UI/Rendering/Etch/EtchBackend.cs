@@ -64,6 +64,15 @@ internal sealed class EtchBackend : IDisposable
     internal readonly List<Rect> OverlayBounds = new();
     private bool IsCapturingOverlay => _overlayStack.Count > 0;
 
+    // Command-stream index at which deferred-overlay (popup) painting begins. DrawImage ops BEFORE
+    // this are main-frame content — culled where an OverlayBounds rect covers them, so a row icon
+    // behind an open dropdown doesn't bleed through it (glyphs are already culled the same way). Ops
+    // at/after this belong to the overlays themselves and are never culled. int.MaxValue = no overlay.
+    internal int OverlayCommandStart = int.MaxValue;
+
+    /// <summary>Records that deferred-overlay painting is about to begin (see OverlayCommandStart).</summary>
+    internal void MarkOverlayStart() => OverlayCommandStart = Commands.Count;
+
     // Layer texture compositing — Flutter-style retained layers
     private ulong _nextLayerHandle = 1;
     private ulong? _activeLayerHandle;
@@ -379,6 +388,7 @@ internal sealed class EtchBackend : IDisposable
         GlyphCommands.Clear();
         OverlayGlyphCommands.Clear();
         OverlayBounds.Clear();
+        OverlayCommandStart = int.MaxValue;
         _overlayStack.Clear();
         _overlayBoundsStack.Clear();
         _clipStack.Clear();

@@ -2250,8 +2250,10 @@ int overlayCulled = 0;
         // Main pass — images in the root command stream. The root DPI-scale
         // PushTransform is part of this stream, so walking it here makes the
         // destination rect device-correct at any DPI.
+        int cmdIndex = -1;
         foreach (var cmd in backend.Commands)
         {
+            cmdIndex++;
             switch (cmd.Kind)
             {
                 case EtchBackend.OpKind.PushTransform:
@@ -2304,6 +2306,29 @@ int overlayCulled = 0;
                         if (deviceRect.IsEmpty)
                         {
                             break;
+                        }
+
+                        // Occlusion: a MAIN-frame image (issued before deferred-overlay painting) that
+                        // an open popup covers must be culled, or it bleeds through the popup — the
+                        // image pass otherwise composites above the popup's shape background. Overlay
+                        // glyphs are culled the same way (OverlayBounds, device space); the overlays'
+                        // own images (index >= boundary) are exempt.
+                        if (cmdIndex < backend.OverlayCommandStart && backend.OverlayBounds.Count > 0)
+                        {
+                            bool underOverlay = false;
+                            foreach (var ob in backend.OverlayBounds)
+                            {
+                                if (deviceRect.MinX < ob.X + ob.Width && deviceRect.MaxX > ob.X &&
+                                    deviceRect.MinY < ob.Y + ob.Height && deviceRect.MaxY > ob.Y)
+                                {
+                                    underOverlay = true;
+                                    break;
+                                }
+                            }
+                            if (underOverlay)
+                            {
+                                break;
+                            }
                         }
 
                         float dl = (float)deviceRect.MinX, dt = (float)deviceRect.MinY;

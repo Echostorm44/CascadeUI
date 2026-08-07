@@ -287,6 +287,9 @@ internal sealed class NodePainter
         Cascade.UI.Diagnostics.DiagnosticsHub.MarkPhase("paint.recursive");
         PaintRecursive(node);
         Cascade.UI.Diagnostics.DiagnosticsHub.MarkPhase("paint.overlays");
+        // Everything drawn from here on is a popup overlay — mark the boundary so the presenter culls
+        // main-frame images (icons) that an overlay covers, not the overlays' own images.
+        ctx.MarkOverlayStart();
         PaintDeferredOverlays();
         if (CommandPalette.IsOpen)
         {

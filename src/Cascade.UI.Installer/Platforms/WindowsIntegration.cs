@@ -239,6 +239,37 @@ internal static partial class WindowsIntegration
 
         string label = entry.Label.Replace('\\', '_');
         var keys = new List<string>();
+
+        // Per-extension: register under SystemFileAssociations\.ext\shell\<label> so the entry appears
+        // only for those file types. This is the additive, non-destructive verb location — it does NOT
+        // touch the extension's ProgId or its default open handler (unlike a file association).
+        if (entry.Extensions.Count > 0)
+        {
+            foreach (string rawExt in entry.Extensions)
+            {
+                if (string.IsNullOrWhiteSpace(rawExt))
+                {
+                    continue;
+                }
+                string ext = rawExt.StartsWith('.') ? rawExt : "." + rawExt;
+                string root = ClassesRoot + @"SystemFileAssociations\" + ext + @"\shell\" + label;
+                using (RegistryKey key = Registry.CurrentUser.CreateSubKey(root))
+                {
+                    key.SetValue(null, entry.Label);
+                    if (iconPath is { Length: > 0 })
+                    {
+                        key.SetValue("Icon", iconPath);
+                    }
+                }
+                using (RegistryKey cmd = Registry.CurrentUser.CreateSubKey(root + @"\command"))
+                {
+                    cmd.SetValue(null, $"\"{command}\" \"%1\"");
+                }
+                keys.Add(HkcuPrefix + root);
+            }
+            return keys;
+        }
+
         foreach (string target in ContextTargets(entry.Target))
         {
             string root = ClassesRoot + target + @"\shell\" + label;

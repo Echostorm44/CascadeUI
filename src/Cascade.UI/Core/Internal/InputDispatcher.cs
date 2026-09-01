@@ -2854,10 +2854,13 @@ internal sealed class InputDispatcher
         }
 
         // NumberInput typing — digits/sign/decimal editing with a commit-on-Enter/blur buffer.
+        // Unlike TextInput (which commits live and re-renders via its binding), NumberInput edits are
+        // buffered, so nothing else triggers a paint — request one here after every handled key.
         if (focusedNode is INumberInput numberInput && !numberInput.IsDisabled && !numberInput.IsReadOnly)
         {
             if (HandleNumberInputKey(numberInput, evt))
             {
+                RequestRepaint?.Invoke();
                 return;
             }
         }

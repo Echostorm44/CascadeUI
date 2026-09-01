@@ -25,7 +25,6 @@ internal sealed class InstallerWizard : Component
     private enum Step
     {
         Welcome,
-        Confirm,
         Installing,
         Uninstalling,
         Finish,
@@ -37,6 +36,17 @@ internal sealed class InstallerWizard : Component
     private double progress;
     private string statusText = "";
     private string errorText = "";
+
+    // ── Palette (light content + a dark branded sidebar, tied to the app's look) ──
+    private static readonly ColorValue Ink = new("#1D1D1F");
+    private static readonly ColorValue Muted = new("#6E6E73");
+    private static readonly ColorValue Hairline = new("#E5E5EA");
+    private static readonly ColorValue Accent = new("#0A84FF");
+    private static readonly ColorValue Danger = new("#D70015");
+    private static readonly ColorValue ContentBg = new("#FFFFFF");
+    private static readonly ColorValue SidebarBg = new("#1C1C1E");
+    private static readonly ColorValue SidebarText = new("#FFFFFF");
+    private static readonly ColorValue SidebarMuted = new("#8E8E93");
 
     public static void Configure(
         CascadeInstaller wizardInstaller,
@@ -60,76 +70,174 @@ internal sealed class InstallerWizard : Component
     protected override Node Render() => step switch
     {
         Step.Welcome => WelcomeView(),
-        Step.Confirm => ConfirmView(),
-        Step.Installing => ProgressView($"Installing {config?.AppName}…", determinate: true),
-        Step.Uninstalling => ProgressView($"Removing {config?.AppName}…", determinate: false),
-        Step.Finish => FinishView($"{config?.AppName} was installed", $"{config?.AppName} {config?.Version} is ready to use."),
-        Step.Uninstalled => FinishView($"{config?.AppName} was removed", "It has been uninstalled from your computer."),
+        Step.Installing => ProgressView($"Installing {config?.AppName}", determinate: true),
+        Step.Uninstalling => ProgressView($"Removing {config?.AppName}", determinate: false),
+        Step.Finish => FinishView($"{config?.AppName} is installed", $"Version {config?.Version} is ready to use.", Accent),
+        Step.Uninstalled => FinishView($"{config?.AppName} was removed", "It has been uninstalled from your computer.", Muted),
         _ => FailedView(),
     };
 
     private Node WelcomeView()
     {
+        // Fresh install.
         if (installedVersion is null)
         {
-            return Frame(
-                new Label($"Welcome to {config?.AppName} Setup").FontSize(26),
-                new Label($"Version {config?.Version}" + (config?.Publisher is { Length: > 0 } p ? $"  ·  {p}" : "")).FontSize(14),
-                new Label($"This will install {config?.AppName} on your computer.").FontSize(14),
-                Buttons(
-                    new Button("Cancel", () => Close(1)).Width(120f),
-                    new Button("Continue", () => { step = Step.Confirm; Invalidate(); }).Width(160f)));
+            return Shell(
+                Body("Install " + config?.AppName,
+                    $"This will install {config?.AppName} on your computer. It only takes a moment.",
+                    LocationRow()),
+                Footer(
+                    SecondaryButton("Cancel", () => Close(1)),
+                    PrimaryButton("Install", () => _ = StartInstallAsync(repair: false))));
         }
 
+        // Same version already installed → repair / uninstall.
         if (string.Equals(installedVersion, config?.Version, StringComparison.Ordinal))
         {
-            return Frame(
-                new Label($"{config?.AppName} is already installed").FontSize(24),
-                new Label($"Version {installedVersion} is installed at:").FontSize(13),
-                new Label(installDir).FontSize(12),
-                Buttons(
-                    new Button("Uninstall", () => { _ = StartUninstallAsync(); }).Width(140f),
-                    new Button("Repair", () => { _ = StartInstallAsync(repair: true); }).Width(120f),
-                    new Button("Close", () => Close(0)).Width(120f)));
+            return Shell(
+                Body($"{config?.AppName} is already installed",
+                    $"Version {installedVersion} is installed on this computer. You can repair it or remove it.",
+                    LocationRow()),
+                Footer(
+                    SecondaryButton("Uninstall", () => _ = StartUninstallAsync()),
+                    SecondaryButton("Close", () => Close(0)),
+                    PrimaryButton("Repair", () => _ = StartInstallAsync(repair: true))));
         }
 
-        return Frame(
-            new Label($"Update {config?.AppName}").FontSize(24),
-            new Label($"Version {installedVersion} is installed. Update to {config?.Version}?").FontSize(14),
-            Buttons(
-                new Button("Uninstall", () => { _ = StartUninstallAsync(); }).Width(140f),
-                new Button("Update", () => { _ = StartInstallAsync(repair: false); }).Width(140f),
-                new Button("Cancel", () => Close(1)).Width(120f)));
+        // Different version installed → update / uninstall.
+        return Shell(
+            Body($"Update {config?.AppName}",
+                $"Version {installedVersion} is installed. Update it to version {config?.Version}?",
+                LocationRow()),
+            Footer(
+                SecondaryButton("Uninstall", () => _ = StartUninstallAsync()),
+                SecondaryButton("Cancel", () => Close(1)),
+                PrimaryButton("Update", () => _ = StartInstallAsync(repair: false))));
     }
 
-    private Node ConfirmView() =>
-        Frame(
-            new Label("Confirm installation").FontSize(22),
-            new Label("It will be installed to:").FontSize(13),
-            new Label(installDir).FontSize(13),
-            Buttons(
-                new Button("Back", () => { step = Step.Welcome; Invalidate(); }).Width(120f),
-                new Button("Install", () => { _ = StartInstallAsync(repair: false); }).Width(160f)));
-
     private Node ProgressView(string title, bool determinate) =>
-        Frame(
-            new Label(title).FontSize(22),
-            determinate
-                ? new ProgressBar((float)(progress / 100.0)).Width(380f).ShowLabel(true)
-                : new ProgressBar(ProgressMode.Indeterminate).Width(380f),
-            new Label(statusText).FontSize(13));
+        Shell(
+            new Column(spacing: 14, crossAxisAlignment: CrossAxisAlignment.Start,
+                children:
+                [
+                    new Spacer(),
+                    new Label(title).FontSize(24).Bold().Color(Ink),
+                    determinate
+                        ? new ProgressBar((float)(progress / 100.0)).FillColor(Accent).Height(8f).ShowLabel(true)
+                        : new ProgressBar(ProgressMode.Indeterminate).FillColor(Accent).Height(8f),
+                    new Label(statusText.Length > 0 ? statusText : "Please wait…").FontSize(13).Color(Muted).MaxLines(1).Overflow(TextOverflow.Ellipsis),
+                    new Spacer(),
+                ]),
+            footer: null);
 
-    private static Node FinishView(string title, string subtitle) =>
-        Frame(
-            new Label(title).FontSize(24),
-            new Label(subtitle).FontSize(14),
-            Buttons(new Button("Finish", () => Close(0)).Width(160f)));
+    private static Node FinishView(string title, string subtitle, ColorValue accent) =>
+        Shell(
+            new Column(spacing: 12, crossAxisAlignment: CrossAxisAlignment.Start,
+                children:
+                [
+                    new Spacer(),
+                    new Label("✓").FontSize(34).Bold().Color(accent),
+                    new Label(title).FontSize(24).Bold().Color(Ink),
+                    new Label(subtitle).FontSize(14).Color(Muted).Wrap(TextWrap.Wrap),
+                    new Spacer(),
+                ]),
+            Footer(PrimaryButton("Finish", () => Close(0))));
 
     private Node FailedView() =>
-        Frame(
-            new Label("Something went wrong").FontSize(22),
-            new Label(errorText).FontSize(13),
-            Buttons(new Button("Close", () => Close(20)).Width(160f)));
+        Shell(
+            new Column(spacing: 12, crossAxisAlignment: CrossAxisAlignment.Start,
+                children:
+                [
+                    new Spacer(),
+                    new Label("Something went wrong").FontSize(22).Bold().Color(Danger),
+                    new Label(errorText.Length > 0 ? errorText : "The operation could not be completed.")
+                        .FontSize(13).Color(Muted).Wrap(TextWrap.Wrap).MaxLines(4),
+                    new Spacer(),
+                ]),
+            Footer(PrimaryButton("Close", () => Close(20))));
+
+    // ── Layout building blocks ────────────────────────────────────────
+
+    /// <summary>A titled content column with a description and optional extra rows, vertically centered.</summary>
+    private static Node Body(string title, string description, params Node[] extra)
+    {
+        var children = new List<Node>
+        {
+            new Spacer(),
+            new Label(title).FontSize(26).Bold().Color(Ink).Wrap(TextWrap.Wrap),
+            new Label(description).FontSize(14).Color(Muted).Wrap(TextWrap.Wrap),
+        };
+        children.AddRange(extra);
+        children.Add(new Spacer());
+        return new Column(spacing: 12, crossAxisAlignment: CrossAxisAlignment.Start, children: [.. children]);
+    }
+
+    private static Node LocationRow() =>
+        new Column(spacing: 3, crossAxisAlignment: CrossAxisAlignment.Start,
+            children:
+            [
+                new Label("INSTALL LOCATION").FontSize(10).Bold().Color(Muted),
+                new Label(installDir).FontSize(13).Color(Ink).MaxLines(2).Overflow(TextOverflow.Ellipsis),
+            ]).Margin(0, 8);
+
+    /// <summary>Two-pane frame: a dark branded sidebar + a light content pane with an optional footer.</summary>
+    private static Node Shell(Node content, Node? footer)
+    {
+        var pane = new List<Node> { content.Expand().Padding(EdgeInsets.Symmetric(horizontal: 36, vertical: 28)) };
+        if (footer is not null)
+        {
+            pane.Add(new Column(children: []).Height(1).Background(Hairline));
+            pane.Add(footer.Padding(EdgeInsets.Symmetric(horizontal: 28, vertical: 18)));
+        }
+
+        return new Row(
+            children:
+            [
+                Sidebar().Width(224f),
+                new Column(children: [.. pane]).Expand().Background(ContentBg),
+            ]).Background(ContentBg);
+    }
+
+    private static Node Sidebar()
+    {
+        string name = config?.AppName ?? "App";
+        string initial = name.Length > 0 ? name[..1].ToUpperInvariant() : "A";
+        return new Column(
+            spacing: 16,
+            crossAxisAlignment: CrossAxisAlignment.Start,
+            children:
+            [
+                new Center(new Label(initial).FontSize(26).Bold().Color(SidebarText))
+                    .Size(56f).Background(Accent).CornerRadius(14),
+                new Column(
+                    spacing: 4,
+                    crossAxisAlignment: CrossAxisAlignment.Start,
+                    children:
+                    [
+                        new Label(name).FontSize(17).Bold().Color(SidebarText).MaxLines(2).Wrap(TextWrap.Wrap).Overflow(TextOverflow.Ellipsis),
+                        new Label($"Version {config?.Version}").FontSize(12).Color(SidebarMuted),
+                    ]),
+                new Spacer(),
+                config?.Publisher is { Length: > 0 } pub
+                    ? new Label(pub).FontSize(11).Color(SidebarMuted)
+                    : Node.Empty,
+            ])
+            .Padding(EdgeInsets.All(24))
+            .Background(SidebarBg);
+    }
+
+    private static Node Footer(params Node[] buttons)
+    {
+        var row = new List<Node> { new Spacer() };
+        row.AddRange(buttons);
+        return new Row(spacing: 10, crossAxisAlignment: CrossAxisAlignment.Center, children: [.. row]);
+    }
+
+    private static Node PrimaryButton(string text, Action onClick) =>
+        new Button(text, onClick).Width(148f).Height(40f);
+
+    private static Node SecondaryButton(string text, Action onClick) =>
+        new Button(text, onClick).Variant("outline").Width(120f).Height(40f);
 
     private async Task StartInstallAsync(bool repair)
     {
@@ -214,10 +322,4 @@ internal sealed class InstallerWizard : Component
         ExitCode = exitCode;
         App.Exit(exitCode);
     }
-
-    private static Node Frame(params Node[] children) =>
-        new Center(new Column(spacing: 18, crossAxisAlignment: CrossAxisAlignment.Center, children: children));
-
-    private static Node Buttons(params Node[] buttons) =>
-        new Row(spacing: 12, children: buttons);
 }

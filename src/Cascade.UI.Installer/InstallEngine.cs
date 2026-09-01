@@ -273,7 +273,10 @@ public sealed class InstallEngine
         // The app's icon, used by default for shortcuts AND shell integrations below.
         string appIconFile = ResolveAppIconFile(config, paths);
 
-        foreach (Shortcut shortcut in installer.Shortcuts)
+        // Shortcuts may be declared either on the installer (the Shortcuts property) OR inline in
+        // Configure()'s InstallerConfig.Shortcuts (as the examples do) — honor both so neither is
+        // silently ignored.
+        foreach (Shortcut shortcut in installer.Shortcuts.Concat(config.Shortcuts))
         {
             string target = paths.Resolve(shortcut.TargetPath);
             string workDir = shortcut.WorkingDirectory is { Length: > 0 } wd ? paths.Resolve(wd) : installDir;

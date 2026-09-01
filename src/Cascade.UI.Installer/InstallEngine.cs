@@ -332,7 +332,7 @@ public sealed class InstallEngine
         }
         manifest.AddRegistryKey(Platforms.WindowsIntegration.WriteUninstallEntry(config, installDir, uninstallerPath));
 
-        if (config.FileAssociations.Count > 0 || config.ProtocolHandlers.Count > 0)
+        if (config.FileAssociations.Count > 0 || config.ProtocolHandlers.Count > 0 || config.ContextMenuEntries.Count > 0)
         {
             Platforms.WindowsIntegration.NotifyAssociationsChanged();
         }

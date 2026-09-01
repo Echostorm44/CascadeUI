@@ -204,4 +204,64 @@ public sealed class WindowsIntegrationTests
             Registry.CurrentUser.DeleteSubKeyTree(root, throwOnMissingSubKey: false);
         }
     }
+
+    [Test]
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public async Task ContextMenu_PerExtension_RegistersUnderSystemFileAssociations_ThenDeletes()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        const string label = "CascadeUITestConvert";
+        // Mix leading-dot and bare forms — both must normalise to ".ext".
+        string[] exts = [".cuitpng", "cuitjpg"];
+        string BaseKey(string ext) => @"Software\Classes\SystemFileAssociations\" + ext + @"\shell\" + label;
+        try
+        {
+            var entry = new ShellContextMenuEntry
+            {
+                Label = label,
+                Command = @"C:\App\App.exe",
+                Extensions = exts,
+                // Target is deliberately Background to prove Extensions overrides it.
+                Target = ContextMenuTarget.Background,
+            };
+            IReadOnlyList<string> keys = WindowsIntegration.RegisterContextMenu(entry, @"C:\App\App.exe", @"C:\App\App.exe,0");
+
+            // Registered under BOTH extensions, and NOT under the all-files "*" key.
+            await Assert.That(keys.Count).IsEqualTo(2);
+            await Assert.That(Registry.CurrentUser.OpenSubKey(@"Software\Classes\*\shell\" + label)).IsNull();
+
+            foreach (string ext in new[] { ".cuitpng", ".cuitjpg" })
+            {
+                using RegistryKey? key = Registry.CurrentUser.OpenSubKey(BaseKey(ext));
+                await Assert.That(key).IsNotNull();
+                await Assert.That(key!.GetValue(null) as string).IsEqualTo(label);
+                await Assert.That(key.GetValue("Icon") as string).IsEqualTo(@"C:\App\App.exe,0");
+                using RegistryKey? cmd = Registry.CurrentUser.OpenSubKey(BaseKey(ext) + @"\command");
+                await Assert.That((cmd!.GetValue(null) as string)!.Contains("App.exe", StringComparison.Ordinal)).IsTrue();
+                await Assert.That((cmd.GetValue(null) as string)!.Contains("%1", StringComparison.Ordinal)).IsTrue();
+            }
+
+            // The returned keys are exactly what the manifest records — deleting them (as the
+            // uninstaller does) removes every trace.
+            foreach (string key in keys)
+            {
+                WindowsIntegration.DeleteHkcuKey(key);
+            }
+            foreach (string ext in new[] { ".cuitpng", ".cuitjpg" })
+            {
+                await Assert.That(Registry.CurrentUser.OpenSubKey(BaseKey(ext))).IsNull();
+            }
+        }
+        finally
+        {
+            foreach (string ext in new[] { ".cuitpng", ".cuitjpg" })
+            {
+                Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\SystemFileAssociations\" + ext, throwOnMissingSubKey: false);
+            }
+        }
+    }
 }

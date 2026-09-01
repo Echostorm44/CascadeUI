@@ -356,6 +356,16 @@ internal sealed class InputDispatcher
     /// <summary>Current horizontal scroll offset for the focused TextInput (logical pixels).</summary>
     internal static float TextInputScrollOffsetX { get; set; }
 
+    /// <summary>
+    /// The in-progress typing buffer for the focused NumberInput, or null when the user is not
+    /// typing into one (value shown from the bound value; stepper/scroll edits leave this null).
+    /// Committed to the bound value on Enter or blur; the painter renders it while non-null.
+    /// </summary>
+    internal static string? NumberEditBuffer { get; private set; }
+
+    /// <summary>Caret index within <see cref="NumberEditBuffer"/>.</summary>
+    internal static int NumberInputCaretIndex { get; private set; }
+
     /// <summary>Current horizontal scroll offset for the focused PasswordInput (logical pixels).</summary>
     internal static float PasswordScrollOffsetX { get; set; }
 
@@ -2002,6 +2012,12 @@ internal sealed class InputDispatcher
                 prevTag.IsFocused = false;
             }
 
+            // Commit a pending NumberInput edit when focus moves to a different control.
+            if (FocusManager.FocusedElement is INumberInput prevNi && !ReferenceEquals(prevNi, focusTarget))
+            {
+                CommitNumberInputEdit(prevNi);
+            }
+
             FocusManager.RequestFocus(focusTarget);
 
             // Initialize text editing buffer when focusing a TextInput
@@ -2832,6 +2848,15 @@ internal sealed class InputDispatcher
         if (focusedNode is TextInput textInput && !textInput.IsDisabled && !textInput.IsReadOnly)
         {
             if (HandleTextInputKey(textInput, evt))
+            {
+                return;
+            }
+        }
+
+        // NumberInput typing — digits/sign/decimal editing with a commit-on-Enter/blur buffer.
+        if (focusedNode is INumberInput numberInput && !numberInput.IsDisabled && !numberInput.IsReadOnly)
+        {
+            if (HandleNumberInputKey(numberInput, evt))
             {
                 return;
             }
@@ -5612,8 +5637,151 @@ internal sealed class InputDispatcher
 
     // ── NumberInput helpers ──────────────────────────────────────────
 
+    /// <summary>Commits a pending typing buffer to the control's value (if any) and clears it.</summary>
+    private static void CommitNumberInputEdit(INumberInput ni)
+    {
+        if (NumberEditBuffer is { } buf)
+        {
+            if (buf.Trim().Length > 0)
+            {
+                ni.TryCommitText(buf); // invalid text leaves the value unchanged
+            }
+            NumberEditBuffer = null;
+        }
+    }
+
+    /// <summary>
+    /// Keyboard editing for a focused NumberInput: type digits (plus sign/decimal where the numeric
+    /// type allows), Backspace/Delete, caret navigation, Up/Down to step, Enter to commit, Escape to
+    /// revert. The typed value is buffered and only written back on Enter or when focus leaves.
+    /// Returns true when the key was consumed.
+    /// </summary>
+    private bool HandleNumberInputKey(INumberInput ni, NativeKeyEvent evt)
+    {
+        bool ctrl = evt.Modifiers.HasFlag(ModifierKeys.Ctrl);
+
+        // Commit / revert / step — valid whether or not a buffer exists yet.
+        if (evt.Key == Key.Enter)
+        {
+            CommitNumberInputEdit(ni);
+            return true;
+        }
+        if (evt.Key == Key.Escape)
+        {
+            NumberEditBuffer = null; // discard edits, fall back to the bound value
+            RequestRepaint?.Invoke();
+            return true;
+        }
+        if (evt.Key == Key.Up)
+        {
+            NumberEditBuffer = null;
+            ni.Increment();
+            return true;
+        }
+        if (evt.Key == Key.Down)
+        {
+            NumberEditBuffer = null;
+            ni.Decrement();
+            return true;
+        }
+
+        CaretResetTimestamp = Stopwatch.GetTimestamp();
+
+        // Printable character: begin a FRESH edit from empty so the first digit replaces the
+        // displayed value (the common "click and type a new number" flow). Subsequent characters
+        // append/insert normally.
+        if (evt.Character is char ch && ch >= ' ')
+        {
+            if (NumberEditBuffer is null)
+            {
+                NumberEditBuffer = string.Empty;
+                NumberInputCaretIndex = 0;
+            }
+            NumberInputCaretIndex = Math.Clamp(NumberInputCaretIndex, 0, NumberEditBuffer.Length);
+            if (IsValidNumberChar(ni, ch, NumberEditBuffer, NumberInputCaretIndex))
+            {
+                NumberEditBuffer = NumberEditBuffer.Insert(NumberInputCaretIndex, ch.ToString());
+                NumberInputCaretIndex++;
+            }
+            return true; // swallow non-numeric printable keys too
+        }
+
+        // Navigation / deletion edit the EXISTING value — seed the buffer from it if needed.
+        if (NumberEditBuffer is null)
+        {
+            NumberEditBuffer = ni.EditableText;
+            NumberInputCaretIndex = NumberEditBuffer.Length;
+        }
+        NumberInputCaretIndex = Math.Clamp(NumberInputCaretIndex, 0, NumberEditBuffer.Length);
+
+        if (ctrl && evt.Key == Key.A)
+        {
+            NumberInputCaretIndex = NumberEditBuffer.Length;
+            return true;
+        }
+        if (evt.Key == Key.Left)
+        {
+            if (NumberInputCaretIndex > 0) { NumberInputCaretIndex--; }
+            return true;
+        }
+        if (evt.Key == Key.Right)
+        {
+            if (NumberInputCaretIndex < NumberEditBuffer.Length) { NumberInputCaretIndex++; }
+            return true;
+        }
+        if (evt.Key == Key.Home)
+        {
+            NumberInputCaretIndex = 0;
+            return true;
+        }
+        if (evt.Key == Key.End)
+        {
+            NumberInputCaretIndex = NumberEditBuffer.Length;
+            return true;
+        }
+        if (evt.Key == Key.Backspace)
+        {
+            if (NumberInputCaretIndex > 0)
+            {
+                NumberEditBuffer = NumberEditBuffer.Remove(NumberInputCaretIndex - 1, 1);
+                NumberInputCaretIndex--;
+            }
+            return true;
+        }
+        if (evt.Key == Key.Delete)
+        {
+            if (NumberInputCaretIndex < NumberEditBuffer.Length)
+            {
+                NumberEditBuffer = NumberEditBuffer.Remove(NumberInputCaretIndex, 1);
+            }
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsValidNumberChar(INumberInput ni, char ch, string buffer, int caret)
+    {
+        if (ch is >= '0' and <= '9')
+        {
+            return true;
+        }
+        if (ch == '-' && ni.AllowsSign && caret == 0 && !buffer.Contains('-', StringComparison.Ordinal))
+        {
+            return true;
+        }
+        if (ch == '.' && ni.AllowsDecimal && !buffer.Contains('.', StringComparison.Ordinal))
+        {
+            return true;
+        }
+        return false;
+    }
+
     private void HandleNumberInputClick(INumberInput ni)
     {
+        // A stepper/scroll interaction cancels any in-progress typing (its value wins).
+        NumberEditBuffer = null;
+
         var bounds = ni.AbsoluteBounds;
         float relX = lastMousePosition.X - bounds.X;
         float relY = lastMousePosition.Y - bounds.Y;

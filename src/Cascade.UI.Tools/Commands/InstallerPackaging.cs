@@ -108,9 +108,13 @@ internal static class InstallerPackaging
 
         Console.WriteLine($"  Building installer for {appName} ({rid}, installer class {installerClass}{(aot ? ", AOT wizard" : "")}{(sign is not null ? ", signed" : "")}{(appIcon is not null ? ", app icon" : "")})...");
 
-        Console.WriteLine("  Step 1: publishing the app (payload)...");
+        Console.WriteLine($"  Step 1: publishing the app (payload){(aot ? " (AOT — native, no .NET runtime needed)" : " (self-contained)")}...");
+        // The app payload is SELF-CONTAINED so the installed app needs NO .NET runtime on the user's
+        // machine — either native AOT (the default) or a self-contained JIT build (--no-aot, for apps
+        // that aren't AOT-compatible; larger, still zero-dependency). Never framework-dependent.
         // DebugType=none: don't emit the app's own .pdb into the payload (it ships to the user's disk).
-        if (RunDotnet($"publish \"{appProject}\" -c {configuration} -r {rid} --self-contained false -p:PublishAot=false -p:DebugType=none -p:DebugSymbols=false -o \"{publishDir}\"") != 0)
+        string appPayloadProps = aot ? "--self-contained -p:PublishAot=true" : "--self-contained -p:PublishAot=false";
+        if (RunDotnet($"publish \"{appProject}\" -c {configuration} -r {rid} {appPayloadProps} -p:DebugType=none -p:DebugSymbols=false -o \"{publishDir}\"") != 0)
         {
             return 1;
         }
@@ -118,7 +122,7 @@ internal static class InstallerPackaging
         Console.WriteLine($"  Step 1b: building the update shim (cascade-update){(aot ? " (AOT)" : "")}...");
         // Delivers cascade-update[.exe] next to the app so Updater.RequestUpdate()/rollback can hand
         // off to it — without this the auto-update path throws "Update shim not found next to the app".
-        if (BuildUpdateShim(work, publishDir, rid, configuration, aot) != 0)
+        if (BuildUpdateShim(work, publishDir, rid, configuration, aot, appProject) != 0)
         {
             return 1;
         }
@@ -221,15 +225,30 @@ internal static class InstallerPackaging
     /// embedded in this tool ("cascade-update-shim.cs") — one source of truth with the real
     /// Cascade.UI.Updater.Shim project.
     /// </summary>
-    private static int BuildUpdateShim(string work, string publishDir, string rid, string configuration, bool aot)
+    private static int BuildUpdateShim(string work, string publishDir, string rid, string configuration, bool aot, string appProject)
     {
         string updaterCore = IOPath.Combine(publishDir, "Cascade.UI.Updater.Core.dll");
         if (!File.Exists(updaterCore))
         {
-            Console.Error.WriteLine(
-                "  ✗ Cascade.UI.Updater.Core.dll not found in the app output. The app must reference the "
-                + "Echostorm.Cascade.UI package (which ships it) for the update shim to build.");
-            return 1;
+            // A native-AOT (or single-file) app payload has no loose managed DLLs, so the shim's
+            // compile reference isn't sitting in the app output. Harvest it from a lightweight managed
+            // build of the app (build, not publish → all referenced managed assemblies land in the
+            // output dir), which works regardless of how the payload itself was published.
+            string refDir = IOPath.Combine(work, "managed-refs");
+            Directory.CreateDirectory(refDir);
+            if (RunDotnet($"build \"{appProject}\" -c {configuration} -o \"{refDir}\"") != 0)
+            {
+                Console.Error.WriteLine("  ✗ Could not build the app to harvest Cascade.UI.Updater.Core.dll for the update shim.");
+                return 1;
+            }
+            updaterCore = IOPath.Combine(refDir, "Cascade.UI.Updater.Core.dll");
+            if (!File.Exists(updaterCore))
+            {
+                Console.Error.WriteLine(
+                    "  ✗ Cascade.UI.Updater.Core.dll not found. The app must reference the "
+                    + "Echostorm.Cascade.UI package (which ships it) for the update shim to build.");
+                return 1;
+            }
         }
 
         string shimProjDir = IOPath.Combine(work, "shim");

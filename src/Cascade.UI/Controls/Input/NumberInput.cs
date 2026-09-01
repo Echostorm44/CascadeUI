@@ -47,6 +47,21 @@ public interface INumberInput
     /// Set by the input dispatcher on mouse-down, cleared on mouse-up.
     /// </summary>
     int PressedStepperButton { get; set; }
+
+    /// <summary>The current value as a raw, unformatted, culture-invariant string — the seed for typing.</summary>
+    string EditableText { get; }
+
+    /// <summary>Whether typed input may contain a sign character ('-').</summary>
+    bool AllowsSign { get; }
+
+    /// <summary>Whether typed input may contain a decimal separator ('.').</summary>
+    bool AllowsDecimal { get; }
+
+    /// <summary>
+    /// Parses <paramref name="text"/> as the numeric type, clamps it to the configured bounds, and
+    /// commits it to the bound value. Returns false (leaving the value unchanged) when unparseable.
+    /// </summary>
+    bool TryCommitText(string text);
 }
 
 /// <summary>
@@ -143,6 +158,56 @@ public sealed class NumberInput<T> : Node, INumberInput where T : struct, ICompa
 
     bool INumberInput.IsAtMin => Min.HasValue && Value.Value.CompareTo(Min.Value) <= 0;
     bool INumberInput.IsAtMax => Max.HasValue && Value.Value.CompareTo(Max.Value) >= 0;
+
+    private static readonly System.Globalization.CultureInfo Inv = System.Globalization.CultureInfo.InvariantCulture;
+
+    string INumberInput.EditableText
+    {
+        get
+        {
+            T v = Value.Value;
+            if (typeof(T) == typeof(float)) { return ((float)(object)v).ToString(Inv); }
+            if (typeof(T) == typeof(double)) { return ((double)(object)v).ToString(Inv); }
+            if (typeof(T) == typeof(decimal)) { return ((decimal)(object)v).ToString(Inv); }
+            if (typeof(T) == typeof(long)) { return ((long)(object)v).ToString(Inv); }
+            if (typeof(T) == typeof(int)) { return ((int)(object)v).ToString(Inv); }
+            return v.ToString() ?? "";
+        }
+    }
+
+    bool INumberInput.AllowsDecimal =>
+        typeof(T) == typeof(float) || typeof(T) == typeof(double) || typeof(T) == typeof(decimal);
+
+    // Every supported numeric type is signed; Clamp enforces any non-negative Min after parsing.
+    bool INumberInput.AllowsSign => true;
+
+    bool INumberInput.TryCommitText(string text)
+    {
+        if (IsDisabled || IsReadOnly)
+        {
+            return false;
+        }
+        text = text.Trim();
+        if (!TryParse(text, out T parsed))
+        {
+            return false;
+        }
+        Value.OnChange(Clamp(parsed));
+        return true;
+    }
+
+    private static bool TryParse(string s, out T value)
+    {
+        value = default;
+        const System.Globalization.NumberStyles Int = System.Globalization.NumberStyles.Integer;
+        const System.Globalization.NumberStyles Flt = System.Globalization.NumberStyles.Float;
+        if (typeof(T) == typeof(int)) { if (int.TryParse(s, Int, Inv, out int r)) { value = (T)(object)r; return true; } return false; }
+        if (typeof(T) == typeof(long)) { if (long.TryParse(s, Int, Inv, out long r)) { value = (T)(object)r; return true; } return false; }
+        if (typeof(T) == typeof(float)) { if (float.TryParse(s, Flt, Inv, out float r)) { value = (T)(object)r; return true; } return false; }
+        if (typeof(T) == typeof(double)) { if (double.TryParse(s, Flt, Inv, out double r)) { value = (T)(object)r; return true; } return false; }
+        if (typeof(T) == typeof(decimal)) { if (decimal.TryParse(s, Flt, Inv, out decimal r)) { value = (T)(object)r; return true; } return false; }
+        return false;
+    }
 
     void INumberInput.Increment()
     {

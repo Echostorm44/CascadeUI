@@ -8907,10 +8907,13 @@ internal sealed class NodePainter
         float paddingH = 8f;
         bool disabled = ni.IsDisabled;
 
-        // Outer border
+        bool focused = ReferenceEquals(FocusManager.FocusedElement, ni);
+
+        // Outer border — highlighted while focused (typing target).
         var bgColor = disabled ? theme.Colors.SurfaceAlt : theme.Colors.Surface;
         ctx.DrawRect(bounds, bgColor, radius: radius);
-        ctx.DrawRect(bounds, stroke: new Stroke(theme.Colors.Border, 1f), radius: radius);
+        var borderColor = focused && !disabled ? theme.TextInput.FocusBorderColor : theme.Colors.Border;
+        ctx.DrawRect(bounds, stroke: new Stroke(borderColor, focused && !disabled ? 1.5f : 1f), radius: radius);
 
         if (ni.StepperPos == StepperPosition.Split)
         {
@@ -8930,16 +8933,14 @@ internal sealed class NodePainter
             float valueX = bounds.X + buttonWidth;
             float valueW = bounds.Width - buttonWidth * 2;
             var valueBounds = new Rect(valueX, bounds.Y, valueW, bounds.Height);
-            PaintText(ni.DisplayValue, valueBounds, paddingH, theme.Colors.Text,
-                fontSize: fontSize, alignment: TextAlignment.Center);
+            PaintNumberValue(ni, valueBounds, paddingH, fontSize, TextAlignment.Center, focused, disabled);
         }
         else if (ni.StepperPos == StepperPosition.Right)
         {
             // Value on left
             float valueW = bounds.Width - buttonWidth;
             var valueBounds = new Rect(bounds.X, bounds.Y, valueW, bounds.Height);
-            PaintText(ni.DisplayValue, valueBounds, paddingH, theme.Colors.Text,
-                fontSize: fontSize);
+            PaintNumberValue(ni, valueBounds, paddingH, fontSize, TextAlignment.Start, focused, disabled);
 
             // Stepper stack on right — top half is +, bottom half is −
             float btnX = bounds.X + bounds.Width - buttonWidth;
@@ -8970,9 +8971,39 @@ internal sealed class NodePainter
         else
         {
             // No stepper — just display value centered
-            PaintText(ni.DisplayValue, bounds, paddingH, theme.Colors.Text,
-                fontSize: fontSize, alignment: TextAlignment.Center);
+            PaintNumberValue(ni, bounds, paddingH, fontSize, TextAlignment.Center, focused, disabled);
         }
+    }
+
+    /// <summary>
+    /// Paints a NumberInput's value area: the formatted bound value normally, or the live typing
+    /// buffer plus a caret while the control is focused and being edited.
+    /// </summary>
+    private void PaintNumberValue(INumberInput ni, Rect valueBounds, float paddingH, float fontSize, TextAlignment align, bool focused, bool disabled)
+    {
+        bool editing = focused && InputDispatcher.NumberEditBuffer is not null;
+        string text = editing ? InputDispatcher.NumberEditBuffer! : ni.DisplayValue;
+        var textColor = disabled ? theme.Colors.TextMuted : theme.Colors.Text;
+
+        PaintText(text, valueBounds, paddingH, textColor, fontSize: fontSize, alignment: align);
+
+        if (!editing)
+        {
+            return;
+        }
+
+        // Caret: position it after the substring left of the caret index.
+        int caretIdx = Math.Clamp(InputDispatcher.NumberInputCaretIndex, 0, text.Length);
+        float fullW = text.Length == 0 ? 0f : ctx.MeasureTextAdvance(text, fontSize).Width;
+        float startX = align == TextAlignment.Center
+            ? valueBounds.X + Math.Max(paddingH, (valueBounds.Width - fullW) / 2f)
+            : valueBounds.X + paddingH;
+        string before = text[..caretIdx];
+        float beforeW = before.Length == 0 ? 0f : ctx.MeasureTextAdvance(before, fontSize).Width;
+        float caretH = fontSize * 1.15f;
+        float caretX = startX + beforeW;
+        float caretY = valueBounds.Y + (valueBounds.Height - caretH) / 2f;
+        ctx.DrawRect(new Rect(caretX, caretY, 1.5f, caretH), theme.TextInput.FocusBorderColor);
     }
 
     private void PaintStepperButton(Rect bounds, string symbol, bool disabled, float radius, bool isLeft, bool isHovered = false, bool isPressed = false)

@@ -193,7 +193,7 @@ internal sealed class InstallerWizard : Component
         return new Row(
             children:
             [
-                Sidebar().Width(224f),
+                Sidebar().Width(200f),
                 new Column(children: [.. pane]).Expand().Background(ContentBg),
             ]).Background(ContentBg);
     }
@@ -230,14 +230,15 @@ internal sealed class InstallerWizard : Component
     {
         var row = new List<Node> { new Spacer() };
         row.AddRange(buttons);
-        return new Row(spacing: 10, crossAxisAlignment: CrossAxisAlignment.Center, children: [.. row]);
+        // spacing sized so up to three buttons fit the content pane (≈360px) without clipping.
+        return new Row(spacing: 8, crossAxisAlignment: CrossAxisAlignment.Center, children: [.. row]);
     }
 
     private static Node PrimaryButton(string text, Action onClick) =>
-        new Button(text, onClick).Width(148f).Height(40f);
+        new Button(text, onClick).Width(120f).Height(40f);
 
     private static Node SecondaryButton(string text, Action onClick) =>
-        new Button(text, onClick).Variant("outline").Width(120f).Height(40f);
+        new Button(text, onClick).Variant("outline").Width(112f).Height(40f);
 
     private async Task StartInstallAsync(bool repair)
     {

@@ -32,7 +32,19 @@ public static class UpdateLayout
     /// <summary>Where rollback moves the superseded tree aside (it may hold the running shim's own files).</summary>
     public const string DiscardDirName = ".cascade-discard";
 
-    /// <summary>Top-level names that the swap never moves (they are framework bookkeeping, not app files).</summary>
+    /// <summary>The update shim the installer drops beside the app (used to apply updates + rollback).</summary>
+    public const string UpdateShimName = "cascade-update.exe";
+
+    /// <summary>The uninstaller the installer copies in (the A/R/P Uninstall button points at it).</summary>
+    public const string UninstallerName = "uninstall.exe";
+
+    /// <summary>
+    /// Top-level names the swap never moves: the framework bookkeeping AND the version-independent
+    /// tools the installer places beside the app (the update shim and the uninstaller). An update
+    /// package is just the app's publish output and does NOT contain those tools — without this they
+    /// would be moved to backup and lost on the first update, breaking the A/R/P Uninstall button
+    /// and the updater's own shim.
+    /// </summary>
     public static IReadOnlyList<string> ReservedNames { get; } =
     [
         ManifestFileName,
@@ -43,6 +55,8 @@ public static class UpdateLayout
         LaunchMarkerName,
         CacheDirName,
         DiscardDirName,
+        UpdateShimName,
+        UninstallerName,
     ];
 
     /// <summary>True when <paramref name="name"/> is a reserved bookkeeping entry (case-insensitive).</summary>

@@ -52,23 +52,37 @@ internal static class PackageCommand
                 return 1;
             }
             Directory.CreateDirectory(outputDir);
-            // Optional Authenticode signing (signs the wizard, the uninstaller, and the final launcher):
-            //   --sign-cert <thumbprint|path.pfx> [--sign-password <pwd>]   use an existing cert
-            //   --self-sign "<name>"                                        generate a throwaway cert
-            //   [--sign-timestamp <url>]                                    default: DigiCert
-            // Needs signtool.exe (Windows SDK). NOTE: a self-signed cert does NOT stop end-user
-            // SmartScreen/AV warnings — only a real OV/EV cert (or Trusted Signing) builds reputation.
-            string timestamp = GetFlag(args, "--sign-timestamp") ?? "http://timestamp.digicert.com";
+            // Optional Authenticode signing (signs EVERY exe: app, update shim, wizard, uninstaller, launcher):
+            //   --sign-cert <thumbprint|path.pfx> [--sign-password <pwd>]     use an existing cert
+            //   --self-sign "<name>"                                          generate a throwaway cert
+            //   Azure Trusted Signing (real CA-chained, clears SmartScreen):
+            //     --sign-azure-endpoint <uri> --sign-azure-account <name> --sign-azure-profile <name>
+            //     --sign-azure-dlib <path-to-Azure.CodeSigning.Dlib.dll>
+            //     (auth is DefaultAzureCredential — e.g. `azure/login` OIDC in CI)
+            //   [--sign-timestamp <url>]   default: DigiCert (cert) / Microsoft ACS (Azure)
+            // Needs signtool.exe (Windows SDK). A self-signed cert does NOT stop end-user SmartScreen/AV
+            // warnings — only a real OV/EV cert or Azure Trusted Signing builds reputation.
             InstallerPackaging.SignOptions? sign = null;
             string? signCert = GetFlag(args, "--sign-cert");
             string? selfSign = GetFlag(args, "--self-sign");
-            if (!string.IsNullOrEmpty(signCert))
+            string? azEndpoint = GetFlag(args, "--sign-azure-endpoint");
+            if (!string.IsNullOrEmpty(azEndpoint))
             {
-                sign = new InstallerPackaging.SignOptions(signCert, GetFlag(args, "--sign-password"), timestamp);
+                string azTs = GetFlag(args, "--sign-timestamp") ?? "http://timestamp.acs.microsoft.com";
+                sign = new InstallerPackaging.SignOptions(
+                    Cert: null, Password: null, azTs,
+                    AzureEndpoint: azEndpoint,
+                    AzureAccount: GetFlag(args, "--sign-azure-account"),
+                    AzureProfile: GetFlag(args, "--sign-azure-profile"),
+                    AzureDlib: GetFlag(args, "--sign-azure-dlib"));
+            }
+            else if (!string.IsNullOrEmpty(signCert))
+            {
+                sign = new InstallerPackaging.SignOptions(signCert, GetFlag(args, "--sign-password"), GetFlag(args, "--sign-timestamp") ?? "http://timestamp.digicert.com");
             }
             else if (!string.IsNullOrEmpty(selfSign))
             {
-                sign = new InstallerPackaging.SignOptions(Cert: null, Password: null, timestamp, SelfSignSubject: selfSign);
+                sign = new InstallerPackaging.SignOptions(Cert: null, Password: null, GetFlag(args, "--sign-timestamp") ?? "http://timestamp.digicert.com", SelfSignSubject: selfSign);
             }
             // AOT is the default (smaller, native, no JIT); --no-aot falls back to a self-contained
             // JIT build (larger, but needs no C++ toolchain).

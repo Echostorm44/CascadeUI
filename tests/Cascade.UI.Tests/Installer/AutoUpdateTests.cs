@@ -249,6 +249,39 @@ public class AutoUpdateTests
     }
 
     [Test]
+    public async Task StageAndApply_PreservesShimAndUninstaller()
+    {
+        // Regression: an update package is just the app's publish output — it does NOT contain the
+        // update shim (cascade-update.exe) or the uninstaller (uninstall.exe) the installer drops in.
+        // Those must survive the swap, or the A/R/P Uninstall button and the updater's own shim break
+        // after the first update.
+        string installDir = IOPath.Combine(NewTempDir(), "app");
+        Directory.CreateDirectory(installDir);
+        await File.WriteAllTextAsync(IOPath.Combine(installDir, "app.exe"), "v1-binary");
+        await File.WriteAllTextAsync(IOPath.Combine(installDir, "cascade-update.exe"), "shim");
+        await File.WriteAllTextAsync(IOPath.Combine(installDir, "uninstall.exe"), "uninstaller");
+        WriteInstallManifest(installDir, "1.0.0");
+
+        string zip = BuildPackageZip(("app.exe", "v2-binary")); // package carries ONLY the app
+
+        try
+        {
+            UpdateSwap.StageZip(zip, installDir, "2.0.0");
+            UpdateSwap.ApplyStaged(installDir);
+
+            await Assert.That(await File.ReadAllTextAsync(IOPath.Combine(installDir, "app.exe"))).IsEqualTo("v2-binary");
+            // The framework tools are preserved through the swap.
+            await Assert.That(File.Exists(IOPath.Combine(installDir, "cascade-update.exe"))).IsTrue();
+            await Assert.That(File.Exists(IOPath.Combine(installDir, "uninstall.exe"))).IsTrue();
+            await Assert.That(await File.ReadAllTextAsync(IOPath.Combine(installDir, "uninstall.exe"))).IsEqualTo("uninstaller");
+        }
+        finally
+        {
+            CleanUp(IOPath.GetDirectoryName(installDir)!, IOPath.GetDirectoryName(zip)!);
+        }
+    }
+
+    [Test]
     public async Task Rollback_RestoresPreviousVersion()
     {
         string installDir = IOPath.Combine(NewTempDir(), "app");

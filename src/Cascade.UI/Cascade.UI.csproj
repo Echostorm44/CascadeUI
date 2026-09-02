@@ -159,7 +159,7 @@
 
   <ItemGroup>
     <!-- HarfBuzz is now the owned Etch.Text.HarfBuzz interop (RENDER-005); no managed package. -->
-    <PackageReference Include="Echostorm.SharpImage" Version="1.0.8" />
+    <PackageReference Include="Echostorm.SharpImage" Version="1.0.9" />
   </ItemGroup>
 
   <!-- Bundle Inter as the framework default font. One Content item serves both worlds:

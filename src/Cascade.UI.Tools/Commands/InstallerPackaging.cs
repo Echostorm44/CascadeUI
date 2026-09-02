@@ -31,7 +31,16 @@ internal static class InstallerPackaging
     /// (a cert-store SHA-1 thumbprint, or a path to a <c>.pfx</c> with optional <see cref="Password"/>),
     /// or set <see cref="SelfSignSubject"/> to have a throwaway code-signing cert generated on the fly.
     /// </summary>
-    internal sealed record SignOptions(string? Cert, string? Password, string Timestamp, string? SelfSignSubject = null);
+    internal sealed record SignOptions(
+        string? Cert, string? Password, string Timestamp, string? SelfSignSubject = null,
+        // Azure Trusted Signing (signtool /dlib) mode: no local cert. Auth is DefaultAzureCredential
+        // (e.g. `azure/login` OIDC in CI). AzureDlib = path to Azure.CodeSigning.Dlib.dll; AzureMetadata
+        // = a generated JSON with Endpoint/CodeSigningAccountName/CertificateProfileName (set by Build).
+        string? AzureEndpoint = null, string? AzureAccount = null, string? AzureProfile = null,
+        string? AzureDlib = null, string? AzureMetadata = null)
+    {
+        public bool IsAzure => !string.IsNullOrEmpty(AzureEndpoint);
+    }
 
     public static int Build(string appProject, string outputDir, string configuration, string rid, bool aot, SignOptions? sign, bool keepLocales = false)
     {
@@ -74,6 +83,26 @@ internal static class InstallerPackaging
             Directory.Delete(work, recursive: true);
         }
         Directory.CreateDirectory(work);
+
+        // Azure Trusted Signing: validate the dlib and write the account metadata signtool /dmdf needs.
+        if (sign?.IsAzure == true)
+        {
+            if (string.IsNullOrEmpty(sign.AzureAccount) || string.IsNullOrEmpty(sign.AzureProfile))
+            {
+                Console.Error.WriteLine("  ✗ Azure Trusted Signing needs --sign-azure-account and --sign-azure-profile.");
+                return 1;
+            }
+            if (string.IsNullOrEmpty(sign.AzureDlib) || !File.Exists(sign.AzureDlib))
+            {
+                Console.Error.WriteLine($"  ✗ Azure.CodeSigning.Dlib.dll not found (--sign-azure-dlib '{sign.AzureDlib}'). Install the Microsoft.Trusted.Signing.Client package and point at its bin\\x64\\Azure.CodeSigning.Dlib.dll.");
+                return 1;
+            }
+            string metadata = IOPath.Combine(work, "trusted-signing.json");
+            File.WriteAllText(metadata,
+                $$"""{"Endpoint":"{{sign.AzureEndpoint}}","CodeSigningAccountName":"{{sign.AzureAccount}}","CertificateProfileName":"{{sign.AzureProfile}}"}""");
+            sign = sign with { AzureMetadata = metadata };
+            Console.WriteLine($"  Signing with Azure Trusted Signing (account {sign.AzureAccount}, profile {sign.AzureProfile}).");
+        }
 
         // --self-sign: reuse (or first-time create + persist) a code-signing cert in the current user's
         // certificate store, keyed by name. A stable identity means once someone trusts it (enterprise
@@ -119,10 +148,23 @@ internal static class InstallerPackaging
             return 1;
         }
 
+        // Sign the app exe now, before it is staged into the payload — so the INSTALLED app is signed.
+        if (sign is not null && SignFile(signtool!, IOPath.Combine(publishDir, appName + ".exe"), sign) != 0)
+        {
+            return 1;
+        }
+
         Console.WriteLine($"  Step 1b: building the update shim (cascade-update){(aot ? " (AOT)" : "")}...");
         // Delivers cascade-update[.exe] next to the app so Updater.RequestUpdate()/rollback can hand
         // off to it — without this the auto-update path throws "Update shim not found next to the app".
         if (BuildUpdateShim(work, publishDir, rid, configuration, aot, appProject) != 0)
+        {
+            return 1;
+        }
+
+        // Sign the update shim (it lands next to the app and runs to apply updates).
+        string shimExe = IOPath.Combine(publishDir, OperatingSystem.IsWindows() ? "cascade-update.exe" : "cascade-update");
+        if (sign is not null && File.Exists(shimExe) && SignFile(signtool!, shimExe, sign) != 0)
         {
             return 1;
         }
@@ -736,14 +778,26 @@ internal static class InstallerPackaging
 
     private static int SignFile(string signtool, string file, SignOptions sign)
     {
-        string cert = sign.Cert ?? throw new InvalidOperationException("SignFile called without a resolved certificate.");
-        // A 40-hex-char cert is a store thumbprint (/sha1); anything else is a .pfx file (/f [/p]).
-        bool thumbprint = cert.Length == 40 && cert.All(Uri.IsHexDigit);
-        string certArgs = thumbprint
-            ? $"/sha1 {cert}"
-            : $"/f \"{cert}\"" + (string.IsNullOrEmpty(sign.Password) ? "" : $" /p \"{sign.Password}\"");
+        string args;
+        if (sign.IsAzure)
+        {
+            // Azure Trusted Signing: signtool loads the dlib, which fetches a short-lived cert from the
+            // signing account (auth via DefaultAzureCredential) and signs. /dmdf points at the account JSON.
+            args = $"sign /v /fd SHA256 /tr \"{sign.Timestamp}\" /td SHA256 "
+                 + $"/dlib \"{sign.AzureDlib}\" /dmdf \"{sign.AzureMetadata}\" \"{file}\"";
+        }
+        else
+        {
+            string cert = sign.Cert ?? throw new InvalidOperationException("SignFile called without a resolved certificate.");
+            // A 40-hex-char cert is a store thumbprint (/sha1); anything else is a .pfx file (/f [/p]).
+            bool thumbprint = cert.Length == 40 && cert.All(Uri.IsHexDigit);
+            string certArgs = thumbprint
+                ? $"/sha1 {cert}"
+                : $"/f \"{cert}\"" + (string.IsNullOrEmpty(sign.Password) ? "" : $" /p \"{sign.Password}\"");
+            args = $"sign {certArgs} /fd sha256 /tr \"{sign.Timestamp}\" /td sha256 \"{file}\"";
+        }
         Console.WriteLine($"    signing {IOPath.GetFileName(file)}...");
-        int code = RunTool(signtool, $"sign {certArgs} /fd sha256 /tr \"{sign.Timestamp}\" /td sha256 \"{file}\"");
+        int code = RunTool(signtool, args);
         if (code != 0)
         {
             Console.Error.WriteLine($"  ✗ signtool failed on {IOPath.GetFileName(file)} (exit {code}).");

@@ -7086,6 +7086,38 @@ internal sealed class NodePainter
         return (new Rect(triggerBounds.X, y, triggerBounds.Width, height), visibleCount);
     }
 
+    // Draws a thin overlay scrollbar thumb on the right edge of an open option dropdown whenever the list is
+    // taller than the (often space-clamped) visible window, so the user can see there is more to scroll to.
+    // Overlay style — no track — fading in with the open progress. Call inside the dropdown's clip.
+    private void PaintDropdownScrollbar(
+        Rect dropdownBounds, int optionCount, int visibleCount, int scrollOffset, float openT, ColorValue thumbColor)
+    {
+        int maxScrollOffset = Math.Max(0, optionCount - visibleCount);
+        if (maxScrollOffset <= 0 || openT < 0.01f)
+        {
+            return;
+        }
+
+        const float width = 4f;
+        const float inset = 3f;
+        const float minThumb = 28f;
+        float trackTop = dropdownBounds.Y + inset;
+        float trackHeight = dropdownBounds.Height - (2f * inset);
+        float thumbHeight = MathF.Max(minThumb, (trackHeight * visibleCount) / optionCount);
+        if (thumbHeight >= trackHeight)
+        {
+            return; // everything fits — nothing to indicate
+        }
+
+        float frac = (float)scrollOffset / maxScrollOffset;
+        float thumbY = trackTop + ((trackHeight - thumbHeight) * frac);
+        float thumbX = dropdownBounds.X + dropdownBounds.Width - width - inset;
+        ctx.DrawRect(
+            new Rect(thumbX, thumbY, width, thumbHeight),
+            thumbColor.Opacity(0.32f * openT),
+            radius: width / 2f);
+    }
+
     private void PaintSelectDropdown(ISelectNode select, Rect triggerBounds)
     {
         var t = theme.Select;
@@ -7244,6 +7276,8 @@ internal sealed class NodePainter
 
             itemY += itemHeight;
         }
+
+        PaintDropdownScrollbar(dropdownBounds, optionCount, visibleCount, scrollOffset, openT, t.TextColor);
     }
 
     // ── MultiSelect ───────────────────────────────────────────────────
@@ -7660,6 +7694,8 @@ internal sealed class NodePainter
 
             itemY += itemHeight;
         }
+
+        PaintDropdownScrollbar(dropdownBounds, optionCount, visibleCount, ms.ScrollOffset, openT, t.TextColor);
     }
 
     // ── Combobox ───────────────────────────────────────────────────────
@@ -7899,6 +7935,8 @@ internal sealed class NodePainter
 
             itemY += itemHeight;
         }
+
+        PaintDropdownScrollbar(dropdownBounds, optionCount, visibleCount, scrollOffset, openT, t.TextColor);
     }
 
     // ── Canvas ─────────────────────────────────────────────────────────

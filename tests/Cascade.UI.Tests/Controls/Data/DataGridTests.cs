@@ -396,6 +396,43 @@ public class DataGridTests
         await Assert.That(accepted).IsTrue();
     }
 
+    // CONTROLS-008: DataGrid had no selection binding or OnSelect at all — only the click
+    // highlight. Both now exist and behave like DataTable's.
+
+    [Test]
+    public async Task GridSelectedBindingBecomesTheSelectionOnSync()
+    {
+        var binding = CreateBinding(
+        [
+            new Row { Name = "Alpha", Quantity = 1, Active = true },
+            new Row { Name = "Bravo", Quantity = 2, Active = true },
+            new Row { Name = "Charlie", Quantity = 3, Active = true },
+        ]);
+        var target = binding.Value[2];
+        var grid = CreateGrid(binding).Selected(new Bindable<Row>(target, _ => { }));
+        var tdn = (ITabularDataNode)grid;
+
+        tdn.SyncSelectionFromBinding();
+
+        await Assert.That(tdn.SelectedRowIndex).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task GridClickPushesThroughBindingAndOnSelect()
+    {
+        var binding = CreateBinding();
+        Row? bound = null;
+        Row? selected = null;
+        var grid = CreateGrid(binding)
+            .Selected(new Bindable<Row>(binding.Value[0], v => bound = v))
+            .OnSelect(v => selected = v);
+
+        ((ITabularDataNode)grid).SelectRow(1, ctrl: false, shift: false);
+
+        await Assert.That(bound).IsSameReferenceAs(binding.Value[1]);
+        await Assert.That(selected).IsSameReferenceAs(binding.Value[1]);
+    }
+
     [Test]
     public async Task GridWithoutOnPasteHasNoValidator()
     {

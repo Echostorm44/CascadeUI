@@ -438,6 +438,30 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
         return this;
     }
 
+    // ── Selection ─────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Binds the primary selected item. The grid selects the bound value when it paints, and
+    /// pushes the clicked item back through the binding — the same two-way contract as
+    /// <see cref="DataTable{T}.Selected"/>. Added with CONTROLS-008; the grid previously had no
+    /// selection binding at all, only the row highlight from clicking.
+    /// </summary>
+    public DataGrid<T> Selected(Bindable<T> selected)
+    {
+        selectedBinding = selected;
+        return this;
+    }
+
+    /// <summary>Callback when the user selects a row.</summary>
+    public DataGrid<T> OnSelect(Action<T> onSelect)
+    {
+        onSelectHandler = onSelect;
+        return this;
+    }
+
+    internal Bindable<T>? selectedBinding;
+    internal Action<T>? onSelectHandler;
+
     // ── Appearance ────────────────────────────────────────────────────
 
     /// <summary>Sets fixed row height in logical pixels.</summary>
@@ -2736,6 +2760,87 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
             selectedRowIdx = row;
             anchorRow = row;
         }
+
+        int dataRow = MapRow(row);
+        if (dataRow >= 0 && dataRow < items.Count)
+        {
+            T item = items[dataRow];
+            if (selectedBinding is { } binding)
+            {
+                binding.OnChange(item);
+            }
+
+            onSelectHandler?.Invoke(item);
+        }
+    }
+
+    /// <summary>
+    /// Makes the bound value the selection before rows are painted. See
+    /// <see cref="DataTable{T}"/>'s implementation for the reasoning; this mirrors it, with the
+    /// grid's extra filtered-index mapping.
+    /// </summary>
+    void ITabularDataNode.SyncSelectionFromBinding()
+    {
+        if (selectedBinding is not { } binding)
+        {
+            return;
+        }
+
+        T? wanted = binding.Value;
+        if (wanted is null)
+        {
+            if (selectedRowIdx >= 0)
+            {
+                selectedRows.Clear();
+                selectedRowIdx = -1;
+                anchorRow = -1;
+            }
+
+            return;
+        }
+
+        var items = Items.Value;
+        var comparer = EqualityComparer<T>.Default;
+        int dataIndex = -1;
+        for (int i = 0; i < items.Count; i++)
+        {
+            if (ReferenceEquals(items[i], wanted) || comparer.Equals(items[i], wanted))
+            {
+                dataIndex = i;
+                break;
+            }
+        }
+
+        if (dataIndex < 0)
+        {
+            return;
+        }
+
+        // Inverse of MapRow: which display row currently shows this data index. A filtered-out
+        // item has no display row and is left unselected.
+        int displayRow;
+        if (sortedIndices is not null)
+        {
+            displayRow = Array.IndexOf(sortedIndices, dataIndex);
+        }
+        else if (filteredIndices is not null)
+        {
+            displayRow = Array.IndexOf(filteredIndices, dataIndex);
+        }
+        else
+        {
+            displayRow = dataIndex;
+        }
+
+        if (displayRow < 0 || displayRow == selectedRowIdx)
+        {
+            return;
+        }
+
+        selectedRows.Clear();
+        selectedRows.Add(displayRow);
+        selectedRowIdx = displayRow;
+        anchorRow = displayRow;
     }
 
     void ITabularDataNode.MoveSelection(int delta)

@@ -809,6 +809,12 @@ internal sealed class InputDispatcher
         // generic IsHovered path can't reach them).
         UpdateTreeViewHover(hitNode);
 
+        // Evaluated on every move, not only when the hovered node changes: a column border
+        // is a few pixels inside a table that is one node, so the pointer crosses onto and off
+        // it without the hit node ever changing. Deciding the cursor only on enter/leave meant
+        // the resize cursor could never appear for a table border.
+        UpdateHoverCursor(hitNode, evt.X, evt.Y);
+
         // Track enter/leave for hover
         if (!ReferenceEquals(hitNode, hoveredNode))
         {
@@ -841,18 +847,6 @@ internal sealed class InputDispatcher
             {
                 hitNode.IsHovered = true;
                 InvokePointerEnter(hitNode);
-            }
-
-            // Update cursor for SplitView divider hover
-            int desiredCursor = 0;
-            if (hitNode is SplitView svHover)
-            {
-                desiredCursor = svHover.Orientation == SplitOrientation.Horizontal ? 1 : 2;
-            }
-            if (desiredCursor != currentCursorKind)
-            {
-                currentCursorKind = desiredCursor;
-                RequestCursorChange?.Invoke(desiredCursor);
             }
 
             // A control inside a cached ScrollView layer needs the layer recaptured to
@@ -2355,6 +2349,11 @@ internal sealed class InputDispatcher
             columnResizeTdn.ResizingColumnIndex = -1;
             columnResizeTdn = null;
             RequestRepaint?.Invoke();
+
+            // Re-decide the cursor now rather than on the next move: after the drag the pointer
+            // is usually still on the border (keep the resize cursor) but may have been released
+            // well past it, in which case it should go back to the arrow immediately.
+            UpdateHoverCursor(hitNode, evt.X, evt.Y);
         }
 
         // Finish column reorder drag — commit if threshold was exceeded, else treat as sort click
@@ -5522,6 +5521,62 @@ internal sealed class InputDispatcher
     /// Returns the column index whose RIGHT border is near the given X position,
     /// or -1 if not near any border. Used for column resize hit detection.
     /// </summary>
+    /// <summary>
+    /// Picks the pointer cursor for the current position and applies it if it changed.
+    /// Kinds: 0 arrow, 1 east-west resize, 2 north-south resize (see the window's
+    /// <c>SetCursorOverride</c>). A column resize in progress keeps the resize cursor even when
+    /// the pointer outruns the border, so it does not flicker mid-drag; otherwise a resizable
+    /// column border in a table header, or a SplitView divider, asks for it. Anything else — and
+    /// crucially, the same table away from a border — goes back to the arrow.
+    /// </summary>
+    private void UpdateHoverCursor(Node? hitNode, float x, float y)
+    {
+        int desiredCursor = 0;
+
+        if (columnResizeTdn != null)
+        {
+            desiredCursor = 1;
+        }
+        else if (hitNode is ITabularDataNode tdn && IsOverResizableColumnBorder(tdn, x, y))
+        {
+            desiredCursor = 1;
+        }
+        else if (hitNode is SplitView sv)
+        {
+            desiredCursor = sv.Orientation == SplitOrientation.Horizontal ? 1 : 2;
+        }
+
+        if (desiredCursor != currentCursorKind)
+        {
+            currentCursorKind = desiredCursor;
+            RequestCursorChange?.Invoke(desiredCursor);
+        }
+    }
+
+    /// <summary>
+    /// The same test the press path uses to start a column resize: in the header band, within
+    /// the border tolerance of a column's right edge, and that column allows resizing. Kept
+    /// identical on purpose — the cursor must promise exactly what a press will do.
+    /// </summary>
+    private static bool IsOverResizableColumnBorder(ITabularDataNode tdn, float x, float y)
+    {
+        var bounds = tdn.AbsoluteBounds;
+        if (bounds.Width <= 0f)
+        {
+            return false;
+        }
+
+        float relY = y - bounds.Y;
+        float headerH = tdn.GetRowHeight() + 4f;
+        if (relY < 0f || relY >= headerH)
+        {
+            return false;
+        }
+
+        int borderCol = HitTestColumnBorder(tdn, x - bounds.X, bounds.Width);
+        return borderCol >= 0 && tdn.IsColumnResizable(borderCol);
+    }
+
     private static int HitTestColumnBorder(ITabularDataNode tdn, float relX, float availableWidth)
     {
         const float borderTolerance = 5f;

@@ -26,7 +26,7 @@ public sealed class Button : Node
     public Action OnClick { get; }
 
     /// <summary>Optional leading icon displayed before the label.</summary>
-    public Icon Icon { get; }
+    public Icon Icon { get; internal set; }
 
     // ── Internal modifier state set by extension methods ──────────────
 
@@ -44,6 +44,24 @@ public sealed class Button : Node
 /// </summary>
 public static class ButtonExtensions
 {
+    /// <summary>
+    /// Sets the leading icon, as a fluent alternative to the constructor's <c>icon</c> parameter.
+    /// </summary>
+    /// <remarks>
+    /// <c>Icon</c> is also a get-only property, so <c>button.Icon(myIcon)</c> is not an invocable
+    /// member and C# falls through to extension lookup. Without this method that fallback found
+    /// <c>RatingExtensions.Icon(Rating, Icon, Icon)</c> and reported
+    /// <c>CS7036: no argument given that corresponds to the required parameter 'empty' of
+    /// RatingExtensions.Icon</c> — an error naming <c>Rating</c> at a developer holding a
+    /// <c>Button</c>. This overload is a strictly better match, so the natural spelling now
+    /// simply works.
+    /// </remarks>
+    public static Button Icon(this Button button, Icon icon)
+    {
+        button.Icon = icon;
+        return button;
+    }
+
     /// <summary>Disables or enables the button.</summary>
     public static Button Disabled(this Button button, bool disabled = true)
     {

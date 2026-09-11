@@ -353,6 +353,9 @@ public static class App
         var mcpHost = new DevTools.McpHost(title);
         mcpHost.Start();
 
+        // Open the hot-reload pipe when launched by `cascade run --watch` (no-op otherwise).
+        Core.Internal.HotReloadHost.StartIfRequested();
+
         if (config.StartMinimized)
         {
             window.ShowMinimized();
@@ -408,6 +411,9 @@ public static class App
 
         var mcpHost = new DevTools.McpHost(title);
         mcpHost.Start();
+
+        // Open the hot-reload pipe when launched by `cascade run --watch` (no-op otherwise).
+        Core.Internal.HotReloadHost.StartIfRequested();
 
         if (config.StartMinimized)
         {
@@ -504,6 +510,9 @@ public static class App
 
         var mcpHost = new DevTools.McpHost(title);
         mcpHost.Start();
+
+        // Open the hot-reload pipe when launched by `cascade run --watch` (no-op otherwise).
+        Core.Internal.HotReloadHost.StartIfRequested();
 
         if (config.StartMinimized)
         {

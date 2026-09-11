@@ -355,6 +355,56 @@ public class DataGridTests
         await Assert.That(enabled).IsTrue();
     }
 
+    // CONTROLS-006: OnPaste was documented but did not exist. It intercepts the raw clipboard text
+    // before parsing and before the undo batch opens, so a rejected paste writes nothing and
+    // leaves no undo entry.
+
+    [Test]
+    public async Task OnPasteStoresTheValidator()
+    {
+        var grid = CreateGrid().ClipboardSupport(true).OnPaste(_ => true);
+
+        var hasValidator = grid.onPasteValidator is not null;
+        await Assert.That(hasValidator).IsTrue();
+    }
+
+    [Test]
+    public async Task OnPasteValidatorSeesTheRawClipboardText()
+    {
+        string? seen = null;
+        var grid = CreateGrid().ClipboardSupport(true).OnPaste(text =>
+        {
+            seen = text;
+            return true;
+        });
+
+        var accepted = grid.onPasteValidator!("Widget\t3\ttrue");
+
+        await Assert.That(seen).IsEqualTo("Widget\t3\ttrue");
+        await Assert.That(accepted).IsTrue();
+    }
+
+    [Test]
+    public async Task OnPasteCanRejectAPaste()
+    {
+        var grid = CreateGrid().ClipboardSupport(true).OnPaste(text => text.Contains('\t', StringComparison.Ordinal));
+
+        var rejected = grid.onPasteValidator!("not tab separated");
+        var accepted = grid.onPasteValidator!("a\tb");
+
+        await Assert.That(rejected).IsFalse();
+        await Assert.That(accepted).IsTrue();
+    }
+
+    [Test]
+    public async Task GridWithoutOnPasteHasNoValidator()
+    {
+        var grid = CreateGrid().ClipboardSupport(true);
+
+        var hasValidator = grid.onPasteValidator is not null;
+        await Assert.That(hasValidator).IsFalse();
+    }
+
     // ── Validation ──────────────────────────────────────────────────
 
     [Test]
@@ -1623,8 +1673,14 @@ public class DataGridTests
         await Assert.That(tdn.ScrollOffsetY).IsEqualTo(0f);
     }
 
+    /// <summary>
+    /// DataTable's virtualization members were no-op stubs and this test asserted those zeroes,
+    /// which made the broken behaviour look intended. CONTROLS-005 implemented them; the test now
+    /// pins the real contract. Horizontal panning is still deliberately absent on both controls —
+    /// columns are resolved to fit the available width, so there is nothing to pan to.
+    /// </summary>
     [Test]
-    public async Task DataTable_VirtualizationStubs_ReturnDefaults()
+    public async Task DataTable_ReportsRealVirtualizationMetrics()
     {
         var items = new Row[]
         {
@@ -1634,17 +1690,23 @@ public class DataGridTests
         {
             DataColumn<Row>.Text("Name", r => r.Name),
         };
-        var table = new DataTable<Row>(items, columns);
+        var table = new DataTable<Row>(items, columns).RowHeight(36f);
         var tdn = (ITabularDataNode)table;
 
-        await Assert.That(tdn.ScrollOffsetY).IsEqualTo(0f);
-        await Assert.That(tdn.ScrollOffsetX).IsEqualTo(0f);
-        await Assert.That(tdn.MaxScrollOffsetY).IsEqualTo(0f);
-        await Assert.That(tdn.MaxScrollOffsetX).IsEqualTo(0f);
-        await Assert.That(tdn.ViewportHeight).IsEqualTo(0f);
-        await Assert.That(tdn.TotalContentHeight).IsEqualTo(0f);
-        await Assert.That(tdn.VirtualizationBufferRows).IsEqualTo(0);
+        // One 36px row, no viewport set yet.
+        await Assert.That(tdn.TotalContentHeight).IsEqualTo(36f);
+        await Assert.That(tdn.VirtualizationBufferRows).IsGreaterThan(0);
         await Assert.That(tdn.MaxVisibleRows).IsNull();
+
+        // Viewport taller than the content: nothing to scroll.
+        tdn.ViewportHeight = 200f;
+        await Assert.That(tdn.ViewportHeight).IsEqualTo(200f);
+        await Assert.That(tdn.MaxScrollOffsetY).IsEqualTo(0f);
+        await Assert.That(tdn.ScrollOffsetY).IsEqualTo(0f);
+
+        // Horizontal scrolling remains unsupported by design.
+        await Assert.That(tdn.ScrollOffsetX).IsEqualTo(0f);
+        await Assert.That(tdn.MaxScrollOffsetX).IsEqualTo(0f);
     }
 
     [Test]

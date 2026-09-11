@@ -77,6 +77,16 @@ jobs:
       - name: Build installer assemblies (Cascade.UI packs them)
         run: dotnet build src/Cascade.UI.Installer/Cascade.UI.Installer.csproj -c ${{ env.CONFIGURATION }} -p:Version=${{ steps.version.outputs.VERSION }}
 
+      # TOOLING-001: build a second, DevTools-enabled copy of Cascade.UI, which the pack ships
+      # under devtools/ alongside the plain lib/ assembly. Consumers opt in with
+      # -p:CascadeDevTools=true, which makes `cascade mcp` (screenshot/tree/inspect/click) work
+      # against an app that only references the package. Without this step the pack FAILS rather
+      # than publishing a package whose CascadeDevTools property silently does nothing.
+      # Must run before the pack below: it is a separate invocation on purpose, because
+      # overriding output paths on a nested build breaks Cascade.Generators' restore.
+      - name: Build DevTools-enabled Cascade.UI (packed under devtools/)
+        run: dotnet build src/Cascade.UI/Cascade.UI.csproj -c ${{ env.CONFIGURATION }} -p:CascadeDevTools=true -p:Version=${{ steps.version.outputs.VERSION }} -p:OutputPath=$GITHUB_WORKSPACE/artifacts/devtools/
+
       # Pack each package to ./artifacts. UseEtchPackage=true (workflow env) makes the build
       # depend on the published Echostorm.Etch package instead of Etch source (not on the runner).
       - name: Pack Cascade.UI

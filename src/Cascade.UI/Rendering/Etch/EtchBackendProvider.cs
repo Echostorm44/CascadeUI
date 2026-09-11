@@ -31,7 +31,7 @@ internal readonly struct LayerRenderInfo
     /// this transform then the scroll delta to composite them. Empty when the layer
     /// draws no images.
     /// </summary>
-    public readonly IReadOnlyList<(EtchBackend.SceneOp Op, Matrix3x2 Transform)> ImageCommands;
+    public readonly IReadOnlyList<(EtchBackend.SceneOp Op, Matrix3x2 Transform, Cascade.UI.Rect? Clip)> ImageCommands;
 
     /// <summary>
     /// Screen-space viewport clip the layer is composited into (the ScrollView
@@ -43,7 +43,7 @@ internal readonly struct LayerRenderInfo
 
     public LayerRenderInfo(ulong handle, SceneBuffer scene, float x, float y, float opacity,
         IReadOnlyList<EtchBackend.GlyphOp> glyphCommands,
-        IReadOnlyList<(EtchBackend.SceneOp Op, Matrix3x2 Transform)> imageCommands,
+        IReadOnlyList<(EtchBackend.SceneOp Op, Matrix3x2 Transform, Cascade.UI.Rect? Clip)> imageCommands,
         Cascade.UI.Rect? viewportClip)
     {
         LayerHandle = handle;
@@ -100,7 +100,7 @@ internal sealed class EtchBackendProvider : IDisposable
     // LayerCaptures has been cleared by Reset().
     private readonly Dictionary<ulong, (SceneBuffer Scene, ulong Hash,
         List<EtchBackend.GlyphOp> GlyphCommands,
-        List<(EtchBackend.SceneOp Op, Matrix3x2 Transform)> ImageCommands)> _cachedLayerScenes = new();
+        List<(EtchBackend.SceneOp Op, Matrix3x2 Transform, Cascade.UI.Rect? Clip)> ImageCommands)> _cachedLayerScenes = new();
 
     // Active layers for the current frame — passed to EtchGpuPresenter for compositing
     private readonly List<LayerRenderInfo> _activeLayers = new();
@@ -1175,12 +1175,33 @@ internal sealed class EtchBackendProvider : IDisposable
     /// transform at its capture point. Returns an empty list when the layer draws no
     /// images.
     /// </summary>
-    private static List<(EtchBackend.SceneOp Op, Matrix3x2 Transform)> ExtractImageCommands(
+    /// <summary>
+    /// Pulls the image draws out of a layer's captured command stream, each paired with the
+    /// local→device transform in force at the point it was issued, and with the intersection of
+    /// the clip rects active around it.
+    /// </summary>
+    /// <remarks>
+    /// The clip is the RENDER-009 fix. This replayed only the transform ops, so an image nested
+    /// inside a <c>PushClip</c> — a custom table cell, say — carried no clip at all, and the
+    /// presenter clamped it to the ScrollView viewport alone. The image then drew wherever its
+    /// transform put it, escaping the cell and repeating down the page. There is no GPU scissor in
+    /// the wgpu binding set, so clipping is emulated by clamping the quad and its UVs; that only
+    /// works if the rect travels with the image. `PushClipPath` cannot be reduced to a rect, so it
+    /// contributes nothing rather than clipping to the wrong shape — the main (non-layer) image
+    /// path makes the same trade.
+    /// </remarks>
+    private static List<(EtchBackend.SceneOp Op, Matrix3x2 Transform, Cascade.UI.Rect? Clip)> ExtractImageCommands(
         List<EtchBackend.SceneOp> commands, Matrix3x2 initialTransform)
     {
-        var images = new List<(EtchBackend.SceneOp, Matrix3x2)>();
+        var images = new List<(EtchBackend.SceneOp, Matrix3x2, Cascade.UI.Rect?)>();
         var current = initialTransform;
         var stack = new Stack<Matrix3x2>();
+
+        // Device-space intersection of the clips currently in force; null = unclipped. One entry
+        // per PushClip* so PopClip restores exactly what preceded it.
+        Cascade.UI.Rect? clip = null;
+        var clipStack = new Stack<Cascade.UI.Rect?>();
+
         foreach (var op in commands)
         {
             switch (op.Kind)
@@ -1195,12 +1216,62 @@ internal sealed class EtchBackendProvider : IDisposable
                         current = stack.Pop();
                     }
                     break;
+
+                case EtchBackend.OpKind.PushClip:
+                case EtchBackend.OpKind.PushClipRoundedRect:
+                    clipStack.Push(clip);
+                    clip = IntersectClip(clip, DeviceRect(op, current));
+                    break;
+
+                case EtchBackend.OpKind.PushClipPath:
+                    // Not expressible as a rect — inherit the enclosing clip unchanged.
+                    clipStack.Push(clip);
+                    break;
+
+                case EtchBackend.OpKind.PopClip:
+                    if (clipStack.Count > 0)
+                    {
+                        clip = clipStack.Pop();
+                    }
+                    break;
+
                 case EtchBackend.OpKind.DrawImage:
-                    images.Add((op, current));
+                    images.Add((op, current, clip));
                     break;
             }
         }
+
         return images;
+    }
+
+    /// <summary>Maps a clip op's local rect through <paramref name="transform"/> to device space.</summary>
+    private static Cascade.UI.Rect DeviceRect(EtchBackend.SceneOp op, Matrix3x2 transform)
+    {
+        var local = new EGeometry.Rect(op.X, op.Y, op.X + op.W, op.Y + op.H);
+        var device = local.Transform(EtchBackend.ToAffine(transform));
+        return new Cascade.UI.Rect(
+            (float)device.MinX,
+            (float)device.MinY,
+            (float)(device.MaxX - device.MinX),
+            (float)(device.MaxY - device.MinY));
+    }
+
+    /// <summary>Intersection of two clips, treating null as "no constraint".</summary>
+    private static Cascade.UI.Rect? IntersectClip(Cascade.UI.Rect? a, Cascade.UI.Rect b)
+    {
+        if (a is not Cascade.UI.Rect existing)
+        {
+            return b;
+        }
+
+        float l = Math.Max(existing.X, b.X);
+        float t = Math.Max(existing.Y, b.Y);
+        float r = Math.Min(existing.X + existing.Width, b.X + b.Width);
+        float bo = Math.Min(existing.Y + existing.Height, b.Y + b.Height);
+
+        return r <= l || bo <= t
+            ? new Cascade.UI.Rect(l, t, 0f, 0f)   // empty: nothing inside can draw
+            : new Cascade.UI.Rect(l, t, r - l, bo - t);
     }
 
     /// <summary>

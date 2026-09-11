@@ -2390,7 +2390,7 @@ int overlayCulled = 0;
 
                 var (offX, offY) = LayerScrollDelta(layer);
 
-                foreach (var (cmd, transform) in layer.ImageCommands)
+                foreach (var (cmd, transform, clip) in layer.ImageCommands)
                 {
                     var img = backend.GetImage(cmd.ImageHandle);
                     if (img == null)
@@ -2412,15 +2412,46 @@ int overlayCulled = 0;
                     float dr = (float)deviceRect.MaxX + offX;
                     float db = (float)deviceRect.MaxY + offY;
 
-                    float u0 = 0f, v0 = 0f, u1 = 1f, v1 = 1f;
+                    // Clamp to the viewport AND to whatever clips were in force around the image
+                    // inside the layer (RENDER-009). The captured clip is in the layer's own
+                    // device space, so it scrolls with the content and takes the same delta as the
+                    // quad; the viewport does not, being the fixed hole the layer shows through.
+                    float cl = float.NegativeInfinity, ct = float.NegativeInfinity;
+                    float cr = float.PositiveInfinity, cb = float.PositiveInfinity;
+
+                    if (clip is Cascade.UI.Rect ic)
+                    {
+                        cl = ic.X + offX; ct = ic.Y + offY;
+                        cr = ic.X + ic.Width + offX; cb = ic.Y + ic.Height + offY;
+                    }
+
                     if (layer.ViewportClip is Cascade.UI.Rect vc)
                     {
-                        float cl = vc.X, ct = vc.Y, cr = vc.X + vc.Width, cb = vc.Y + vc.Height;
+                        cl = Math.Max(cl, vc.X); ct = Math.Max(ct, vc.Y);
+                        cr = Math.Min(cr, vc.X + vc.Width); cb = Math.Min(cb, vc.Y + vc.Height);
+                    }
+
+                    bool clipped = !float.IsNegativeInfinity(cl) || !float.IsNegativeInfinity(ct)
+                        || !float.IsPositiveInfinity(cr) || !float.IsPositiveInfinity(cb);
+
+                    float u0 = 0f, v0 = 0f, u1 = 1f, v1 = 1f;
+                    if (clipped)
+                    {
+                        // A degenerate intersection means the enclosing clips do not overlap at
+                        // all, so nothing inside them can draw. Testing "is the clip non-empty?"
+                        // before clamping instead let that case fall through and blit the image
+                        // *unclipped* — which is how table rows below the visible area still
+                        // escaped after the clip was first plumbed through.
+                        if (cr <= cl || cb <= ct)
+                        {
+                            continue;
+                        }
+
                         float nl = Math.Max(dl, cl), nt = Math.Max(dt, ct);
                         float nr = Math.Min(dr, cr), nb = Math.Min(db, cb);
                         if (nr <= nl || nb <= nt)
                         {
-                            continue; // fully outside the viewport
+                            continue; // fully outside the viewport or its enclosing clips
                         }
 
                         float w = dr - dl, h = db - dt;

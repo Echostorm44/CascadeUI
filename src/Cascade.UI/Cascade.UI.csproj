@@ -185,4 +185,53 @@
     <None Include="build\**" Pack="true" PackagePath="build" />
   </ItemGroup>
 
+  <!--
+    TOOLING-001: ship a second, DevTools-enabled copy of Cascade.UI in the package.
+
+    The MCP inspection surface (screenshot/tree/inspect/click/whodrew) is gated on the
+    CASCADE_DEVTOOLS compile symbol, which is only defined for Debug or an explicit
+    Release+CascadeDevTools build. The package's lib/ assembly is a plain Release build, so
+    `cascade mcp` found a package consumer's app, reported its window and port, and then failed
+    every useful verb with "Build the app with -p:CascadeDevTools=true" — advice a package
+    consumer cannot act on, because the symbol has to be in the *library*, not their app.
+
+    So pack builds the library a second time with the symbol on and ships it under devtools/.
+    Echostorm.Cascade.UI.targets swaps the reference when the consumer sets CascadeDevTools=true,
+    which keeps the default (end-user) build byte-identical to before: same lib/, no DevTools
+    surface, no trimmer roots, no size cost.
+  -->
+  <PropertyGroup>
+    <!--
+      Where the DevTools-enabled build drops its assembly. It is produced by a separate build
+      invocation *before* pack, not by an inner build during pack: overriding the output paths on
+      a nested `dotnet build` applies them to every project in the graph, which breaks
+      Cascade.Generators' restore (NETSDK1005), and sharing obj/ between the two builds risks the
+      DevTools assembly ending up in lib/ — the one outcome that must never ship.
+
+        dotnet build src/Cascade.UI/Cascade.UI.csproj -c Release -p:CascadeDevTools=true \
+            -p:OutputPath=<repo>/artifacts/devtools/
+        dotnet pack  src/Cascade.UI/Cascade.UI.csproj -c Release -o <feed>
+
+      See the "Build DevTools-enabled Cascade.UI" step in .github/workflows/publish-nuget.yml.
+    -->
+    <DevToolsAssemblyPath Condition="'$(DevToolsAssemblyPath)' == ''">$(MSBuildThisFileDirectory)..\..\artifacts\devtools\Cascade.UI.dll</DevToolsAssemblyPath>
+    <RequireDevToolsAssembly Condition="'$(RequireDevToolsAssembly)' == ''">true</RequireDevToolsAssembly>
+  </PropertyGroup>
+
+  <!--
+    Fail the pack rather than silently publish a package whose DevTools story is missing. A
+    consumer who sets CascadeDevTools=true against such a package gets the plain lib/ assembly and
+    the same dead-end error this task existed to remove, with nothing to indicate why.
+    Set -p:RequireDevToolsAssembly=false for a local pack that deliberately skips it.
+  -->
+  <Target Name="CascadeVerifyDevToolsAssembly" BeforeTargets="GenerateNuspec">
+    <Error Condition="'$(RequireDevToolsAssembly)' == 'true' AND !Exists('$(DevToolsAssemblyPath)')"
+           Text="TOOLING-001: DevTools assembly not found at $(DevToolsAssemblyPath). Build it first: dotnet build $(MSBuildThisFileFullPath) -c $(Configuration) -p:CascadeDevTools=true -p:OutputPath=&lt;path&gt;. Or pass -p:RequireDevToolsAssembly=false to pack without it." />
+  </Target>
+
+  <ItemGroup Condition="Exists('$(DevToolsAssemblyPath)')">
+    <None Include="$(DevToolsAssemblyPath)"
+          Pack="true" PackagePath="devtools/net10.0" Visible="false" />
+  </ItemGroup>
+
 </Project>

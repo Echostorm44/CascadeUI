@@ -43,6 +43,13 @@ internal interface IListViewNode
     /// <summary>Width of the built content, set by layout so the swipe row can size itself.</summary>
     float ContentWidth { get; set; }
 
+    /// <summary>
+    /// Full height of the built rows, set by layout. Only meaningful for a non-virtualized list,
+    /// where the row heights are not uniform and the scrollbar cannot infer the total from
+    /// <c>ItemCount * GetItemHeight()</c>. Zero when virtualizing.
+    /// </summary>
+    float TotalContentHeight { get; set; }
+
     // ── Swipe actions (control-level drag + tap, like reorder) ──
     /// <summary>True when any swipe actions are configured.</summary>
     bool HasSwipeActions { get; }
@@ -72,8 +79,14 @@ internal interface IListViewNode
     /// </summary>
     Node GetContentNode();
 
-    /// <summary>Drops the cached content so the next <see cref="GetContentNode"/> rebuilds. Layout calls this each frame.</summary>
+    /// <summary>Drops the cached content so the next <see cref="GetContentNode"/> rebuilds.</summary>
     void InvalidateContent();
+
+    /// <summary>
+    /// Drops the cached content only when something that affects it has changed. Called by the
+    /// layout pass in place of an unconditional <see cref="InvalidateContent"/>.
+    /// </summary>
+    void SyncContent();
 }
 
 /// <summary>
@@ -288,6 +301,46 @@ public sealed class ListView<T> : Node, IListViewNode
 
     void IListViewNode.InvalidateContent() => contentNode = null;
 
+    /// <summary>
+    /// Assigns one of the interaction fields the row builder reads, dropping the cached rows only
+    /// when the value actually changes.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// `MeasureListView` used to call <c>InvalidateContent()</c> unconditionally on every layout
+    /// pass, rebuilding the visible slice every frame for a list nobody had touched — ~11 KB per
+    /// frame in a single node (PERF-002).
+    /// </para>
+    /// <para>
+    /// These fields are the whole story for cache validity. Anything else that changes the rows —
+    /// the items, the render callback, selection — arrives by the component re-rendering, which
+    /// produces a **new** ListView node; the reconciler carries `OffsetY` across but not
+    /// `contentNode`, so a re-render always rebuilds.
+    /// </para>
+    /// </remarks>
+    private void SetContentField<TField>(ref TField field, TField value)
+        where TField : IEquatable<TField>
+    {
+        if (field.Equals(value))
+        {
+            return;
+        }
+
+        field = value;
+        contentNode = null;
+    }
+
+    /// <summary>
+    /// Drops the cached rows only when something that affects them has changed. Layout calls this
+    /// instead of invalidating unconditionally.
+    /// </summary>
+    void IListViewNode.SyncContent()
+    {
+        // No-op by design: SetContentField already dropped the cache if any input changed, and a
+        // re-render replaces the node entirely. Present so the layout pass reads as a deliberate
+        // sync rather than an omission.
+    }
+
     private Rect reorderBounds;
     private int reorderFromIndex = -1;
     private int reorderToIndex = -1;
@@ -295,8 +348,8 @@ public sealed class ListView<T> : Node, IListViewNode
     bool IListViewNode.IsReorderable =>
         reorderableEnabled && onReorderHandler is not null && Sections is null && Items.Count > 1;
     Rect IListViewNode.ReorderBounds { get => reorderBounds; set => reorderBounds = value; }
-    int IListViewNode.ReorderFromIndex { get => reorderFromIndex; set => reorderFromIndex = value; }
-    int IListViewNode.ReorderToIndex { get => reorderToIndex; set => reorderToIndex = value; }
+    int IListViewNode.ReorderFromIndex { get => reorderFromIndex; set => SetContentField(ref reorderFromIndex, value); }
+    int IListViewNode.ReorderToIndex { get => reorderToIndex; set => SetContentField(ref reorderToIndex, value); }
     void IListViewNode.ApplyReorder(int from, int to)
     {
         if (from != to && from >= 0 && to >= 0)
@@ -310,7 +363,30 @@ public sealed class ListView<T> : Node, IListViewNode
     private float viewportHeight;
     private float contentOffsetY;
 
-    float IListViewNode.OffsetY { get => offsetY; set => offsetY = value; }
+    /// <summary>
+    /// Scroll offset. Only invalidates the cached rows when the list is virtualizing, where the
+    /// built slice depends on the offset. A non-virtualized list has every row built already and
+    /// is simply drawn shifted, so rebuilding it on each wheel notch would be pure waste.
+    /// </summary>
+    float IListViewNode.OffsetY
+    {
+        get => offsetY;
+        set
+        {
+            if (((IListViewNode)this).CanVirtualize)
+            {
+                SetContentField(ref offsetY, value);
+            }
+            else
+            {
+                offsetY = value;
+            }
+        }
+    }
+
+    private float totalContentHeight;
+
+    float IListViewNode.TotalContentHeight { get => totalContentHeight; set => totalContentHeight = value; }
     float IListViewNode.MaxY { get => maxY; set => maxY = value; }
     float IListViewNode.ViewportHeight { get => viewportHeight; set => viewportHeight = value; }
     float IListViewNode.ContentOffsetY => contentOffsetY;
@@ -321,10 +397,10 @@ public sealed class ListView<T> : Node, IListViewNode
     private float swipeOffsetX;
     private const float SwipeButtonW = 72f;
 
-    float IListViewNode.ContentWidth { get => contentWidth; set => contentWidth = value; }
+    float IListViewNode.ContentWidth { get => contentWidth; set => SetContentField(ref contentWidth, value); }
     bool IListViewNode.HasSwipeActions => swipeActionsFactory is not null && Sections is null;
-    int IListViewNode.SwipeRowIndex { get => swipeRowIndex; set => swipeRowIndex = value; }
-    float IListViewNode.SwipeOffsetX { get => swipeOffsetX; set => swipeOffsetX = value; }
+    int IListViewNode.SwipeRowIndex { get => swipeRowIndex; set => SetContentField(ref swipeRowIndex, value); }
+    float IListViewNode.SwipeOffsetX { get => swipeOffsetX; set => SetContentField(ref swipeOffsetX, value); }
     float IListViewNode.SwipeButtonWidth => SwipeButtonW;
 
     private SwipeActionSet? SwipeSetFor(int row)

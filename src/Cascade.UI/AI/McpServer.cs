@@ -639,7 +639,17 @@ internal sealed class McpServer
 
         if (tool.DebugOnly && !Config.HasDevTools)
         {
-            throw new McpProtocolException(-32001, "Tool requires DevTools (CASCADE_DEVTOOLS). Build the app with -p:CascadeDevTools=true: " + name);
+            // The old text ("Build the app with -p:CascadeDevTools=true") was impossible to act on
+            // for anyone consuming the NuGet package: the symbol has to be compiled into
+            // Cascade.UI itself, and the package's lib/ assembly is a plain Release build. The
+            // package now also ships a DevTools assembly under devtools/ that the property swaps
+            // in (TOOLING-001), so the advice is finally true — but say what to do either way.
+            throw new McpProtocolException(
+                -32001,
+                $"Tool '{name}' requires DevTools, which is not compiled into this build of Cascade.UI. "
+                + "Rebuild with -p:CascadeDevTools=true (NuGet consumers need Echostorm.Cascade.UI "
+                + "0.1.0-alpha.31 or later, which ships the DevTools assembly), then relaunch the app "
+                + "with CASCADE_MCP=1.");
         }
 
         string content;

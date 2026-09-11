@@ -237,11 +237,38 @@ internal sealed class Reconciler
         // is always correct.
         if (from is ITabularDataNode oldTab && to is ITabularDataNode newTab)
         {
-            if (oldTab.CellTextCache != null
-                && oldTab.CellTextCacheKey != null
-                && ReferenceEquals(oldTab.CellTextCacheKey, newTab.CellTextCacheKey))
+            bool sameDataSource = oldTab.CellTextCacheKey != null
+                && ReferenceEquals(oldTab.CellTextCacheKey, newTab.CellTextCacheKey);
+
+            if (sameDataSource && oldTab.CellTextCache != null)
             {
                 newTab.CellTextCache = oldTab.CellTextCache;
+            }
+
+            // Selection, sort and scroll are what the user did to *these rows*, so they only
+            // carry over while the node is still showing the same data. Without this a table
+            // lost the clicked row the instant anything else in the view called Invalidate() —
+            // including the OnSelect handler that set the selection in the first place.
+            if (sameDataSource)
+            {
+                newTab.RestoreInteractionState(oldTab.CaptureInteractionState());
+
+                // Auto column widths are measured from the cell text, so they carry over exactly
+                // as far as the cell cache does — and are dropped when the data changes, which is
+                // what makes them re-measure.
+                if (oldTab.AutoColumnWidths is { } autoWidths
+                    && autoWidths.Length == newTab.ColumnCount)
+                {
+                    newTab.AutoColumnWidths = autoWidths;
+                }
+            }
+
+            // Column widths are a property of the columns, not the rows: filtering a list must
+            // not undo a column the user widened. Carried whenever the shape still matches.
+            if (oldTab.ColumnWidthOverrides is { } widths
+                && widths.Length == newTab.ColumnCount)
+            {
+                newTab.ColumnWidthOverrides = widths;
             }
         }
 

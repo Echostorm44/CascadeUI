@@ -24,6 +24,17 @@ internal sealed class FrameOrchestrator : IDisposable
     private long lastTickTimestamp;
     private float windowWidth;
     private float windowHeight;
+
+    /// <summary>
+    /// Logical window size. Exposed for diagnostics: frame timings are meaningless without the
+    /// surface they were measured against, and comparing a run at one resolution to a run at
+    /// another is how a display-scale change came to look like a performance regression
+    /// (PERF-002). Multiply by <see cref="PixelRatio"/> for the physical framebuffer size.
+    /// </summary>
+    internal float WindowWidth => windowWidth;
+
+    /// <inheritdoc cref="WindowWidth"/>
+    internal float WindowHeight => windowHeight;
     private bool disposed;
 
     // Cached across frames to avoid per-tick allocations. The DrawContext
@@ -404,6 +415,10 @@ internal sealed class FrameOrchestrator : IDisposable
                 LayoutSolver.H2FontSize = Theme.Typography.Scale.H2.Size;
                 LayoutSolver.H3FontSize = Theme.Typography.Scale.H3.Size;
                 LayoutSolver.CardPadding = Theme.Card.Padding.Left;
+                LayoutSolver.CheckboxSize = Theme.Checkbox.Size;
+                LayoutSolver.CheckboxLabelGap = Theme.Checkbox.LabelGap;
+                LayoutSolver.RadioSize = Theme.Radio.Size;
+                LayoutSolver.RadioLabelGap = Theme.Radio.LabelGap;
             }
 
             DiagnosticsHub.MarkPhase("layout.engine");

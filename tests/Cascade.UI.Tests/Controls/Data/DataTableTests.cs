@@ -841,7 +841,7 @@ public class DataTableTests
     {
         var items = ThreeProducts();
         var table = new DataTable<Product>(items, [DataColumn<Product>.Text("Name", p => p.Name)])
-            .Selected(new Bindable<Product>(items[2], _ => { }));
+            .Selected(new Bindable<Product?>(items[2], _ => { }));
         var tdn = (ITabularDataNode)table;
 
         tdn.SyncSelectionFromBinding();
@@ -856,7 +856,7 @@ public class DataTableTests
         var items = ThreeProducts();
         Product? received = null;
         var table = new DataTable<Product>(items, [DataColumn<Product>.Text("Name", p => p.Name)])
-            .Selected(new Bindable<Product>(items[0], v => received = v));
+            .Selected(new Bindable<Product?>(items[0], v => received = v));
 
         ((ITabularDataNode)table).SelectRow(1, ctrl: false, shift: false);
 
@@ -868,7 +868,7 @@ public class DataTableTests
     {
         var items = ThreeProducts();
         var table = new DataTable<Product>(items, [DataColumn<Product>.Text("Name", p => p.Name)])
-            .Selected(new Bindable<Product>(null!, _ => { }));
+            .Selected(new Bindable<Product?>(null, _ => { }));
         var tdn = (ITabularDataNode)table;
         tdn.SelectRow(1, ctrl: false, shift: false);
 
@@ -883,7 +883,7 @@ public class DataTableTests
     {
         var items = ThreeProducts();
         var table = new DataTable<Product>(items, [DataColumn<Product>.Text("Name", p => p.Name)])
-            .Selected(new Bindable<Product>(new Product { Name = "Elsewhere" }, _ => { }));
+            .Selected(new Bindable<Product?>(new Product { Name = "Elsewhere" }, _ => { }));
         var tdn = (ITabularDataNode)table;
         tdn.SelectRow(1, ctrl: false, shift: false);
 
@@ -898,7 +898,7 @@ public class DataTableTests
         var items = ThreeProducts();   // Widget, Gadget, Doohickey
         var table = new DataTable<Product>(items, [DataColumn<Product>.Text("Name", p => p.Name)])
             .Sortable(true)
-            .Selected(new Bindable<Product>(items[0], _ => { }));   // Widget
+            .Selected(new Bindable<Product?>(items[0], _ => { }));   // Widget
         var tdn = (ITabularDataNode)table;
         tdn.ApplySort(0);   // ascending: Doohickey, Gadget, Widget
 
@@ -915,7 +915,7 @@ public class DataTableTests
         var items = ThreeProducts();
         var table = new DataTable<Product>(items, [DataColumn<Product>.Text("Name", p => p.Name)])
             .SelectionMode(SelectionMode.Multi)
-            .Selected(new Bindable<Product>(items[2], _ => { }));
+            .Selected(new Bindable<Product?>(items[2], _ => { }));
         var tdn = (ITabularDataNode)table;
         tdn.SelectRow(0, ctrl: false, shift: false);
         tdn.SelectRow(2, ctrl: true, shift: false);   // anchor now 2, rows {0, 2}
@@ -938,7 +938,7 @@ public class DataTableTests
         oldTable.SelectRow(1, ctrl: false, shift: false);
 
         var newTable = (ITabularDataNode)new DataTable<Product>(items, columns)
-            .Selected(new Bindable<Product>(items[2], _ => { }));
+            .Selected(new Bindable<Product?>(items[2], _ => { }));
         newTable.RestoreInteractionState(oldTable.CaptureInteractionState());
         newTable.SyncSelectionFromBinding();
 

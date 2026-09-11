@@ -443,10 +443,11 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
     /// <summary>
     /// Binds the primary selected item. The grid selects the bound value when it paints, and
     /// pushes the clicked item back through the binding — the same two-way contract as
-    /// <see cref="DataTable{T}.Selected"/>. Added with CONTROLS-008; the grid previously had no
+    /// <see cref="DataTable{T}.Selected"/>. <c>null</c> means "nothing selected", hence
+    /// <c>Bindable&lt;T?&gt;</c>. Added with CONTROLS-008; the grid previously had no
     /// selection binding at all, only the row highlight from clicking.
     /// </summary>
-    public DataGrid<T> Selected(Bindable<T> selected)
+    public DataGrid<T> Selected(Bindable<T?> selected)
     {
         selectedBinding = selected;
         return this;
@@ -459,7 +460,7 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
         return this;
     }
 
-    internal Bindable<T>? selectedBinding;
+    internal Bindable<T?>? selectedBinding;
     internal Action<T>? onSelectHandler;
 
     // ── Appearance ────────────────────────────────────────────────────

@@ -823,6 +823,141 @@ public class DataTableTests
         await Assert.That(width).IsEqualTo(400f);
     }
 
+    // ── Selected(Bindable<T>) (CONTROLS-008) ──────────────────────────
+    //
+    // The binding was stored and never read in either direction: a selection set in code could
+    // not be drawn, and a click never reached the bound field. The painter now syncs from it
+    // before drawing rows, and SelectRow pushes through it.
+
+    private static Product[] ThreeProducts() =>
+    [
+        new() { Name = "Widget" },
+        new() { Name = "Gadget" },
+        new() { Name = "Doohickey" },
+    ];
+
+    [Test]
+    public async Task BoundValueBecomesTheSelectionOnSync()
+    {
+        var items = ThreeProducts();
+        var table = new DataTable<Product>(items, [DataColumn<Product>.Text("Name", p => p.Name)])
+            .Selected(new Bindable<Product>(items[2], _ => { }));
+        var tdn = (ITabularDataNode)table;
+
+        tdn.SyncSelectionFromBinding();
+
+        await Assert.That(tdn.SelectedRowIndex).IsEqualTo(2);
+        await Assert.That(tdn.IsRowSelected(2)).IsTrue();
+    }
+
+    [Test]
+    public async Task ClickPushesTheItemThroughTheBinding()
+    {
+        var items = ThreeProducts();
+        Product? received = null;
+        var table = new DataTable<Product>(items, [DataColumn<Product>.Text("Name", p => p.Name)])
+            .Selected(new Bindable<Product>(items[0], v => received = v));
+
+        ((ITabularDataNode)table).SelectRow(1, ctrl: false, shift: false);
+
+        await Assert.That(received).IsSameReferenceAs(items[1]);
+    }
+
+    [Test]
+    public async Task NullBoundValueClearsTheSelection()
+    {
+        var items = ThreeProducts();
+        var table = new DataTable<Product>(items, [DataColumn<Product>.Text("Name", p => p.Name)])
+            .Selected(new Bindable<Product>(null!, _ => { }));
+        var tdn = (ITabularDataNode)table;
+        tdn.SelectRow(1, ctrl: false, shift: false);
+
+        tdn.SyncSelectionFromBinding();
+
+        await Assert.That(tdn.SelectedRowIndex).IsEqualTo(-1);
+        await Assert.That(tdn.IsRowSelected(1)).IsFalse();
+    }
+
+    [Test]
+    public async Task BoundValueNotInTheListLeavesTheSelectionAlone()
+    {
+        var items = ThreeProducts();
+        var table = new DataTable<Product>(items, [DataColumn<Product>.Text("Name", p => p.Name)])
+            .Selected(new Bindable<Product>(new Product { Name = "Elsewhere" }, _ => { }));
+        var tdn = (ITabularDataNode)table;
+        tdn.SelectRow(1, ctrl: false, shift: false);
+
+        tdn.SyncSelectionFromBinding();
+
+        await Assert.That(tdn.SelectedRowIndex).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task BoundValueMapsThroughTheSortOrder()
+    {
+        var items = ThreeProducts();   // Widget, Gadget, Doohickey
+        var table = new DataTable<Product>(items, [DataColumn<Product>.Text("Name", p => p.Name)])
+            .Sortable(true)
+            .Selected(new Bindable<Product>(items[0], _ => { }));   // Widget
+        var tdn = (ITabularDataNode)table;
+        tdn.ApplySort(0);   // ascending: Doohickey, Gadget, Widget
+
+        tdn.SyncSelectionFromBinding();
+
+        // Widget is data index 0 but display row 2 once sorted.
+        await Assert.That(tdn.SelectedRowIndex).IsEqualTo(2);
+        await Assert.That(tdn.GetCellText(tdn.SelectedRowIndex, 0)).IsEqualTo("Widget");
+    }
+
+    [Test]
+    public async Task SyncLeavesAMultiSelectionAloneWhenItsAnchorMatches()
+    {
+        var items = ThreeProducts();
+        var table = new DataTable<Product>(items, [DataColumn<Product>.Text("Name", p => p.Name)])
+            .SelectionMode(SelectionMode.Multi)
+            .Selected(new Bindable<Product>(items[2], _ => { }));
+        var tdn = (ITabularDataNode)table;
+        tdn.SelectRow(0, ctrl: false, shift: false);
+        tdn.SelectRow(2, ctrl: true, shift: false);   // anchor now 2, rows {0, 2}
+
+        tdn.SyncSelectionFromBinding();
+
+        await Assert.That(tdn.IsRowSelected(0)).IsTrue();
+        await Assert.That(tdn.IsRowSelected(2)).IsTrue();
+    }
+
+    [Test]
+    public async Task BindingWinsOverARestoredSelectionThatDisagrees()
+    {
+        // RENDER-007 carries the old node's selection across; CONTROLS-008 then applies the
+        // binding. When they disagree the binding is the caller's stated intent and must win.
+        var items = ThreeProducts();
+        var columns = new[] { DataColumn<Product>.Text("Name", p => p.Name) };
+
+        var oldTable = (ITabularDataNode)new DataTable<Product>(items, columns);
+        oldTable.SelectRow(1, ctrl: false, shift: false);
+
+        var newTable = (ITabularDataNode)new DataTable<Product>(items, columns)
+            .Selected(new Bindable<Product>(items[2], _ => { }));
+        newTable.RestoreInteractionState(oldTable.CaptureInteractionState());
+        newTable.SyncSelectionFromBinding();
+
+        await Assert.That(newTable.SelectedRowIndex).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task NoBindingMeansSyncIsANoOp()
+    {
+        var items = ThreeProducts();
+        var table = new DataTable<Product>(items, [DataColumn<Product>.Text("Name", p => p.Name)]);
+        var tdn = (ITabularDataNode)table;
+        tdn.SelectRow(1, ctrl: false, shift: false);
+
+        tdn.SyncSelectionFromBinding();
+
+        await Assert.That(tdn.SelectedRowIndex).IsEqualTo(1);
+    }
+
     [Test]
     public async Task StaleAutoWidthsForADifferentColumnCountAreIgnored()
     {

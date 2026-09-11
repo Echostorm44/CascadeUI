@@ -95,6 +95,13 @@ internal interface ITabularDataNode
     /// <summary>Selects the given row with optional modifier key behavior.</summary>
     void SelectRow(int row, bool ctrl, bool shift);
 
+    /// <summary>
+    /// Makes the value of the <c>Selected(Bindable&lt;T&gt;)</c> binding the current selection,
+    /// if a binding was supplied. The painter calls this before drawing rows so a selection set in
+    /// code is visible; no-op without a binding.
+    /// </summary>
+    void SyncSelectionFromBinding();
+
     /// <summary>Moves the selection by the given delta (positive = down, negative = up).</summary>
     void MoveSelection(int delta);
 
@@ -1103,8 +1110,89 @@ public sealed class DataTable<T> : Node, ITabularDataNode
         int dataRow = MapRow(row);
         if (dataRow >= 0 && dataRow < Items.Count)
         {
-            onSelectHandler?.Invoke(Items[dataRow]);
+            T item = Items[dataRow];
+            // Push the selection out through the binding as well as the event, so a caller holding
+            // Bind(selected, v => selected = v) sees it the way they would on any other control.
+            // Before CONTROLS-008 the binding was accepted and never touched in either direction.
+            if (selectedBinding is { } binding)
+            {
+                binding.OnChange(item);
+            }
+
+            onSelectHandler?.Invoke(item);
         }
+    }
+
+    /// <summary>
+    /// Makes the bound value the selection. Called by the painter before rows are drawn, so a
+    /// selection set in code shows up without a click — <c>Selected(Bind(...))</c> used to be
+    /// stored and never read (CONTROLS-008). Compares against the primary selected item only, so
+    /// a multi-selection the user built by Ctrl-clicking is left alone as long as its anchor
+    /// still matches the binding.
+    /// </summary>
+    void ITabularDataNode.SyncSelectionFromBinding()
+    {
+        if (selectedBinding is not { } binding)
+        {
+            return;
+        }
+
+        T? wanted = binding.Value;
+        if (wanted is null)
+        {
+            if (selectedRowIdx >= 0)
+            {
+                selectedRows.Clear();
+                selectedRowIdx = -1;
+                anchorRow = -1;
+            }
+
+            return;
+        }
+
+        int dataIndex = IndexOfItem(wanted);
+        if (dataIndex < 0)
+        {
+            // Bound to something not in the list — nothing sensible to show; leave what is there.
+            return;
+        }
+
+        int displayRow = DisplayRowOf(dataIndex);
+        if (displayRow < 0 || displayRow == selectedRowIdx)
+        {
+            return;
+        }
+
+        selectedRows.Clear();
+        selectedRows.Add(displayRow);
+        selectedRowIdx = displayRow;
+        anchorRow = displayRow;
+    }
+
+    private int IndexOfItem(T item)
+    {
+        var comparer = EqualityComparer<T>.Default;
+        for (int i = 0; i < Items.Count; i++)
+        {
+            T candidate = Items[i];
+            if (ReferenceEquals(candidate, item) || comparer.Equals(candidate, item))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    /// <summary>Inverse of <see cref="MapRow"/>: the display row currently showing a data index.</summary>
+    private int DisplayRowOf(int dataIndex)
+    {
+        if (sortedIndices is null)
+        {
+            return dataIndex;
+        }
+
+        return Array.IndexOf(sortedIndices, dataIndex);
     }
 
     void ITabularDataNode.MoveSelection(int delta)

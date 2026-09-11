@@ -10145,6 +10145,10 @@ internal sealed class NodePainter
         // in the width resolver, so measure them and hand the results back through the node.
         EnsureAutoColumnWidths(tdn, cellFontSize, pad);
 
+        // A selection set in code arrives through Selected(Bindable<T>); make it the live
+        // selection before any row decides whether to draw highlighted (CONTROLS-008).
+        tdn.SyncSelectionFromBinding();
+
         // Compute column widths (hidden columns get 0 from GetColumnWidth)
         float[] colWidths = new float[tdn.ColumnCount];
         float availWidth = bounds.Width;

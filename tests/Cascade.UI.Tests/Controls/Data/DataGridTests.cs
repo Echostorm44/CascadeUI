@@ -409,7 +409,7 @@ public class DataGridTests
             new Row { Name = "Charlie", Quantity = 3, Active = true },
         ]);
         var target = binding.Value[2];
-        var grid = CreateGrid(binding).Selected(new Bindable<Row>(target, _ => { }));
+        var grid = CreateGrid(binding).Selected(new Bindable<Row?>(target, _ => { }));
         var tdn = (ITabularDataNode)grid;
 
         tdn.SyncSelectionFromBinding();
@@ -424,7 +424,7 @@ public class DataGridTests
         Row? bound = null;
         Row? selected = null;
         var grid = CreateGrid(binding)
-            .Selected(new Bindable<Row>(binding.Value[0], v => bound = v))
+            .Selected(new Bindable<Row?>(binding.Value[0], v => bound = v))
             .OnSelect(v => selected = v);
 
         ((ITabularDataNode)grid).SelectRow(1, ctrl: false, shift: false);

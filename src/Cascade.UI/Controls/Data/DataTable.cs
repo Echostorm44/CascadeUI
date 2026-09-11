@@ -565,7 +565,7 @@ public sealed class DataTable<T> : Node, ITabularDataNode
     internal bool filterRowEnabled;
     internal Bindable<string>? globalFilterBinding;
     internal SelectionMode selectionModeValue;
-    internal Bindable<T>? selectedBinding;
+    internal Bindable<T?>? selectedBinding;
     internal Action<T>? onSelectHandler;
     internal Func<T, IReadOnlyList<ContextMenuItem>>? rowContextMenuFactory;
     internal Func<T, IReadOnlyList<Node>>? rowActionsFactory;
@@ -623,8 +623,12 @@ public sealed class DataTable<T> : Node, ITabularDataNode
         return this;
     }
 
-    /// <summary>Binds the selected item(s).</summary>
-    public DataTable<T> Selected(Bindable<T> selected)
+    /// <summary>
+    /// Binds the selected item. The bound value is selected when the table paints, and the clicked
+    /// item is pushed back through the binding. <c>null</c> means "nothing selected", which is
+    /// why the parameter is <c>Bindable&lt;T?&gt;</c>: bind a nullable field without a <c>!</c>.
+    /// </summary>
+    public DataTable<T> Selected(Bindable<T?> selected)
     {
         selectedBinding = selected;
         return this;

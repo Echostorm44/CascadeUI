@@ -362,4 +362,478 @@ public class DataTableTests
         var same = ReferenceEquals(col, chained);
         await Assert.That(same).IsTrue();
     }
+
+    // ── Column sizing (CONTROLS-001) ─────────────────────────────────
+    //
+    // Before CONTROLS-001 every column without explicit pixels resolved to
+    // availableWidth / columnCount, so Fill/MinWidth/MaxWidth compiled and did nothing.
+
+    private static DataTable<Product> TableWithColumns(params DataColumn<Product>[] columns) =>
+        new(
+            [new Product { Name = "Widget", Price = 9.99m, InStock = true }],
+            columns);
+
+    [Test]
+    public async Task FillColumnTakesSpaceLeftByFixedColumns()
+    {
+        var table = TableWithColumns(
+            DataColumn<Product>.Text("A", p => p.Name).Width(100f),
+            DataColumn<Product>.Text("B", p => p.Name).Width(DataColumnWidth.Fill),
+            DataColumn<Product>.Text("C", p => p.Name).Width(100f));
+
+        var width = ((ITabularDataNode)table).GetColumnWidth(1, 500f);
+        await Assert.That(width).IsEqualTo(300f);
+    }
+
+    [Test]
+    public async Task MultipleFillColumnsSplitRemainingSpaceEvenly()
+    {
+        var table = TableWithColumns(
+            DataColumn<Product>.Text("A", p => p.Name).Width(100f),
+            DataColumn<Product>.Text("B", p => p.Name).Width(DataColumnWidth.Fill),
+            DataColumn<Product>.Text("C", p => p.Name).Width(DataColumnWidth.Fill));
+
+        var tdn = (ITabularDataNode)table;
+        var first = tdn.GetColumnWidth(1, 500f);
+        var second = tdn.GetColumnWidth(2, 500f);
+
+        await Assert.That(first).IsEqualTo(200f);
+        await Assert.That(second).IsEqualTo(200f);
+    }
+
+    [Test]
+    public async Task FillColumnRespectsMinWidth()
+    {
+        var table = TableWithColumns(
+            DataColumn<Product>.Text("A", p => p.Name).Width(380f),
+            DataColumn<Product>.Text("B", p => p.Name).Width(DataColumnWidth.Fill).MinWidth(250f));
+
+        var width = ((ITabularDataNode)table).GetColumnWidth(1, 500f);
+        await Assert.That(width).IsEqualTo(250f);
+    }
+
+    [Test]
+    public async Task FillColumnRespectsMaxWidth()
+    {
+        var table = TableWithColumns(
+            DataColumn<Product>.Text("A", p => p.Name).Width(200f),
+            DataColumn<Product>.Text("B", p => p.Name).Width(DataColumnWidth.Fill).MaxWidth(150f));
+
+        var width = ((ITabularDataNode)table).GetColumnWidth(1, 500f);
+        await Assert.That(width).IsEqualTo(150f);
+    }
+
+    [Test]
+    public async Task OverflowingFixedColumnsCollapseFillToZeroNotNegative()
+    {
+        var table = TableWithColumns(
+            DataColumn<Product>.Text("A", p => p.Name).Width(400f),
+            DataColumn<Product>.Text("B", p => p.Name).Width(400f),
+            DataColumn<Product>.Text("C", p => p.Name).Width(DataColumnWidth.Fill));
+
+        var width = ((ITabularDataNode)table).GetColumnWidth(2, 500f);
+        await Assert.That(width).IsEqualTo(0f);
+    }
+
+    [Test]
+    public async Task FixedWidthColumnIsUnaffectedBySiblings()
+    {
+        var table = TableWithColumns(
+            DataColumn<Product>.Text("A", p => p.Name).Width(120f),
+            DataColumn<Product>.Text("B", p => p.Name).Width(DataColumnWidth.Fill));
+
+        var width = ((ITabularDataNode)table).GetColumnWidth(0, 500f);
+        await Assert.That(width).IsEqualTo(120f);
+    }
+
+    // ── Column resize (CONTROLS-003) ─────────────────────────────────
+    //
+    // IsColumnResizable returned a hard false and SetColumnWidth was an empty body, so
+    // DataTable columns could never be dragged however the column was configured.
+
+    [Test]
+    public async Task ColumnsAreResizableByDefault()
+    {
+        var table = CreateTable();
+
+        var resizable = ((ITabularDataNode)table).IsColumnResizable(0);
+        await Assert.That(resizable).IsTrue();
+    }
+
+    [Test]
+    public async Task ColumnOptedOutOfResizeIsNotResizable()
+    {
+        var table = TableWithColumns(
+            DataColumn<Product>.Text("A", p => p.Name).Resizable(false));
+
+        var resizable = ((ITabularDataNode)table).IsColumnResizable(0);
+        await Assert.That(resizable).IsFalse();
+    }
+
+    [Test]
+    public async Task SetColumnWidthChangesResolvedWidth()
+    {
+        var table = TableWithColumns(
+            DataColumn<Product>.Text("A", p => p.Name).Width(100f),
+            DataColumn<Product>.Text("B", p => p.Name).Width(DataColumnWidth.Fill));
+
+        var tdn = (ITabularDataNode)table;
+        tdn.SetColumnWidth(0, 250f);
+
+        var width = tdn.GetColumnWidth(0, 500f);
+        await Assert.That(width).IsEqualTo(250f);
+    }
+
+    [Test]
+    public async Task SetColumnWidthClampsToMinAndMax()
+    {
+        var table = TableWithColumns(
+            DataColumn<Product>.Text("A", p => p.Name).MinWidth(80f).MaxWidth(300f));
+
+        var tdn = (ITabularDataNode)table;
+
+        tdn.SetColumnWidth(0, 10f);
+        var floored = tdn.GetColumnWidth(0, 500f);
+
+        tdn.SetColumnWidth(0, 900f);
+        var capped = tdn.GetColumnWidth(0, 500f);
+
+        await Assert.That(floored).IsEqualTo(80f);
+        await Assert.That(capped).IsEqualTo(300f);
+    }
+
+    [Test]
+    public async Task SetColumnWidthDoesNotMutateCallerColumn()
+    {
+        var column = DataColumn<Product>.Text("A", p => p.Name).Width(100f);
+        var table = TableWithColumns(column);
+
+        ((ITabularDataNode)table).SetColumnWidth(0, 250f);
+
+        // The caller's definition must be untouched: Render() rebuilds these every pass, and a
+        // hoisted static column list would otherwise leak the width into every table using it.
+        await Assert.That(column.widthValue).IsEqualTo(100f);
+    }
+
+    [Test]
+    public async Task ResizeIsIgnoredForOutOfRangeColumn()
+    {
+        var table = CreateTable();
+        var tdn = (ITabularDataNode)table;
+
+        tdn.SetColumnWidth(99, 250f);
+
+        var width = tdn.GetColumnWidth(0, 600f);
+        await Assert.That(width).IsEqualTo(200f);
+    }
+
+    // ── Interaction state across reconcile (RENDER-007) ──────────────
+    //
+    // Render() returns a fresh tree, so any Invalidate() replaced the table node and dropped
+    // the user's selection, sort and resized widths.
+
+    [Test]
+    public async Task SelectionSurvivesReconcileAgainstSameItems()
+    {
+        var items = new[]
+        {
+            new Product { Name = "Widget" },
+            new Product { Name = "Gadget" },
+            new Product { Name = "Doohickey" },
+        };
+        var columns = new[] { DataColumn<Product>.Text("Name", p => p.Name) };
+
+        var oldTable = (ITabularDataNode)new DataTable<Product>(items, columns);
+        oldTable.SelectRow(2, ctrl: false, shift: false);
+
+        var newTable = (ITabularDataNode)new DataTable<Product>(items, columns);
+        newTable.RestoreInteractionState(oldTable.CaptureInteractionState());
+
+        var index = newTable.SelectedRowIndex;
+        var selected = newTable.IsRowSelected(2);
+
+        await Assert.That(index).IsEqualTo(2);
+        await Assert.That(selected).IsTrue();
+    }
+
+    [Test]
+    public async Task SortSurvivesReconcileWithoutFlippingDirection()
+    {
+        var items = new[]
+        {
+            new Product { Name = "Widget" },
+            new Product { Name = "Gadget" },
+        };
+        var columns = new[] { DataColumn<Product>.Text("Name", p => p.Name) };
+
+        var oldTable = (ITabularDataNode)new DataTable<Product>(items, columns).Sortable(true);
+        oldTable.ApplySort(0);
+        oldTable.ApplySort(0);   // second click → descending
+
+        var newTable = (ITabularDataNode)new DataTable<Product>(items, columns).Sortable(true);
+        newTable.RestoreInteractionState(oldTable.CaptureInteractionState());
+
+        var column = newTable.SortColumnIndex;
+        var direction = newTable.SortDirectionValue;
+        var firstCell = newTable.GetCellText(0, 0);
+
+        await Assert.That(column).IsEqualTo(0);
+        await Assert.That(direction).IsEqualTo(SortDirection.Descending);
+        await Assert.That(firstCell).IsEqualTo("Widget");
+    }
+
+    [Test]
+    public async Task SelectionPastEndOfShorterListIsDropped()
+    {
+        var columns = new[] { DataColumn<Product>.Text("Name", p => p.Name) };
+        var longList = new[]
+        {
+            new Product { Name = "Widget" },
+            new Product { Name = "Gadget" },
+            new Product { Name = "Doohickey" },
+        };
+
+        var oldTable = (ITabularDataNode)new DataTable<Product>(longList, columns);
+        oldTable.SelectRow(2, ctrl: false, shift: false);
+
+        var shortTable = (ITabularDataNode)new DataTable<Product>(longList[..1], columns);
+        shortTable.RestoreInteractionState(oldTable.CaptureInteractionState());
+
+        var index = shortTable.SelectedRowIndex;
+        await Assert.That(index).IsEqualTo(-1);
+    }
+
+    [Test]
+    public async Task ResizedWidthTransfersToReplacementNode()
+    {
+        var items = new[] { new Product { Name = "Widget" } };
+
+        var oldTable = (ITabularDataNode)new DataTable<Product>(
+            items,
+            [DataColumn<Product>.Text("A", p => p.Name), DataColumn<Product>.Text("B", p => p.Name)]);
+        oldTable.SetColumnWidth(0, 275f);
+
+        var newTable = (ITabularDataNode)new DataTable<Product>(
+            items,
+            [DataColumn<Product>.Text("A", p => p.Name), DataColumn<Product>.Text("B", p => p.Name)]);
+        newTable.ColumnWidthOverrides = oldTable.ColumnWidthOverrides;
+
+        var width = newTable.GetColumnWidth(0, 600f);
+        await Assert.That(width).IsEqualTo(275f);
+    }
+
+    // ── Scrolling (CONTROLS-005) ─────────────────────────────────────
+    //
+    // Every virtualization member used to be a no-op stub, so a table taller than its box
+    // clipped the overflow: no scrollbar, and the wheel did nothing because InputDispatcher
+    // gates wheel handling on MaxScrollOffsetY > 0.
+
+    private static ITabularDataNode ScrollableTable(int rowCount, float viewportHeight)
+    {
+        var items = new Product[rowCount];
+        for (int i = 0; i < rowCount; i++)
+        {
+            items[i] = new Product { Name = $"Row {i}" };
+        }
+
+        var table = new DataTable<Product>(
+            items,
+            [DataColumn<Product>.Text("Name", p => p.Name)]).RowHeight(20f);
+
+        var tdn = (ITabularDataNode)table;
+        tdn.ViewportHeight = viewportHeight;
+        return tdn;
+    }
+
+    [Test]
+    public async Task TotalContentHeightIsRowCountTimesRowHeight()
+    {
+        var tdn = ScrollableTable(rowCount: 50, viewportHeight: 200f);
+
+        var height = tdn.TotalContentHeight;
+        await Assert.That(height).IsEqualTo(1000f);
+    }
+
+    [Test]
+    public async Task MaxScrollOffsetIsContentMinusViewport()
+    {
+        var tdn = ScrollableTable(rowCount: 50, viewportHeight: 200f);
+
+        var max = tdn.MaxScrollOffsetY;
+        await Assert.That(max).IsEqualTo(800f);
+    }
+
+    [Test]
+    public async Task ContentShorterThanViewportDoesNotScroll()
+    {
+        var tdn = ScrollableTable(rowCount: 3, viewportHeight: 200f);
+
+        var max = tdn.MaxScrollOffsetY;
+        await Assert.That(max).IsEqualTo(0f);
+    }
+
+    [Test]
+    public async Task ScrollOffsetIsClampedToRange()
+    {
+        var tdn = ScrollableTable(rowCount: 50, viewportHeight: 200f);
+
+        tdn.ScrollOffsetY = 5000f;
+        var clampedHigh = tdn.ScrollOffsetY;
+
+        tdn.ScrollOffsetY = -50f;
+        var clampedLow = tdn.ScrollOffsetY;
+
+        await Assert.That(clampedHigh).IsEqualTo(800f);
+        await Assert.That(clampedLow).IsEqualTo(0f);
+    }
+
+    [Test]
+    public async Task ScrollIntoViewScrollsDownToReachALaterRow()
+    {
+        var tdn = ScrollableTable(rowCount: 50, viewportHeight: 200f);
+
+        // Row 30 spans 600..620; the viewport shows 0..200, so the minimum scroll that reveals
+        // its bottom edge is 620 - 200.
+        tdn.ScrollIntoView(30);
+
+        var offset = tdn.ScrollOffsetY;
+        await Assert.That(offset).IsEqualTo(420f);
+    }
+
+    [Test]
+    public async Task ScrollIntoViewScrollsUpToReachAnEarlierRow()
+    {
+        var tdn = ScrollableTable(rowCount: 50, viewportHeight: 200f);
+        tdn.ScrollOffsetY = 500f;
+
+        tdn.ScrollIntoView(5);
+
+        var offset = tdn.ScrollOffsetY;
+        await Assert.That(offset).IsEqualTo(100f);
+    }
+
+    [Test]
+    public async Task ScrollIntoViewLeavesAnAlreadyVisibleRowAlone()
+    {
+        var tdn = ScrollableTable(rowCount: 50, viewportHeight: 200f);
+        tdn.ScrollOffsetY = 400f;
+
+        tdn.ScrollIntoView(25);   // spans 500..520, inside 400..600
+
+        var offset = tdn.ScrollOffsetY;
+        await Assert.That(offset).IsEqualTo(400f);
+    }
+
+    [Test]
+    public async Task ScrollOffsetSurvivesReconcileBeforeTheViewportIsKnown()
+    {
+        var items = new Product[50];
+        for (int i = 0; i < items.Length; i++)
+        {
+            items[i] = new Product { Name = $"Row {i}" };
+        }
+        var columns = new[] { DataColumn<Product>.Text("Name", p => p.Name) };
+
+        var oldTable = (ITabularDataNode)new DataTable<Product>(items, columns).RowHeight(20f);
+        oldTable.ViewportHeight = 200f;
+        oldTable.ScrollOffsetY = 400f;
+
+        // The replacement has not been painted, so its viewport is still 0. Restoring through the
+        // clamping setter would drive the offset to zero and snap the table back to the top.
+        var newTable = (ITabularDataNode)new DataTable<Product>(items, columns).RowHeight(20f);
+        newTable.RestoreInteractionState(oldTable.CaptureInteractionState());
+
+        var offset = newTable.ScrollOffsetY;
+        await Assert.That(offset).IsEqualTo(400f);
+    }
+
+    // ── Auto columns (CONTROLS-002) ──────────────────────────────────
+    //
+    // Auto needs font metrics, which live in the painter, so the painter measures and publishes
+    // the widths through AutoColumnWidths and the resolver reads them back. Until it has, an Auto
+    // column falls back to fill rather than collapsing.
+
+    [Test]
+    public async Task AutoColumnIsFlaggedInItsSizing()
+    {
+        var table = TableWithColumns(
+            DataColumn<Product>.Text("A", p => p.Name).Width(DataColumnWidth.Auto),
+            DataColumn<Product>.Text("B", p => p.Name).Width(100f));
+
+        var sizing = ((ITabularDataNode)table).GetColumnSizing(0);
+
+        await Assert.That(sizing.Auto).IsTrue();
+        await Assert.That(((ITabularDataNode)table).HasAutoColumns).IsTrue();
+    }
+
+    [Test]
+    public async Task TableWithoutAutoColumnsReportsNone()
+    {
+        var table = TableWithColumns(
+            DataColumn<Product>.Text("A", p => p.Name).Width(100f),
+            DataColumn<Product>.Text("B", p => p.Name).Width(DataColumnWidth.Fill));
+
+        var hasAuto = ((ITabularDataNode)table).HasAutoColumns;
+        await Assert.That(hasAuto).IsFalse();
+    }
+
+    [Test]
+    public async Task MeasuredAutoColumnUsesItsContentWidth()
+    {
+        var table = TableWithColumns(
+            DataColumn<Product>.Text("A", p => p.Name).Width(DataColumnWidth.Auto),
+            DataColumn<Product>.Text("B", p => p.Name).Width(DataColumnWidth.Fill));
+
+        var tdn = (ITabularDataNode)table;
+        tdn.AutoColumnWidths = [180f, null];
+
+        var auto = tdn.GetColumnWidth(0, 500f);
+        var fill = tdn.GetColumnWidth(1, 500f);
+
+        await Assert.That(auto).IsEqualTo(180f);
+
+        // The fill column takes what the measured Auto column left, exactly as it would for a
+        // fixed-width sibling.
+        await Assert.That(fill).IsEqualTo(320f);
+    }
+
+    [Test]
+    public async Task MeasuredAutoColumnStillObeysMaxWidth()
+    {
+        var table = TableWithColumns(
+            DataColumn<Product>.Text("A", p => p.Name).Width(DataColumnWidth.Auto).MaxWidth(120f));
+
+        var tdn = (ITabularDataNode)table;
+        tdn.AutoColumnWidths = [400f];
+
+        var width = tdn.GetColumnWidth(0, 500f);
+        await Assert.That(width).IsEqualTo(120f);
+    }
+
+    [Test]
+    public async Task UnmeasuredAutoColumnFallsBackToFill()
+    {
+        var table = TableWithColumns(
+            DataColumn<Product>.Text("A", p => p.Name).Width(100f),
+            DataColumn<Product>.Text("B", p => p.Name).Width(DataColumnWidth.Auto));
+
+        // No AutoColumnWidths yet — before the first paint. It must take the remaining space
+        // rather than collapsing to nothing.
+        var width = ((ITabularDataNode)table).GetColumnWidth(1, 500f);
+        await Assert.That(width).IsEqualTo(400f);
+    }
+
+    [Test]
+    public async Task StaleAutoWidthsForADifferentColumnCountAreIgnored()
+    {
+        var table = TableWithColumns(
+            DataColumn<Product>.Text("A", p => p.Name).Width(DataColumnWidth.Auto),
+            DataColumn<Product>.Text("B", p => p.Name).Width(100f));
+
+        var tdn = (ITabularDataNode)table;
+        tdn.AutoColumnWidths = [180f];   // three columns' worth of nothing — wrong shape
+
+        var width = tdn.GetColumnWidth(0, 500f);
+        await Assert.That(width).IsEqualTo(400f);   // falls back to fill
+    }
 }

@@ -54,3 +54,6 @@ opencode.json
 .claude/
 # Benchmark output
 BenchmarkDotNet.Artifacts/
+
+# Local pack output: the DevTools assembly (TOOLING-001) and any local NuGet feed
+artifacts/

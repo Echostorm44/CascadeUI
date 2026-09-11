@@ -270,4 +270,50 @@ System.IO.File.WriteAllText(OutputFile, sb.ToString());
     </Task>
   </UsingTask>
 
+  <!--
+    TOOLING-001: let a package consumer turn on the MCP DevTools surface.
+
+      dotnet build -p:CascadeDevTools=true
+      set CASCADE_MCP=1 && MyApp.exe
+      cascade mcp screenshot -o shot.png
+
+    The inspection verbs need the CASCADE_DEVTOOLS symbol compiled into Cascade.UI itself, so
+    setting the property on the consuming app could never work — the package's lib/ assembly is a
+    plain Release build. The package now also carries a DevTools-enabled copy under devtools/, and
+    this swaps the reference to it. Same assembly identity and public API, so nothing else in the
+    build graph changes; the only difference is the inspection surface and the (still
+    CASCADE_MCP-gated) listener.
+
+    Off by default: without the property the consumer gets the lean lib/ assembly exactly as
+    before. The swap runs after ResolvePackageAssets so it can replace the resolved compile
+    reference and the copy-local runtime item together — doing only one of the two leaves the app
+    compiling against one assembly and running against the other.
+  -->
+  <Target Name="CascadeUseDevToolsAssembly"
+          AfterTargets="ResolvePackageAssets"
+          Condition="'$(CascadeDevTools)' == 'true' AND Exists('$(MSBuildThisFileDirectory)..\devtools\net10.0\Cascade.UI.dll')">
+
+    <PropertyGroup>
+      <CascadeDevToolsAssembly>$(MSBuildThisFileDirectory)..\devtools\net10.0\Cascade.UI.dll</CascadeDevToolsAssembly>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <ResolvedCompileFileDefinitions Remove="@(ResolvedCompileFileDefinitions)"
+                                      Condition="'%(Filename)%(Extension)' == 'Cascade.UI.dll'" />
+      <ResolvedCompileFileDefinitions Include="$(CascadeDevToolsAssembly)">
+        <NuGetPackageId>Echostorm.Cascade.UI</NuGetPackageId>
+      </ResolvedCompileFileDefinitions>
+
+      <RuntimeCopyLocalItems Remove="@(RuntimeCopyLocalItems)"
+                             Condition="'%(Filename)%(Extension)' == 'Cascade.UI.dll'" />
+      <RuntimeCopyLocalItems Include="$(CascadeDevToolsAssembly)">
+        <NuGetPackageId>Echostorm.Cascade.UI</NuGetPackageId>
+        <AssetType>runtime</AssetType>
+      </RuntimeCopyLocalItems>
+    </ItemGroup>
+
+    <Message Importance="high"
+             Text="Cascade UI: DevTools build in use. Run the app with CASCADE_MCP=1, then: cascade mcp tree" />
+  </Target>
+
 </Project>

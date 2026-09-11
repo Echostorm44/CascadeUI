@@ -28,10 +28,33 @@ internal static class TextLayoutCache
 
     internal static int Count => cache.Count;
 
+    // Hit/miss counters. A miss means full HarfBuzz shaping plus a fresh TextLayoutResult, so a
+    // low hit rate is expensive in both time and allocation — and invisible without this, since
+    // the cost shows up as generic "layout"/"paint" bytes rather than as text work. Reported by
+    // the per-type allocation dump (PERF-002).
+    internal static long Hits { get; private set; }
+    internal static long Misses { get; private set; }
+
+    internal static void ResetStats()
+    {
+        Hits = 0;
+        Misses = 0;
+    }
+
     internal static bool TryGet(string text, in TextLayoutOptions options, out TextLayoutResult result)
     {
         var key = new TextLayoutCacheKey(text, options);
-        return cache.TryGetValue(key, out result!);
+        bool hit = cache.TryGetValue(key, out result!);
+        if (hit)
+        {
+            Hits++;
+        }
+        else
+        {
+            Misses++;
+        }
+
+        return hit;
     }
 
     internal static void Add(string text, in TextLayoutOptions options, TextLayoutResult result)

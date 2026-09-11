@@ -29,6 +29,26 @@ internal sealed class NodePainter
     // Each entry on the stack corresponds to one active PaintNode frame.
     private readonly List<long> perTypeChildBytesStack = new(capacity: 64);
 
+    /// <summary>
+    /// Text-shaping cache effectiveness. A miss is full HarfBuzz shaping plus a fresh
+    /// <c>TextLayoutResult</c>, which is the dominant cost behind a large "layout" or "paint"
+    /// byte figure — and is otherwise invisible in the per-type table, which attributes bytes to
+    /// the node being painted rather than to the text work underneath it.
+    /// </summary>
+    private static void AppendTextCacheStats(System.Text.StringBuilder sb)
+    {
+        long hits = TextLayoutCache.Hits;
+        long misses = TextLayoutCache.Misses;
+        long total = hits + misses;
+        double rate = total > 0 ? (double)hits / total * 100.0 : 0.0;
+        sb.Append("text_layout_cache: hits=").Append(hits)
+          .Append(" misses=").Append(misses)
+          .Append(" hit_rate=").Append(rate.ToString("F1", System.Globalization.CultureInfo.InvariantCulture))
+          .Append("% entries=").Append(TextLayoutCache.Count)
+          .AppendLine();
+        sb.AppendLine(LayoutSolver.DumpPerTypeLayoutAllocations(perTypeFrameCount));
+    }
+
     internal static string DumpPerTypeAllocations()
     {
         lock (perTypeLock)
@@ -45,6 +65,7 @@ internal sealed class NodePainter
                 .ToList();
             var sb = new System.Text.StringBuilder();
             sb.Append("frames=").Append(frames).AppendLine();
+            AppendTextCacheStats(sb);
             sb.AppendLine("type, bytes_per_frame, count_per_frame, total_bytes, total_count");
             foreach (var row in sorted)
             {
@@ -67,13 +88,23 @@ internal sealed class NodePainter
         }
     }
 
+    /// <summary>
+    /// Frame at which the one-shot per-type allocation dump is written. 600 assumes a
+    /// continuously animating app (~15s at 40fps); an idle app repaints only a couple of times a
+    /// second and would need a five-minute soak to reach it. Override with
+    /// <c>CASCADE_PERTYPE_FRAME</c> to get the dump out of a short run.
+    /// </summary>
+    private static readonly long PerTypeDumpFrame =
+        long.TryParse(Environment.GetEnvironmentVariable("CASCADE_PERTYPE_FRAME"), out long f) && f > 0
+            ? f
+            : 600;
+
     internal static void TickPerTypeFrame()
     {
         lock (perTypeLock)
         {
             perTypeFrameCount++;
-            // TEMP: one-shot dump at frame 600 (~15s at 40fps), overwrite ok.
-            if (perTypeFrameCount == 600)
+            if (perTypeFrameCount == PerTypeDumpFrame)
             {
                 try
                 {
@@ -102,6 +133,7 @@ internal sealed class NodePainter
             .ToList();
         var sb = new System.Text.StringBuilder();
         sb.Append("frames=").Append(frames).AppendLine();
+        AppendTextCacheStats(sb);
         sb.AppendLine("type, bytes_per_frame, count_per_frame, total_bytes, total_count");
         foreach (var row in sorted)
         {
@@ -300,6 +332,12 @@ internal sealed class NodePainter
         Cascade.UI.Diagnostics.DiagnosticsHub.EndPhase();
     }
 
+    /// <summary>
+    /// Paints a node in full: its layout position, the modifier layer (background, border, corner
+    /// radius, padding, opacity, transforms, clipping) and then its content via
+    /// <see cref="PaintNodeContentOnly"/>. This is the entry point for painting any node —
+    /// see the remarks on <see cref="PaintNodeContentOnly"/> for why.
+    /// </summary>
     private void PaintRecursive(Node node)
     {
         if (node.IsLayoutEmpty || !node.LayoutData.IsVisible)
@@ -435,7 +473,7 @@ internal sealed class NodePainter
             var contentBounds = new Rect(0, 0,
                 localBounds.Width - padding.Horizontal,
                 localBounds.Height - padding.Vertical);
-            PaintNode(node, contentBounds);
+            PaintNodeContentOnly(node, contentBounds);
         }
         finally
         {
@@ -484,7 +522,26 @@ internal sealed class NodePainter
         deferredOverlays.Clear();
     }
 
-    private void PaintNode(Node node, Rect bounds)
+    /// <summary>
+    /// Paints a node's own content — the control visual, or the children of a layout container —
+    /// and <b>nothing else</b>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This deliberately does not draw the modifier layer: <c>.Background()</c>, <c>.Border()</c>,
+    /// <c>.CornerRadius()</c>, padding, opacity, scale/rotation and content clipping all live in
+    /// <see cref="PaintRecursive"/>, which also applies the translate to the node's layout
+    /// position. Call this only when the caller has already done that work — which today means
+    /// only <see cref="PaintRecursive"/> itself and the transparent wrappers below it.
+    /// </para>
+    /// <para>
+    /// <b>To paint an arbitrary node, call <see cref="PaintRecursive"/>.</b> It was named
+    /// <c>PaintNode</c> until RENDER-008, which read as the general entry point; a caller that
+    /// picked it got a control drawn with every modifier silently dropped, and a
+    /// background-filled container rendered as nothing at all with no error anywhere.
+    /// </para>
+    /// </remarks>
+    private void PaintNodeContentOnly(Node node, Rect bounds)
     {
         long __startBytes = GC.GetAllocatedBytesForCurrentThread();
         // Push a zero slot on the child-bytes stack for THIS node's children.
@@ -633,16 +690,21 @@ internal sealed class NodePainter
                 PaintBadge(badge, bounds);
                 break;
 
+            // These three are transparent wrappers: MeasureSingleChildWrapper gives the child
+            // bounds of (0, 0, w, h) inside the wrapper, so PaintRecursive translates by zero and
+            // paints the child in place — while also drawing the child's own modifier layer.
+            // They used to go straight to the content-only path, which silently dropped a
+            // background, border, corner radius or padding set on the wrapped node.
             case FormValidator fv:
-                PaintNode(fv.Content, bounds);
+                PaintRecursive(fv.Content);
                 break;
 
             case KeyHandler kh:
-                PaintNode(kh.Content, bounds);
+                PaintRecursive(kh.Content);
                 break;
 
             case AnimatePresence ap when ap.IsVisible:
-                PaintNode(ap.Child, bounds);
+                PaintRecursive(ap.Child);
                 break;
             case AnimatePresence:
                 break;
@@ -5299,7 +5361,12 @@ internal sealed class NodePainter
                 bounds.Y,
                 bounds.Width - t.Size - t.LabelGap,
                 bounds.Height);
-            PaintText(labelText, labelBounds, 0, theme.Colors.Text);
+
+            // Ellipsis rather than a hard clip: when a caller pins a checkbox narrower than its
+            // label, "Show pruned…" tells them the text was cut. A clean cut at a word boundary
+            // reads as a different, shorter label and is invisible as a bug.
+            PaintText(labelText, labelBounds, 0, theme.Colors.Text,
+                overflow: TextOverflow.Ellipsis);
         }
     }
 
@@ -10074,6 +10141,10 @@ internal sealed class NodePainter
         const float chooserBtnSize = 24f;
         bool hasChooserBtn = tdn.IsColumnChooserEnabled;
 
+        // Auto columns are sized to their content, which needs font metrics — those live here, not
+        // in the width resolver, so measure them and hand the results back through the node.
+        EnsureAutoColumnWidths(tdn, cellFontSize, pad);
+
         // Compute column widths (hidden columns get 0 from GetColumnWidth)
         float[] colWidths = new float[tdn.ColumnCount];
         float availWidth = bounds.Width;
@@ -11090,26 +11161,153 @@ internal sealed class NodePainter
             return;
         }
 
-        if (node is Row row && row.Children is { Count: > 0 })
-        {
-            float spacing = row.Spacing;
-            float startX = cellX + pad;
-            float cx = startX;
+        // Everything else goes through the real pipeline. This method used to be a bespoke
+        // mini-renderer that understood only Sparkline, Label, and a Row of Labels — so a
+        // Column, a Container, an IconView, a Badge, or a Row with an icon in it painted
+        // nothing at all, silently, while the docs promised "any Node per cell".
+        PaintArbitraryCellNode(node, cellX, cellY, cellW, cellH, pad, fontSize);
+    }
 
-            foreach (var child in row.Children)
-            {
-                if (child is Label lbl)
+    /// <summary>
+    /// Gives unstyled labels inside a custom cell the table's cell text size, so custom content
+    /// sits at the same scale as the text cells beside it instead of jumping to the theme's body
+    /// size. A label that set its own size keeps it. The nodes come fresh from the column's
+    /// render callback each paint, so this does not accumulate.
+    /// </summary>
+    private static void ApplyDefaultCellTextSize(Node node, float fontSize)
+    {
+        switch (node)
+        {
+            case Label label:
+                label.TextStyleOverride ??= new TextStyle(fontSize, FontWeight.Regular, fontSize * 1.4f);
+                break;
+
+            case Row row:
+                foreach (var child in row.Children)
                 {
-                    var color = lbl.TextColorOverride ?? defaultTextColor;
-                    float fs = lbl.TextStyleOverride?.Size ?? fontSize;
-                    string text = lbl.Text ?? "";
-                    float ty = cellY + (cellH - fs) / 2f;
-                    ctx.DrawText(text, MathF.Round(cx), MathF.Round(ty), fs, color);
-                    cx += ctx.MeasureText(text, fs).Width + spacing;
+                    ApplyDefaultCellTextSize(child, fontSize);
                 }
-            }
+                break;
+
+            case Column column:
+                foreach (var child in column.Children)
+                {
+                    ApplyDefaultCellTextSize(child, fontSize);
+                }
+                break;
+
+            case Stack stack:
+                foreach (var child in stack.Children)
+                {
+                    ApplyDefaultCellTextSize(child, fontSize);
+                }
+                break;
+
+            case Center center when center.Child is { } centered:
+                ApplyDefaultCellTextSize(centered, fontSize);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Rows sampled when sizing a <see cref="DataColumnWidth.Auto"/> column. Deliberately the
+    /// first N rows of the data rather than the rows currently on screen: sampling the visible
+    /// window makes the column change width as you scroll, which is far more distracting than a
+    /// column that is occasionally a little wider than it strictly needs to be.
+    /// </summary>
+    private const int AutoColumnSampleRows = 50;
+
+    /// <summary>
+    /// Measures <see cref="DataColumnWidth.Auto"/> columns to their content once per data source
+    /// and publishes the widths on the node for <c>TabularColumnWidths.Resolve</c> to read back.
+    /// Skipped entirely for the common case of a table with no Auto columns.
+    /// </summary>
+    private void EnsureAutoColumnWidths(ITabularDataNode tdn, float cellFontSize, float pad)
+    {
+        int columnCount = tdn.ColumnCount;
+        if (columnCount == 0 || !tdn.HasAutoColumns)
+        {
             return;
         }
+
+        // The reconciler drops this alongside the cell cache when the data source changes, so a
+        // non-null array of the right shape means the measurement is still good.
+        if (tdn.AutoColumnWidths is { } existing && existing.Length == columnCount)
+        {
+            return;
+        }
+
+        var widths = new float?[columnCount];
+        int sampleRows = Math.Min(tdn.RowCount, AutoColumnSampleRows);
+
+        for (int c = 0; c < columnCount; c++)
+        {
+            if (!tdn.GetColumnSizing(c).Auto)
+            {
+                continue;
+            }
+
+            // The header has to fit too, or an Auto column can be narrower than its own title.
+            float widest = ctx.MeasureText(tdn.GetColumnHeader(c) ?? "", cellFontSize).Width;
+
+            for (int r = 0; r < sampleRows; r++)
+            {
+                string text = tdn.GetCellText(r, c) ?? "";
+                if (text.Length == 0)
+                {
+                    continue;
+                }
+
+                float w = ctx.MeasureText(text, cellFontSize).Width;
+                if (w > widest)
+                {
+                    widest = w;
+                }
+            }
+
+            widths[c] = widest + (pad * 2f);
+        }
+
+        tdn.AutoColumnWidths = widths;
+    }
+
+    /// <summary>
+    /// Lays a custom cell node out inside the cell's content box and paints it through the
+    /// normal node path, clipped to the cell so an oversized node cannot bleed into its
+    /// neighbours. Vertically centred, matching how text cells sit in their row.
+    /// </summary>
+    private void PaintArbitraryCellNode(
+        Node node, float cellX, float cellY, float cellW, float cellH, float pad, float fontSize)
+    {
+        float contentW = cellW - (pad * 2f);
+        float contentH = cellH;
+        if (contentW <= 0f || contentH <= 0f)
+        {
+            return;
+        }
+
+        ApplyDefaultCellTextSize(node, fontSize);
+        LayoutSolver.PerformLayout(node, LayoutConstraints.Loose(new Size(contentW, contentH)));
+
+        Size measured = node.LayoutData.MeasuredSize;
+        float drawW = Math.Min(measured.Width, contentW);
+        float drawH = Math.Min(measured.Height, contentH);
+
+        // Bounds are parent-relative: PaintRecursive pushes a translate for them. Setting them
+        // here is what places the subtree in the cell.
+        node.LayoutData.Bounds = new Rect(
+            cellX + pad,
+            cellY + ((cellH - drawH) / 2f),
+            drawW,
+            drawH);
+
+        using var clip = ctx.PushClip(new Rect(cellX, cellY, cellW, cellH));
+
+        // PaintRecursive, not PaintNode: the modifier layer — .Background(), .Border(),
+        // .CornerRadius(), padding, opacity — is painted there. Going straight to PaintNode
+        // draws the control but none of its modifiers, which is why a background-filled
+        // container appeared to render nothing at all.
+        PaintRecursive(node);
     }
 
     private void PaintInlineCellLabel(
@@ -11448,7 +11646,11 @@ internal sealed class NodePainter
         // Virtualized scrollbar: a thin thumb on the right edge when content overflows.
         if (lvn.MaxY > 0f && lvn.ViewportHeight > 0f)
         {
-            float total = lvn.ItemCount * lvn.GetItemHeight();
+            // A non-virtualized list has rows of differing heights, so the total cannot be
+            // inferred from the item count — layout measures it and reports it directly.
+            float total = lvn.TotalContentHeight > 0f
+                ? lvn.TotalContentHeight
+                : lvn.ItemCount * lvn.GetItemHeight();
             float trackH = bounds.Height - 8f;
             float thumbH = MathF.Max(24f, trackH * (lvn.ViewportHeight / total));
             float t = lvn.MaxY > 0f ? lvn.OffsetY / lvn.MaxY : 0f;

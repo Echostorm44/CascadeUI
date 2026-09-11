@@ -20,8 +20,14 @@ internal interface ITreeView
     /// </summary>
     Node GetContentNode();
 
-    /// <summary>Drops the cached content so the next <see cref="GetContentNode"/> rebuilds. Layout calls this each frame.</summary>
+    /// <summary>Drops the cached content so the next <see cref="GetContentNode"/> rebuilds.</summary>
     void InvalidateContent();
+
+    /// <summary>
+    /// Drops the cached content only when something that affects it has changed. Called by the
+    /// layout pass in place of an unconditional <see cref="InvalidateContent"/>.
+    /// </summary>
+    void SyncContent();
 
     /// <summary>Toggles the expand/collapse state of the row at the given flattened index.</summary>
     void ToggleRow(int rowIndex);
@@ -113,17 +119,54 @@ public enum TreeDropIndicator
 /// </summary>
 internal static class TreeViewInteractionState
 {
+    private static string? selectedPath;
+    private static int hoveredRow = -1;
+
+    /// <summary>
+    /// Bumped whenever anything that changes the built rows changes. `MeasureTreeView` used to
+    /// call `InvalidateContent()` unconditionally on every layout pass — rebuilding the whole row
+    /// subtree every frame for a tree nobody had touched, which measured at ~25 KB per frame in a
+    /// single node (PERF-002). Comparing this against the version the cached content was built at
+    /// makes the rebuild happen when it is actually needed.
+    /// </summary>
+    internal static int Version { get; private set; }
+
+    internal static void Invalidate() => Version++;
+
     /// <summary>Index-path of the selected row (e.g. "0/1/2"), or null.</summary>
-    internal static string? SelectedPath;
+    internal static string? SelectedPath
+    {
+        get => selectedPath;
+        set
+        {
+            if (selectedPath != value)
+            {
+                selectedPath = value;
+                Version++;
+            }
+        }
+    }
 
     /// <summary>Flattened index of the hovered row, or -1 when nothing is hovered.</summary>
-    internal static int HoveredRow = -1;
+    internal static int HoveredRow
+    {
+        get => hoveredRow;
+        set
+        {
+            if (hoveredRow != value)
+            {
+                hoveredRow = value;
+                Version++;
+            }
+        }
+    }
 
     /// <summary>Resets interaction state. Used in tests.</summary>
     internal static void Reset()
     {
-        SelectedPath = null;
-        HoveredRow = -1;
+        selectedPath = null;
+        hoveredRow = -1;
+        Version++;
     }
 }
 
@@ -154,12 +197,14 @@ internal static class TreeViewExpandState
     internal static void Toggle(string path, bool currentlyExpanded)
     {
         overrides[path] = !currentlyExpanded;
+        TreeViewInteractionState.Invalidate();
     }
 
     /// <summary>Resets all overrides. Used in tests.</summary>
     internal static void Reset()
     {
         overrides.Clear();
+        TreeViewInteractionState.Invalidate();
     }
 }
 
@@ -247,6 +292,31 @@ public sealed class TreeView<T> : Node, ITreeView
     private Node? contentNode;
 
     void ITreeView.InvalidateContent() => contentNode = null;
+
+    /// <summary>
+    /// Interaction/expand version the cached <see cref="contentNode"/> was built against, and the
+    /// theme version, since rows bake theme colours. <c>int.MinValue</c> means "never built".
+    /// </summary>
+    private int contentVersion = int.MinValue;
+    private int contentThemeVersion = int.MinValue;
+
+    /// <summary>
+    /// Drops the cached rows only if something that changes them has changed since they were
+    /// built. Layout calls this instead of invalidating unconditionally — see the note on
+    /// <see cref="TreeViewInteractionState.Version"/>.
+    /// </summary>
+    void ITreeView.SyncContent()
+    {
+        int version = TreeViewInteractionState.Version;
+        int themeVersion = ThemeSwitcher.Version;
+
+        if (contentNode is null || contentVersion != version || contentThemeVersion != themeVersion)
+        {
+            contentNode = null;
+            contentVersion = version;
+            contentThemeVersion = themeVersion;
+        }
+    }
 
     Node ITreeView.GetContentNode()
     {

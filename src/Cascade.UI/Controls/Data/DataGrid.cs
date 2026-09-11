@@ -371,6 +371,26 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
         return this;
     }
 
+    /// <summary>
+    /// Inspects pasted clipboard text before any cell is written. Return <c>false</c> to reject
+    /// the paste entirely — nothing is committed and no undo entry is recorded.
+    /// </summary>
+    /// <param name="validate">
+    /// Receives the raw clipboard text, exactly as it will be parsed (tab- or comma-separated
+    /// lines). Returning <c>false</c> cancels.
+    /// </param>
+    /// <remarks>
+    /// Runs before parsing, so a malformed or unexpected payload can be turned away as one unit
+    /// rather than being partially applied and then undone cell by cell.
+    /// </remarks>
+    public DataGrid<T> OnPaste(Func<string, bool> validate)
+    {
+        onPasteValidator = validate;
+        return this;
+    }
+
+    internal Func<string, bool>? onPasteValidator;
+
     // ── Validation ────────────────────────────────────────────────────
 
     /// <summary>Adds a per-row cross-column validation rule.</summary>
@@ -1054,13 +1074,28 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
 
     void ITabularDataNode.SetColumnWidth(int col, float width)
     {
-        if (col < 0 || col >= Columns.Count)
+        if ((uint)col >= (uint)Columns.Count)
         {
             return;
         }
-        float minW = Columns[col].minWidthValue ?? 40f;
-        float maxW = Columns[col].maxWidthValue ?? float.MaxValue;
-        Columns[col].widthValue = Math.Clamp(width, minW, maxW);
+
+        // Recorded on the node, not written back into Columns[col].widthValue. Mutating the
+        // caller's column definition lost the drag whenever Render() rebuilt the columns, and
+        // persisted it globally whenever the caller hoisted them into a static field.
+        if (columnWidthOverrides is null || columnWidthOverrides.Length != Columns.Count)
+        {
+            columnWidthOverrides = new float?[Columns.Count];
+        }
+
+        var column = Columns[col];
+        columnWidthOverrides[col] = TabularColumnWidths.Clamp(
+            width,
+            new ColumnSizing(
+                Fixed: null,
+                Override: null,
+                Min: column.minWidthValue ?? TabularColumnWidths.MinimumResizeWidth,
+                Max: column.maxWidthValue,
+                Visible: true));
     }
 
     int ITabularDataNode.ReorderDragIndex
@@ -1680,6 +1715,13 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
 
         string? text = await content.GetTextAsync();
         if (string.IsNullOrEmpty(text))
+        {
+            return false;
+        }
+
+        // Interception point (OnPaste): before parsing and before the undo batch opens, so a
+        // rejected paste leaves no partial writes and no undo entry.
+        if (onPasteValidator is not null && !onPasteValidator(text))
         {
             return false;
         }
@@ -2575,6 +2617,30 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
             currentSortDirection = SortDirection.Ascending;
         }
 
+        RebuildSortedIndices();
+
+        // Clear selection since row indices changed
+        selectedRowIdx = -1;
+        selectedRows.Clear();
+        anchorRow = -1;
+
+        // Rebuild groups from new sort order
+        RebuildGroupedRows();
+    }
+
+    /// <summary>
+    /// Rebuilds the display order for the current sort column and direction, without the
+    /// direction toggling that <see cref="ITabularDataNode.ApplySort"/> applies. Separate so a
+    /// sort restored across a re-render lands in the order it was already in.
+    /// </summary>
+    private void RebuildSortedIndices()
+    {
+        if ((uint)sortColumnIdx >= (uint)Columns.Count)
+        {
+            sortedIndices = null;
+            return;
+        }
+
         // Build sorted index from filtered set (or all rows)
         var items = Items.Value;
         int count;
@@ -2594,20 +2660,12 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
             }
         }
 
-        var column = Columns[col];
+        var column = Columns[sortColumnIdx];
         Array.Sort(sortedIndices, (a, b) =>
         {
             int cmp = CompareSortValues(items[a], items[b], column);
             return currentSortDirection == SortDirection.Ascending ? cmp : -cmp;
         });
-
-        // Clear selection since row indices changed
-        selectedRowIdx = -1;
-        selectedRows.Clear();
-        anchorRow = -1;
-
-        // Rebuild groups from new sort order
-        RebuildGroupedRows();
     }
 
     private static int CompareSortValues(T itemA, T itemB, DataGridColumn<T> column)
@@ -2707,55 +2765,125 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
         return Columns[col].alignValue ?? ColumnAlignment.Left;
     }
 
-    float ITabularDataNode.GetColumnWidth(int col, float availableWidth)
+    float ITabularDataNode.GetColumnWidth(int col, float availableWidth) =>
+        TabularColumnWidths.Resolve(this, col, availableWidth);
+
+    ColumnSizing ITabularDataNode.GetColumnSizing(int col)
     {
-        // Hidden columns have zero width
-        if (!((ITabularDataNode)this).GetColumnVisible(col))
+        if ((uint)col >= (uint)Columns.Count)
         {
-            return 0f;
+            return default;
         }
 
         var column = Columns[col];
-        if (column.widthValue.HasValue)
-        {
-            return column.widthValue.Value;
-        }
+        return new ColumnSizing(
+            Fixed: column.widthValue,
+            Override: WidthOverride(col),
+            Min: column.minWidthValue,
+            Max: column.maxWidthValue,
+            Visible: ((ITabularDataNode)this).GetColumnVisible(col),
+            Auto: column.widthStrategy == DataColumnWidth.Auto,
+            Measured: AutoWidth(col));
+    }
 
-        // Fill column: distribute remaining space after fixed-width columns
-        float fixedTotal = 0f;
-        int fillCount = 0;
-        var self = (ITabularDataNode)this;
-        for (int c = 0; c < Columns.Count; c++)
+    internal float?[]? autoColumnWidths;
+
+    float?[]? ITabularDataNode.AutoColumnWidths
+    {
+        get => autoColumnWidths;
+        set => autoColumnWidths = value;
+    }
+
+    bool ITabularDataNode.HasAutoColumns
+    {
+        get
         {
-            if (!self.GetColumnVisible(c))
+            for (int c = 0; c < Columns.Count; c++)
             {
-                continue;
+                if (Columns[c].widthStrategy == DataColumnWidth.Auto)
+                {
+                    return true;
+                }
             }
-            if (Columns[c].widthValue is { } w)
-            {
-                fixedTotal += w;
-            }
-            else
-            {
-                fillCount++;
-            }
-        }
 
-        float remaining = availableWidth - fixedTotal;
-        if (remaining < 0f)
+            return false;
+        }
+    }
+
+    private float? AutoWidth(int col)
+    {
+        var widths = autoColumnWidths;
+        if (widths is null || widths.Length != Columns.Count)
         {
-            remaining = 0f;
+            return null;
         }
 
-        float fillWidth = fillCount > 0 ? remaining / fillCount : 0f;
+        return widths[col];
+    }
 
-        // Respect MinWidth constraint
-        if (column.minWidthValue.HasValue && fillWidth < column.minWidthValue.Value)
+    /// <summary>Widths the user dragged. See <see cref="ITabularDataNode.ColumnWidthOverrides"/>.</summary>
+    internal float?[]? columnWidthOverrides;
+
+    float?[]? ITabularDataNode.ColumnWidthOverrides
+    {
+        get => columnWidthOverrides;
+        set => columnWidthOverrides = value;
+    }
+
+    private float? WidthOverride(int col)
+    {
+        var overrides = columnWidthOverrides;
+        if (overrides is null || overrides.Length != Columns.Count)
         {
-            fillWidth = column.minWidthValue.Value;
+            return null;
         }
 
-        return fillWidth;
+        return overrides[col];
+    }
+
+    TabularInteractionState ITabularDataNode.CaptureInteractionState() =>
+        new(
+            SortColumnIndex: sortColumnIdx,
+            SortDirection: currentSortDirection,
+            SelectedRowIndex: selectedRowIdx,
+            AnchorRow: anchorRow,
+            SelectedRows: selectedRows.Count > 0 ? [.. selectedRows] : null,
+            ScrollOffsetY: scrollOffsetY,
+            ScrollOffsetX: scrollOffsetX);
+
+    void ITabularDataNode.RestoreInteractionState(TabularInteractionState state)
+    {
+        int rowCount = ((ITabularDataNode)this).RowCount;
+
+        if (state.SortColumnIndex >= 0 && state.SortColumnIndex < Columns.Count)
+        {
+            sortColumnIdx = state.SortColumnIndex;
+            currentSortDirection = state.SortDirection;
+            RebuildSortedIndices();
+            RebuildGroupedRows();
+        }
+
+        selectedRowIdx = state.SelectedRowIndex < rowCount ? state.SelectedRowIndex : -1;
+        anchorRow = state.AnchorRow < rowCount ? state.AnchorRow : -1;
+
+        selectedRows.Clear();
+        if (state.SelectedRows is { } rows)
+        {
+            foreach (int row in rows)
+            {
+                if ((uint)row < (uint)rowCount)
+                {
+                    selectedRows.Add(row);
+                }
+            }
+        }
+
+        // Assigned to the fields, not through the clamping setters: the replacement node has not
+        // been painted yet, so viewportHeight is still 0 and MaxScrollOffsetY would clamp any
+        // offset to zero — snapping the grid back to the top on every re-render. The painter
+        // clamps on the next frame, once it knows the viewport.
+        scrollOffsetY = Math.Max(0f, state.ScrollOffsetY);
+        scrollOffsetX = Math.Max(0f, state.ScrollOffsetX);
     }
 
     string ITabularDataNode.GetCellText(int row, int col)

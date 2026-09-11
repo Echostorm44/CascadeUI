@@ -533,7 +533,25 @@ internal static class McpTools
         sb.Append($",\"max_paint_bytes_per_frame\":{summary.MaxPaintBytesPerFrame}");
         sb.Append($",\"estimated_bytes_per_second\":{summary.EstimatedBytesPerSecond}");
         sb.Append($",\"average_frame_ms\":{summary.AverageFrameMs:F3}");
+        sb.Append($",\"median_frame_ms\":{summary.MedianFrameMs:F3}");
+        sb.Append($",\"p95_frame_ms\":{summary.P95FrameMs:F3}");
+        sb.Append($",\"p99_frame_ms\":{summary.P99FrameMs:F3}");
+        sb.Append($",\"max_frame_ms\":{summary.MaxFrameMs:F3}");
         sb.Append($",\"estimated_fps\":{summary.EstimatedFps:F2}");
+
+        // The surface these timings were measured against. Without it a run is not comparable to
+        // any other run: the same binary on a 1600x900 surface and a 3844x2250 one differs by
+        // ~5x the pixels, which is exactly how a display-scale change was first mistaken for a
+        // frame-time regression (PERF-002).
+        var surfaceOrchestrator = App.ActiveOrchestrator;
+        float pixelRatio = surfaceOrchestrator?.PixelRatio ?? 1f;
+        float logicalW = surfaceOrchestrator?.WindowWidth ?? 0f;
+        float logicalH = surfaceOrchestrator?.WindowHeight ?? 0f;
+        sb.Append($",\"pixel_ratio\":{pixelRatio:F2}");
+        sb.Append($",\"surface_logical_width\":{logicalW:F0}");
+        sb.Append($",\"surface_logical_height\":{logicalH:F0}");
+        sb.Append($",\"surface_device_width\":{logicalW * pixelRatio:F0}");
+        sb.Append($",\"surface_device_height\":{logicalH * pixelRatio:F0}");
         sb.Append(",\"native\":{");
         sb.Append($"\"compiled_paths_live\":{Cascade.UI.Diagnostics.NativeMemoryCounters.CompiledPathsLive}");
         sb.Append($",\"compiled_paths_total_created\":{Cascade.UI.Diagnostics.NativeMemoryCounters.CompiledPathsTotalCreated}");

@@ -402,6 +402,14 @@ internal static class WatchCommand
             ["CASCADE_HOT_RELOAD"] = "1",
         };
 
+        // Watch mode is the agent-facing dev loop: you launch the app, then inspect it with
+        // `cascade mcp tree/screenshot/click` while editing. The MCP listener only starts when
+        // CASCADE_MCP is set, and this launcher never set it — so the watched app was the one app
+        // an agent could not inspect. An explicit value in the caller's environment still wins, so
+        // CASCADE_MCP=0 can turn it off.
+        string? inherited = Environment.GetEnvironmentVariable("CASCADE_MCP");
+        env["CASCADE_MCP"] = string.IsNullOrEmpty(inherited) ? "1" : inherited;
+
         // Prefer the built executable: it is the actual app process, so we can
         // kill/relaunch it cleanly and connect the hot-reload pipe by PID.
         if (File.Exists(exePath))

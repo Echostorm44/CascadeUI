@@ -12,6 +12,45 @@ internal interface ITabularDataNode
     string GetCellText(int row, int col);
     ColumnAlignment GetColumnAlignment(int col);
     float GetColumnWidth(int col, float availableWidth);
+
+    /// <summary>
+    /// How this column wants to be sized. Read by <see cref="TabularColumnWidths"/>, which owns
+    /// width resolution for both tabular controls.
+    /// </summary>
+    ColumnSizing GetColumnSizing(int col);
+
+    /// <summary>
+    /// Per-column widths produced by the user dragging a column border, indexed by column, or
+    /// null when nothing has been resized. Held on the node rather than on the caller's column
+    /// definitions — <c>Render()</c> usually rebuilds those every pass, so a drag written there
+    /// is lost, and a caller who hoists their columns into a static field would have the width
+    /// leak into every table sharing them. The reconciler transfers this across re-renders.
+    /// </summary>
+    float?[]? ColumnWidthOverrides { get; set; }
+
+    /// <summary>
+    /// Content widths for <see cref="DataColumnWidth.Auto"/> columns, indexed by column, or null
+    /// before the painter has measured them. Measurement needs font metrics, which live in the
+    /// painter, so the painter fills this in once per data source and the width resolver reads it
+    /// back. Cleared when the data source changes.
+    /// </summary>
+    float?[]? AutoColumnWidths { get; set; }
+
+    /// <summary>True when any column asked to be sized to its content.</summary>
+    bool HasAutoColumns { get; }
+
+    /// <summary>
+    /// Snapshots selection, sort and scroll so the reconciler can move them to the node that
+    /// replaces this one.
+    /// </summary>
+    TabularInteractionState CaptureInteractionState();
+
+    /// <summary>
+    /// Applies a snapshot taken from the outgoing node. Implementations clamp every index to
+    /// their own row and column counts — the incoming node may be showing fewer rows.
+    /// </summary>
+    void RestoreInteractionState(TabularInteractionState state);
+
     bool IsStriped { get; }
     float GetRowHeight();
 
@@ -753,8 +792,44 @@ public sealed class DataTable<T> : Node, ITabularDataNode
     int ITabularDataNode.ResizingColumnIndex { get; set; } = -1;
     float ITabularDataNode.ResizeStartWidth { get; set; }
     float ITabularDataNode.ResizeStartMouseX { get; set; }
-    bool ITabularDataNode.IsColumnResizable(int col) => false;
-    void ITabularDataNode.SetColumnWidth(int col, float width) { }
+    /// <summary>
+    /// Resizable unless the column opted out, matching <see cref="DataGrid{T}"/> and the
+    /// documented default. This returned a hard <c>false</c> until CONTROLS-003, so
+    /// <c>Resizable(true)</c> was stored and never consulted and no DataTable column could be
+    /// dragged.
+    /// </summary>
+    bool ITabularDataNode.IsColumnResizable(int col)
+    {
+        if ((uint)col >= (uint)Columns.Count)
+        {
+            return false;
+        }
+
+        return Columns[col].resizableValue != false;
+    }
+
+    void ITabularDataNode.SetColumnWidth(int col, float width)
+    {
+        if ((uint)col >= (uint)Columns.Count)
+        {
+            return;
+        }
+
+        if (columnWidthOverrides is null || columnWidthOverrides.Length != Columns.Count)
+        {
+            columnWidthOverrides = new float?[Columns.Count];
+        }
+
+        var column = Columns[col];
+        columnWidthOverrides[col] = TabularColumnWidths.Clamp(
+            width,
+            new ColumnSizing(
+                Fixed: null,
+                Override: null,
+                Min: column.minWidthValue ?? TabularColumnWidths.MinimumResizeWidth,
+                Max: column.maxWidthValue,
+                Visible: true));
+    }
     int ITabularDataNode.ReorderDragIndex { get; set; } = -1;
     int ITabularDataNode.ReorderDropIndex { get; set; } = -1;
     float ITabularDataNode.ReorderDragX { get; set; }
@@ -842,15 +917,65 @@ public sealed class DataTable<T> : Node, ITabularDataNode
     int ITabularDataNode.HoveredColIndex { get => -1; set { } }
     void ITabularDataNode.ValidateRow(int row) { }
 
-    // ── Virtualization no-ops (DataTable does not scroll internally) ──
-    float ITabularDataNode.ScrollOffsetY { get => 0; set { } }
+    // ── Virtualization & scroll ───────────────────────────────────────
+    //
+    // These were all no-op stubs, so a DataTable taller than its box simply clipped the rows
+    // past the bottom edge: no scrollbar, and the wheel did nothing because InputDispatcher
+    // gates wheel handling on MaxScrollOffsetY > 0. The painter's tabular path is shared with
+    // DataGrid and already sets ViewportHeight, clamps the offset, computes the visible row
+    // window from VirtualizationBufferRows and draws the scrollbar — it only ever needed these
+    // to return real values.
+
+    internal float scrollOffsetY;
+    internal float viewportHeight;
+    internal int virtualizationBufferRows = 10;
+
+    float ITabularDataNode.ScrollOffsetY
+    {
+        get => scrollOffsetY;
+        set => scrollOffsetY = Math.Clamp(value, 0f, ((ITabularDataNode)this).MaxScrollOffsetY);
+    }
+
+    float ITabularDataNode.MaxScrollOffsetY =>
+        Math.Max(0f, ((ITabularDataNode)this).TotalContentHeight - viewportHeight);
+
+    float ITabularDataNode.ViewportHeight
+    {
+        get => viewportHeight;
+        set => viewportHeight = value;
+    }
+
+    float ITabularDataNode.TotalContentHeight =>
+        Items.Count * ((ITabularDataNode)this).GetRowHeight();
+
+    int ITabularDataNode.VirtualizationBufferRows => virtualizationBufferRows;
+
+    /// <summary>
+    /// Brings a row fully into view, scrolling the minimum distance. Keyboard selection relies on
+    /// this: without it, arrowing past the bottom of the viewport moved a selection the user
+    /// could no longer see.
+    /// </summary>
+    void ITabularDataNode.ScrollIntoView(int displayRow)
+    {
+        var self = (ITabularDataNode)this;
+        float rowHeight = self.GetRowHeight();
+        float rowTop = displayRow * rowHeight;
+        float rowBottom = rowTop + rowHeight;
+
+        if (rowTop < scrollOffsetY)
+        {
+            self.ScrollOffsetY = rowTop;
+        }
+        else if (rowBottom > scrollOffsetY + viewportHeight)
+        {
+            self.ScrollOffsetY = rowBottom - viewportHeight;
+        }
+    }
+
+    // Horizontal scrolling is not offered: columns are resolved to fit the available width
+    // (see TabularColumnWidths), so there is nothing to pan to. DataGrid reports the same.
     float ITabularDataNode.ScrollOffsetX { get => 0; set { } }
-    float ITabularDataNode.MaxScrollOffsetY => 0;
     float ITabularDataNode.MaxScrollOffsetX => 0;
-    float ITabularDataNode.ViewportHeight { get => 0; set { } }
-    float ITabularDataNode.TotalContentHeight => 0;
-    int ITabularDataNode.VirtualizationBufferRows => 0;
-    void ITabularDataNode.ScrollIntoView(int displayRow) { }
     int? ITabularDataNode.MaxVisibleRows => null;
 
     void ITabularDataNode.ApplySort(int col)
@@ -872,16 +997,36 @@ public sealed class DataTable<T> : Node, ITabularDataNode
             currentSortDirection = SortDirection.Ascending;
         }
 
-        // Build sorted index
-        int count = Items.Count;
-        sortedIndices = new int[count];
-        for (int i = 0; i < count; i++)
+        RebuildSortedIndices();
+
+        selectedRowIdx = -1;
+        selectedRows.Clear();
+        anchorRow = -1;
+        onSortHandler?.Invoke(Columns[col].Header, currentSortDirection);
+    }
+
+    /// <summary>
+    /// Rebuilds the display order for the current sort column and direction, without toggling
+    /// the direction the way <see cref="ITabularDataNode.ApplySort"/> does. Separate so a sort
+    /// restored across a re-render lands in the same order it was in, rather than flipping.
+    /// </summary>
+    private void RebuildSortedIndices()
+    {
+        if ((uint)sortColumnIdx >= (uint)Columns.Count)
         {
-            sortedIndices[i] = i;
+            sortedIndices = null;
+            return;
         }
 
-        var column = Columns[col];
-        Array.Sort(sortedIndices, (a, b) =>
+        int count = Items.Count;
+        var indices = new int[count];
+        for (int i = 0; i < count; i++)
+        {
+            indices[i] = i;
+        }
+
+        var column = Columns[sortColumnIdx];
+        Array.Sort(indices, (a, b) =>
         {
             string textA = GetSortKey(Items[a], column);
             string textB = GetSortKey(Items[b], column);
@@ -889,10 +1034,7 @@ public sealed class DataTable<T> : Node, ITabularDataNode
             return currentSortDirection == SortDirection.Ascending ? cmp : -cmp;
         });
 
-        selectedRowIdx = -1;
-        selectedRows.Clear();
-        anchorRow = -1;
-        onSortHandler?.Invoke(Columns[col].Header, currentSortDirection);
+        sortedIndices = indices;
     }
 
     private static string GetSortKey(T item, DataColumn<T> column)
@@ -992,16 +1134,130 @@ public sealed class DataTable<T> : Node, ITabularDataNode
         return Columns[col].alignValue ?? ColumnAlignment.Left;
     }
 
-    float ITabularDataNode.GetColumnWidth(int col, float availableWidth)
+    float ITabularDataNode.GetColumnWidth(int col, float availableWidth) =>
+        TabularColumnWidths.Resolve(this, col, availableWidth);
+
+    ColumnSizing ITabularDataNode.GetColumnSizing(int col)
     {
-        var column = Columns[col];
-        if (column.widthValue.HasValue)
+        if ((uint)col >= (uint)Columns.Count)
         {
-            return column.widthValue.Value;
+            // default(ColumnSizing).Visible is false, which resolves to zero width.
+            return default;
         }
 
-        // Distribute evenly for auto/fill columns
-        return availableWidth / Columns.Count;
+        var column = Columns[col];
+        return new ColumnSizing(
+            Fixed: column.widthValue,
+            Override: WidthOverride(col),
+            Min: column.minWidthValue,
+            Max: column.maxWidthValue,
+            Visible: true,
+            Auto: column.widthStrategy == DataColumnWidth.Auto,
+            Measured: AutoWidth(col));
+    }
+
+    internal float?[]? autoColumnWidths;
+
+    float?[]? ITabularDataNode.AutoColumnWidths
+    {
+        get => autoColumnWidths;
+        set => autoColumnWidths = value;
+    }
+
+    bool ITabularDataNode.HasAutoColumns
+    {
+        get
+        {
+            for (int c = 0; c < Columns.Count; c++)
+            {
+                if (Columns[c].widthStrategy == DataColumnWidth.Auto)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
+    private float? AutoWidth(int col)
+    {
+        var widths = autoColumnWidths;
+        if (widths is null || widths.Length != Columns.Count)
+        {
+            return null;
+        }
+
+        return widths[col];
+    }
+
+    /// <summary>
+    /// Widths the user dragged, or null. Sized to the column count and dropped when the column
+    /// set changes, so an override can never be read against a different column.
+    /// </summary>
+    internal float?[]? columnWidthOverrides;
+
+    float?[]? ITabularDataNode.ColumnWidthOverrides
+    {
+        get => columnWidthOverrides;
+        set => columnWidthOverrides = value;
+    }
+
+    private float? WidthOverride(int col)
+    {
+        var overrides = columnWidthOverrides;
+        if (overrides is null || overrides.Length != Columns.Count)
+        {
+            return null;
+        }
+
+        return overrides[col];
+    }
+
+    TabularInteractionState ITabularDataNode.CaptureInteractionState() =>
+        new(
+            SortColumnIndex: sortColumnIdx,
+            SortDirection: currentSortDirection,
+            SelectedRowIndex: selectedRowIdx,
+            AnchorRow: anchorRow,
+            SelectedRows: selectedRows.Count > 0 ? [.. selectedRows] : null,
+            ScrollOffsetY: scrollOffsetY,
+            ScrollOffsetX: 0f);
+
+    void ITabularDataNode.RestoreInteractionState(TabularInteractionState state)
+    {
+        int rowCount = Items.Count;
+
+        // The replacement node may be showing fewer rows than the one that held the selection —
+        // a filter tightened, a row was removed — so every index is clamped or dropped rather
+        // than restored blindly.
+        if (state.SortColumnIndex >= 0 && state.SortColumnIndex < Columns.Count)
+        {
+            sortColumnIdx = state.SortColumnIndex;
+            currentSortDirection = state.SortDirection;
+            RebuildSortedIndices();
+        }
+
+        selectedRowIdx = state.SelectedRowIndex < rowCount ? state.SelectedRowIndex : -1;
+        anchorRow = state.AnchorRow < rowCount ? state.AnchorRow : -1;
+
+        selectedRows.Clear();
+        if (state.SelectedRows is { } rows)
+        {
+            foreach (int row in rows)
+            {
+                if ((uint)row < (uint)rowCount)
+                {
+                    selectedRows.Add(row);
+                }
+            }
+        }
+
+        // Restored raw rather than through the clamping setter: the replacement node has not been
+        // painted yet, so its viewportHeight is still 0 and MaxScrollOffsetY would clamp any
+        // offset to zero, snapping the table back to the top on every re-render. The painter
+        // clamps it on the next frame, once the viewport is known.
+        scrollOffsetY = Math.Max(0f, state.ScrollOffsetY);
     }
 
     string ITabularDataNode.GetCellText(int row, int col)

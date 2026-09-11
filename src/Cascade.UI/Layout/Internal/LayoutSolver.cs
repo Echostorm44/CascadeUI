@@ -43,6 +43,17 @@ internal static class LayoutSolver
     /// </summary>
     internal static float BodyFontSize { get; set; } = 14f;
 
+    // Checkbox/radio box geometry, synced from the active theme by FrameOrchestrator alongside
+    // the font sizes above. These were hardcoded here (18/8 and 22/8) while the painter used the
+    // theme's own tokens. Apple's checkbox is 20px, so the measure reserved 26px for box + gap
+    // and the painter reserved 28 — a checkbox laid out at its own natural width ended up with
+    // 2px less than its label needed, and dropped its last word. The defaults below are only a
+    // fallback for layout that runs before a theme is applied.
+    internal static float CheckboxSize { get; set; } = 18f;
+    internal static float CheckboxLabelGap { get; set; } = 8f;
+    internal static float RadioSize { get; set; } = 22f;
+    internal static float RadioLabelGap { get; set; } = 8f;
+
     /// <summary>
     /// Card content padding from the current theme's CardTheme.Padding.
     /// Default 16 matches typical Md spacing.
@@ -75,7 +86,81 @@ internal static class LayoutSolver
     /// Returns the node's own size (not including margin).
     /// The caller is responsible for setting this node's Bounds position.
     /// </summary>
+    // ── Per-node-type layout allocation profiler ──────────────────────
+    //
+    // The paint pass has had per-type allocation attribution for a while; layout had none, so a
+    // large "layout bytes/frame" figure named no culprit and the only way to chase one was to
+    // guess and re-run. Same accounting as NodePainter: bytes attributed to a node type are
+    // EXCLUSIVE of its descendants, by subtracting child deltas from the parent. Off unless
+    // CASCADE_LAYOUT_PROFILE=1, and free when off — see PERF-002.
+
+    private static readonly bool LayoutProfileEnabled =
+        Environment.GetEnvironmentVariable("CASCADE_LAYOUT_PROFILE") == "1";
+
+    private static readonly Dictionary<Type, (long Bytes, long Count)> perTypeLayoutAllocs = new();
+    private static readonly List<long> layoutChildBytesStack = new(capacity: 64);
+
+    /// <summary>Per-node-type layout allocation, exclusive of descendants. Empty unless profiling.</summary>
+    internal static string DumpPerTypeLayoutAllocations(long frames)
+    {
+        if (perTypeLayoutAllocs.Count == 0)
+        {
+            return "layout profile: not enabled (set CASCADE_LAYOUT_PROFILE=1)";
+        }
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("layout_type, bytes_per_frame, count_per_frame");
+        foreach (var row in perTypeLayoutAllocs
+            .Select(kv => (Name: kv.Key.Name, kv.Value.Bytes, kv.Value.Count))
+            .OrderByDescending(x => x.Bytes)
+            .Take(20))
+        {
+            sb.Append(row.Name).Append(", ")
+              .Append(frames > 0 ? row.Bytes / frames : row.Bytes).Append(", ")
+              .Append(frames > 0 ? row.Count / frames : row.Count)
+              .AppendLine();
+        }
+
+        return sb.ToString();
+    }
+
     internal static Size Measure(Node node, LayoutConstraints constraints)
+    {
+        if (!LayoutProfileEnabled)
+        {
+            return MeasureCore(node, constraints);
+        }
+
+        long startBytes = GC.GetAllocatedBytesForCurrentThread();
+        layoutChildBytesStack.Add(0L);
+        int myIndex = layoutChildBytesStack.Count - 1;
+
+        Size measured;
+        try
+        {
+            measured = MeasureCore(node, constraints);
+        }
+        finally
+        {
+            long total = GC.GetAllocatedBytesForCurrentThread() - startBytes;
+            long childBytes = layoutChildBytesStack[myIndex];
+            layoutChildBytesStack.RemoveAt(myIndex);
+
+            long self = total - childBytes;
+            Type key = node.GetType();
+            perTypeLayoutAllocs.TryGetValue(key, out var entry);
+            perTypeLayoutAllocs[key] = (entry.Bytes + self, entry.Count + 1);
+
+            if (myIndex > 0)
+            {
+                layoutChildBytesStack[myIndex - 1] += total;
+            }
+        }
+
+        return measured;
+    }
+
+    private static Size MeasureCore(Node node, LayoutConstraints constraints)
     {
         var data = node.LayoutData;
 
@@ -674,9 +759,10 @@ internal static class LayoutSolver
     {
         string labelText = cb.Label.Resolve();
 
-        // Checkbox box size + gap + text label (mirrors MeasureRadioButton)
-        const float boxSize = 18f;
-        const float gap = 8f;
+        // Checkbox box size + gap + text label (mirrors MeasureRadioButton). Taken from the
+        // theme so this agrees with PaintCheckbox, which uses the same tokens.
+        float boxSize = CheckboxSize;
+        float gap = CheckboxLabelGap;
         float fontSize = BodyFontSize;
         float lineHeight = fontSize * DefaultLineHeightMultiplier;
 
@@ -718,9 +804,9 @@ internal static class LayoutSolver
     {
         var rb = (IRadioButton)node;
 
-        // Radio circle size + gap + label
-        const float circleSize = 22f;
-        const float gap = 8f;
+        // Radio circle size + gap + label, from the theme so this agrees with PaintRadioButton.
+        float circleSize = RadioSize;
+        float gap = RadioLabelGap;
 
         // Rich node label (multi-line content, pricing rows, cards) — measured and
         // positioned as a laid-out child to the right of the circle.
@@ -1306,7 +1392,7 @@ internal static class LayoutSolver
             lvn.MaxY = MathF.Max(0f, (lvn.ItemCount * ih) - viewport);
             lvn.OffsetY = Math.Clamp(lvn.OffsetY, 0f, lvn.MaxY);
 
-            lvn.InvalidateContent();
+            lvn.SyncContent();
             Node slice = lvn.GetContentNode();
 
             var sliceConstraints = new LayoutConstraints(
@@ -1321,20 +1407,44 @@ internal static class LayoutSolver
             return new Size(constraints.ConstrainWidth(vw), constraints.ConstrainHeight(viewport));
         }
 
-        // Non-virtualized: build all rows and report full content height (a wrapping
-        // ScrollView / fixed Height clips it; sections & auto-height lists use this).
-        lvn.ViewportHeight = 0f;
-        lvn.InvalidateContent();
+        // Non-virtualized: build every row. Used by sectioned lists and by any list without a
+        // fixed ItemHeight — which is most of them, since ItemHeight reads as a performance knob
+        // rather than the thing that decides whether the control can scroll at all.
+        lvn.SyncContent();
         Node content = lvn.GetContentNode();
 
         var contentConstraints = new LayoutConstraints(
             constraints.MinWidth, constraints.MaxWidth, 0, float.PositiveInfinity);
         Size contentSize = MeasureChild(content, contentConstraints);
-        PositionChild(content, 0, 0);
 
         float width = float.IsPositiveInfinity(constraints.MaxWidth)
             ? contentSize.Width
             : constraints.MaxWidth;
+
+        // Given a bounded height and taller content, scroll rather than silently clip. This used
+        // to leave MaxY at 0, so HitTester.FindScrollableListViewAt skipped the list, the wheel
+        // fell through to the enclosing ScrollView, and the overflow was unreachable — the whole
+        // control quietly not scrolling because no ItemHeight had been set (CONTROLS-007).
+        if (boundedHeight)
+        {
+            float viewport = constraints.MaxHeight;
+            lvn.ViewportHeight = viewport;
+            lvn.TotalContentHeight = contentSize.Height;
+            lvn.MaxY = MathF.Max(0f, contentSize.Height - viewport);
+            lvn.OffsetY = Math.Clamp(lvn.OffsetY, 0f, lvn.MaxY);
+
+            PositionChild(content, 0, -lvn.OffsetY);
+
+            return new Size(
+                constraints.ConstrainWidth(width),
+                constraints.ConstrainHeight(viewport));
+        }
+
+        // Unbounded height: the list reports its full height and a wrapping ScrollView scrolls it.
+        lvn.ViewportHeight = 0f;
+        lvn.TotalContentHeight = 0f;
+        lvn.MaxY = 0f;
+        PositionChild(content, 0, 0);
 
         return new Size(
             constraints.ConstrainWidth(width),
@@ -2240,10 +2350,12 @@ internal static class LayoutSolver
 
     private static Size MeasureTreeView(ITreeView tree, LayoutConstraints constraints)
     {
-        // The tree's rows are a real interactive node tree (indent + chevron +
-        // rendered content). Rebuild it each frame so expand/selection changes (which
-        // only repaint) are reflected, then measure and position it.
-        tree.InvalidateContent();
+        // The tree's rows are a real interactive node tree (indent + chevron + rendered content).
+        // Expand/selection changes only repaint, so the rows must be rebuilt when they happen —
+        // but this rebuilt unconditionally on every layout pass, which measured at ~25 KB per
+        // frame for a tree nobody had touched (PERF-002). SyncContent rebuilds on a version
+        // change instead.
+        tree.SyncContent();
         Node content = tree.GetContentNode();
 
         var contentConstraints = new LayoutConstraints(

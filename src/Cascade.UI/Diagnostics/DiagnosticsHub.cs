@@ -295,6 +295,20 @@ public static class DiagnosticsHub
 
         float avgWorkMs = frameMsSum / n;
 
+        // Percentiles, not just the mean. A mean over a short window is dominated by a handful of
+        // expensive frames — first paint, a layer recapture — and swung 1.95 ms to 6.36 ms across
+        // runs of the *same* binary while allocation was identical to the byte, which is how it
+        // came to look like a regression that did not exist (PERF-002). p50 says what a typical
+        // frame costs; p95/p99 and the max say whether anything is at risk of dropping one.
+        Span<float> frameMs = stackalloc float[BufferSize];
+        for (int i = 0; i < n; i++)
+        {
+            frameMs[i] = window[i].FrameMs;
+        }
+
+        Span<float> sortedFrameMs = frameMs[..n];
+        sortedFrameMs.Sort();
+
         // Real FPS from wall-clock span between first and last sample's BeginTicks.
         float realFps = 0f;
         float wallMs = 0f;
@@ -325,8 +339,27 @@ public static class DiagnosticsHub
             MaxPaintBytesPerFrame = paintMax,
             EstimatedBytesPerSecond = bytesPerSecond,
             AverageFrameMs = avgWorkMs,
+            MedianFrameMs = Percentile(sortedFrameMs, 0.50f),
+            P95FrameMs = Percentile(sortedFrameMs, 0.95f),
+            P99FrameMs = Percentile(sortedFrameMs, 0.99f),
+            MaxFrameMs = sortedFrameMs.Length > 0 ? sortedFrameMs[^1] : 0f,
             EstimatedFps = realFps,
         };
+    }
+
+    /// <summary>
+    /// Nearest-rank percentile over an ascending span. Nearest-rank rather than interpolating:
+    /// every value reported is a frame that actually happened.
+    /// </summary>
+    private static float Percentile(ReadOnlySpan<float> ascending, float fraction)
+    {
+        if (ascending.Length == 0)
+        {
+            return 0f;
+        }
+
+        int rank = (int)MathF.Ceiling(fraction * ascending.Length) - 1;
+        return ascending[Math.Clamp(rank, 0, ascending.Length - 1)];
     }
 }
 
@@ -523,6 +556,23 @@ public readonly struct AllocationSummary
     public long MaxLayoutBytesPerFrame { get; init; }
     public long MaxPaintBytesPerFrame { get; init; }
     public long EstimatedBytesPerSecond { get; init; }
+    /// <summary>
+    /// Mean frame work. Kept for continuity, but prefer <see cref="MedianFrameMs"/>: over a short
+    /// window the mean is dominated by a few outlier frames and is not stable between runs.
+    /// </summary>
     public float AverageFrameMs { get; init; }
+
+    /// <summary>What a typical frame costs. The number to compare between runs.</summary>
+    public float MedianFrameMs { get; init; }
+
+    /// <summary>95th-percentile frame work — the tail that shows up as visible hitching.</summary>
+    public float P95FrameMs { get; init; }
+
+    /// <summary>99th-percentile frame work.</summary>
+    public float P99FrameMs { get; init; }
+
+    /// <summary>Slowest single frame in the window.</summary>
+    public float MaxFrameMs { get; init; }
+
     public float EstimatedFps { get; init; }
 }

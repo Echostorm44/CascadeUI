@@ -42,23 +42,69 @@ internal static class DataPage
 
     static Node DataTableSection()
     {
-        IReadOnlyList<SampleRow> items =
+        // More rows than the 180px box can show, so the section also demonstrates that the table
+        // scrolls its own rows (CONTROLS-005) rather than clipping the overflow.
+        (string Name, string Email)[] people =
         [
-            new("Grace", "grace@example.com", "Owner", true),
-            new("Heidi", "heidi@example.com", "Admin", true),
-            new("Ivan", "ivan@example.com", "Viewer", false),
+            ("Grace", "grace@example.com"), ("Heidi", "heidi@example.com"),
+            ("Ivan", "ivan@example.com"), ("Judy", "judy@example.com"),
+            ("Mallory", "mallory@example.com"), ("Niaj", "niaj@example.com"),
+            ("Olivia", "olivia@example.com"), ("Peggy", "peggy@example.com"),
+            ("Rupert", "rupert@example.com"), ("Sybil", "sybil@example.com"),
+            ("Trent", "trent@example.com"), ("Victor", "victor@example.com"),
+            ("Walter", "walter@example.com"), ("Wendy", "wendy@example.com"),
+            ("Yves", "yves@example.com"), ("Zoe", "zoe@example.com"),
         ];
+        string[] roles = ["Owner", "Admin", "Viewer"];
+
+        var items = new List<SampleRow>(people.Length);
+        for (int i = 0; i < people.Length; i++)
+        {
+            items.Add(new SampleRow(
+                people[i].Name,
+                people[i].Email,
+                roles[i % roles.Length],
+                i % 4 != 3));
+        }
 
         return Section("DataTable",
-            "Read-only data table with typed columns.",
+            "Read-only data table with typed columns, a fill column, custom cell nodes, and scrolling.",
             new DataTable<SampleRow>(items,
             [
-                DataColumn<SampleRow>.Text("Name", r => r.Name),
-                DataColumn<SampleRow>.Text("Email", r => r.Email),
-                DataColumn<SampleRow>.Text("Role", r => r.Role),
-                DataColumn<SampleRow>.Bool("Active", r => r.Active),
+                // A custom cell returning a background-filled Column. Before RENDER-006 the
+                // custom-cell painter understood only Sparkline/Label/Row-of-Labels, so this
+                // painted nothing at all.
+                DataColumn<SampleRow>.Custom("", r => new Column(children: [])
+                    .Width(3f)
+                    .Height(18f)
+                    .Background(r.Active ? new ColorValue("#30D158") : new ColorValue("#FF453A"))
+                    .CornerRadius(2f)).Width(18f),
+                // Auto: sized to its own content (header + a sample of the rows).
+                DataColumn<SampleRow>.Text("Name", r => r.Name).Width(DataColumnWidth.Auto),
+                // A custom cell mixing an icon with a label in a Row — the icon used to be dropped
+                // (only Label children were drawn), and then, once it drew, it escaped the cell
+                // clip and repeated down the page until RENDER-009.
+                DataColumn<SampleRow>.Custom("Role", r => new Row(
+                    spacing: 6f,
+                    crossAxisAlignment: CrossAxisAlignment.Center,
+                    children:
+                    [
+                        new IconView(RoleIcon, size: 14),
+                        new Label(r.Role),
+                    ])).Width(120f),
+                // Fill + MinWidth: silently ignored before CONTROLS-001. Long text ellipsises
+                // now that custom cells go through the normal label path.
+                DataColumn<SampleRow>.Text("Email", r => r.Email)
+                    .Width(DataColumnWidth.Fill).MinWidth(140f),
+                DataColumn<SampleRow>.Bool("Active", r => r.Active).Width(70f),
             ]).Height(180));
     }
+
+
+    // Lucide "shield" — stands in for a role badge in the custom cell demo.
+    private static readonly Icon RoleIcon = new(
+        ["M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"],
+        new Size(24, 24), 14f, "Role");
 
     // ── ListView ─────────────────────────────────────────────────────────
 

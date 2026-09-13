@@ -72,11 +72,19 @@ internal static class Program
             return 3;
         }
 
-        UpdateBootstrap.BeginLaunch(installDir);
-        return LaunchApp(appExe, appArgs) ? 0 : 4;
+        // The marker is written after the launch so it can name the process. A crash-check that
+        // runs while that process is alive (the app itself, a second instance) is then a no-op
+        // instead of a rollback of the update that just went in.
+        int? launchedPid = LaunchApp(appExe, appArgs);
+        if (launchedPid is null)
+        {
+            return 4;
+        }
+        UpdateBootstrap.BeginLaunch(installDir, launchedPid);
+        return 0;
     }
 
-    private static bool LaunchApp(string appExe, string? appArgs)
+    private static int? LaunchApp(string appExe, string? appArgs)
     {
         try
         {
@@ -91,12 +99,12 @@ internal static class Program
                 startInfo.Arguments = appArgs;
             }
             using Process? proc = Process.Start(startInfo);
-            return proc is not null;
+            return proc?.Id;
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
         {
             Console.Error.WriteLine($"cascade-update: failed to launch app: {ex.Message}");
-            return false;
+            return null;
         }
     }
 

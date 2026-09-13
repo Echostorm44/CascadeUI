@@ -85,6 +85,58 @@ public sealed class UpdaterShimTests
     }
 
     [Test]
+    public async Task DetectCrashAndRollback_LeavesTheUpdateAlone_WhileTheLaunchedProcessIsAlive()
+    {
+        string installDir = NewInstall("v1-binary", "1.0.0");
+        string zip = BuildPackageZip(("app.exe", "v2-binary"));
+
+        try
+        {
+            UpdateSwap.StageZip(zip, installDir, "2.0.0");
+            UpdateSwap.ApplyStaged(installDir);
+
+            // The shim recorded *this* process as the launched app. An app that (wrongly) runs the
+            // crash check at its own startup must not roll its own update back.
+            UpdateBootstrap.BeginLaunch(installDir, Environment.ProcessId);
+            bool rolledBack = UpdateBootstrap.DetectCrashAndRollback(installDir);
+
+            await Assert.That(rolledBack).IsFalse();
+            await Assert.That(await File.ReadAllTextAsync(IOPath.Combine(installDir, "app.exe"))).IsEqualTo("v2-binary");
+            // The marker stays: the launch is still in progress as far as anyone can tell.
+            await Assert.That(File.Exists(IOPath.Combine(installDir, UpdateLayout.LaunchMarkerName))).IsTrue();
+        }
+        finally
+        {
+            CleanUp(installDir, zip);
+        }
+    }
+
+    [Test]
+    public async Task DetectCrashAndRollback_RollsBack_WhenTheRecordedProcessIsGone()
+    {
+        string installDir = NewInstall("v1-binary", "1.0.0");
+        string zip = BuildPackageZip(("app.exe", "v2-binary"));
+
+        try
+        {
+            UpdateSwap.StageZip(zip, installDir, "2.0.0");
+            UpdateSwap.ApplyStaged(installDir);
+
+            // A pid nothing is using: the launched app died without reporting healthy.
+            UpdateBootstrap.BeginLaunch(installDir, launchedPid: int.MaxValue - 1);
+            bool rolledBack = UpdateBootstrap.DetectCrashAndRollback(installDir);
+
+            await Assert.That(rolledBack).IsTrue();
+            await Assert.That(await File.ReadAllTextAsync(IOPath.Combine(installDir, "app.exe"))).IsEqualTo("v1-binary");
+            await Assert.That(File.Exists(IOPath.Combine(installDir, UpdateLayout.LaunchMarkerName))).IsFalse();
+        }
+        finally
+        {
+            CleanUp(installDir, zip);
+        }
+    }
+
+    [Test]
     public async Task BeginLaunch_Then_MarkLaunchHealthy_RemovesMarker()
     {
         string installDir = NewInstall("v1-binary", "1.0.0");

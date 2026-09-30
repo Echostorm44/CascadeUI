@@ -17,7 +17,7 @@ internal static class AccessibilityDiagnostics
     internal static readonly DiagnosticDescriptor MissingAccessibleLabel = new(
         id: "CASCADEA11Y001",
         title: "Interactive element has no accessible label",
-        messageFormat: "Interactive element '{0}' has no accessible label. Add a label parameter or use AccessibleLabel() modifier for screen reader support.",
+        messageFormat: "Interactive element '{0}' has no accessible label, so screen readers fall back to the icon's name. Add .Tooltip(...) (also shown on hover) or .AccessibleLabel(...).",
         category: Category,
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true);
@@ -28,7 +28,7 @@ internal static class AccessibilityDiagnostics
     internal static readonly DiagnosticDescriptor MissingImageAltText = new(
         id: "CASCADEA11Y002",
         title: "Image has no alt text",
-        messageFormat: "Image '{0}' has no alt text. Add an altText parameter for screen reader support. Use altText: \"\" for decorative images.",
+        messageFormat: "Image '{0}' has no alt text. Add .AccessibleLabel(\"description\") for screen reader support, or .AccessibleLabel(\"\") for a decorative image.",
         category: Category,
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true);

@@ -13,6 +13,15 @@
   </PropertyGroup>
 
   <!--
+    The API index in obj/CascadeApi.generated.md is copied out of the source generator's output,
+    which only reaches disk when generated files are emitted. Without this the index section was
+    always the "available via MCP" placeholder. A project that sets the property keeps its value.
+  -->
+  <PropertyGroup>
+    <EmitCompilerGeneratedFiles Condition="'$(EmitCompilerGeneratedFiles)' == ''">true</EmitCompilerGeneratedFiles>
+  </PropertyGroup>
+
+  <!--
     NUGET-001: deliver the bundled Inter fonts to a package consumer's output (Fonts/, where
     the framework loads them). Only fires for NuGet consumers, where build/assets/ ships inside
     the package (the Exists guard is false for the framework's own in-repo build, which gets the
@@ -38,7 +47,7 @@
     <CascadeWriteApiMd
       OutputFile="$(IntermediateOutputPath)CascadeApi.generated.md"
       AssemblyName="$(AssemblyName)"
-      GeneratedDir="$(IntermediateOutputPath)generated" />
+      GeneratedDir="$([MSBuild]::ValueOrDefault('$(CompilerGeneratedFilesOutputPath)', '$(IntermediateOutputPath)generated'))" />
 
   </Target>
 
@@ -133,7 +142,7 @@ if (instanceRunning)
 }
 else
 {
-    mcpStatus = "MCP: run " + AssemblyName + " --mcp | CLI: cascade mcp tree";
+    mcpStatus = "MCP: build with -p:CascadeDevTools=true, run with CASCADE_MCP=1, then: cascade mcp tree --app " + AssemblyName;
 }
 
 Log.LogMessage(
@@ -154,7 +163,7 @@ sb.AppendLine();
 sb.AppendLine("### Connection");
 sb.AppendLine();
 sb.AppendLine("```");
-sb.AppendLine(AssemblyName + " --mcp          # stdio MCP proxy (always works — headless fallback)");
+sb.AppendLine("cascade mcp serve --app " + AssemblyName + "   # stdio MCP bridge (the app must run with CASCADE_MCP=1)");
 sb.AppendLine("```");
 sb.AppendLine();
 
@@ -164,9 +173,9 @@ if (instanceRunning)
     sb.AppendLine();
 }
 
-sb.AppendLine("The `--mcp` proxy runs in **headless mode** when no GUI instance is running.");
-sb.AppendLine("It provides tool schemas, prompts, and API index immediately, then **hot-switches**");
-sb.AppendLine("to the live instance when the app starts. Agents never need to wait.");
+sb.AppendLine("The app hosts the tools itself when built with DevTools (Debug in-repo, or `-p:CascadeDevTools=true`)");
+sb.AppendLine("and launched with `CASCADE_MCP=1`. `cascade mcp serve` bridges MCP clients to it; `cascade mcp <verb>`");
+sb.AppendLine("runs one-shot commands without an MCP session.");
 sb.AppendLine();
 
 sb.AppendLine("### CLI Convenience Commands");
@@ -221,11 +230,17 @@ sb.AppendLine();
 // Section 3: API Index content
 string apiContent = "";
 
-string generatedFile = System.IO.Path.Combine(
-    GeneratedDir,
-    "Cascade.Generators",
-    "Cascade.Generators.ApiIndexGenerator",
-    "CascadeApiIndex.g.cs");
+// Located by file name: the generator folder is named after the generator class, which has changed
+// before (it was looked for under "Cascade.Generators.ApiIndexGenerator" long after that stopped existing).
+string generatedFile = "";
+if (System.IO.Directory.Exists(GeneratedDir))
+{
+    string[] candidates = System.IO.Directory.GetFiles(GeneratedDir, "CascadeApiIndex.g.cs", System.IO.SearchOption.AllDirectories);
+    if (candidates.Length > 0)
+    {
+        generatedFile = candidates[0];
+    }
+}
 
 if (System.IO.File.Exists(generatedFile))
 {

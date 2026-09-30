@@ -1210,8 +1210,9 @@ internal static class NodeTreeWalker
         {
             var layoutData = uiNode.LayoutData;
             bounds = layoutData.Bounds;
-            role = layoutData.A11yRole != AccessibleRole.None ? layoutData.A11yRole : null;
-            accessibleLabel = layoutData.A11yLabel;
+            var resolvedRole = AccessibilityTreeBuilder.ResolveRole(uiNode);
+            role = resolvedRole != AccessibleRole.None ? resolvedRole : null;
+            accessibleLabel = AccessibilityTreeBuilder.ResolveLabel(uiNode);
             sourceFile = uiNode.SourceFile;
             sourceLine = sourceFile is not null ? uiNode.SourceLine : null;
         }

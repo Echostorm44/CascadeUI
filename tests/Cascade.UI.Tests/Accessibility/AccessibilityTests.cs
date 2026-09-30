@@ -42,6 +42,37 @@ public class AccessibilityTests
         await Assert.That(tree.Label).IsEqualTo("Submit");
     }
 
+    private static readonly Icon TrashIcon = new("M3 6h18", new Size(24, 24), 24f, "Trash");
+
+    [Test]
+    public async Task ResolveLabel_Button_UsesItsText()
+    {
+        var button = new Button("Save", onClick: () => { });
+
+        await Assert.That(AccessibilityTreeBuilder.ResolveLabel(button)).IsEqualTo("Save");
+        await Assert.That(AccessibilityTreeBuilder.ResolveRole(button)).IsEqualTo(AccessibleRole.Button);
+    }
+
+    [Test]
+    public async Task ResolveLabel_IconButton_FallsBackToTooltipThenIconName()
+    {
+        var bare = new IconButton(TrashIcon, () => { });
+        var withTooltip = new IconButton(TrashIcon, () => { }).Tooltip("Delete message");
+        var labeled = new IconButton(TrashIcon, () => { }).Tooltip("Delete message").AccessibleLabel("Delete");
+
+        await Assert.That(AccessibilityTreeBuilder.ResolveLabel(bare)).IsEqualTo("Trash");
+        await Assert.That(AccessibilityTreeBuilder.ResolveLabel(withTooltip)).IsEqualTo("Delete message");
+        await Assert.That(AccessibilityTreeBuilder.ResolveLabel(labeled)).IsEqualTo("Delete");
+    }
+
+    [Test]
+    public async Task ResolveLabel_EmptyExplicitLabel_IsKeptAsDecorative()
+    {
+        var button = new IconButton(TrashIcon, () => { }).AccessibleLabel("");
+
+        await Assert.That(AccessibilityTreeBuilder.ResolveLabel(button)).IsEqualTo("");
+    }
+
     [Test]
     public async Task BuildTree_PresentationRole_ExcludesFromTree()
     {

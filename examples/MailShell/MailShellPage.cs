@@ -325,15 +325,15 @@ internal sealed partial class MailShellPage : Component
             // Toolbar
             new Row(spacing: 4, crossAxisAlignment: CrossAxisAlignment.Center, children:
             [
-                new IconButton(MailIcons.Reply, () => { }),
-                new IconButton(MailIcons.Forward, () => { }),
-                new IconButton(MailIcons.Archive, () => { }),
-                new IconButton(MailIcons.Trash, () => { }),
+                new IconButton(MailIcons.Reply, () => { }).Tooltip("Reply"),
+                new IconButton(MailIcons.Forward, () => { }).Tooltip("Forward"),
+                new IconButton(MailIcons.Archive, () => { }).Tooltip("Archive"),
+                new IconButton(MailIcons.Trash, () => { }).Tooltip("Delete"),
                 new Spacer(),
                 new IconButton(MailIcons.Star, () =>
                 {
                     // Toggle star (visual only in this example)
-                })
+                }).Tooltip("Star")
             ]).Padding(horizontal: 16, vertical: 8)
               .BorderBottom(ThemeSwitcher.ActiveColors.Border),
 

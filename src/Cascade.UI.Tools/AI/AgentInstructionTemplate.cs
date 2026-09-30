@@ -32,9 +32,13 @@ internal static class AgentInstructionTemplate
         // Section 1: MCP Dev Tools (first — our greatest superpower)
         sb.AppendLine("### MCP Dev Tools (connect first!)");
         sb.AppendLine();
-        sb.AppendLine($"Run `{appExePath} --mcp` to connect. This gives you 26+ live inspection");
-        sb.AppendLine("tools for the running app: component tree, signals, screenshots, layout,");
-        sb.AppendLine("accessibility, pixel sampling, interaction simulation, and more.");
+        sb.AppendLine("Live inspection of the running app: component tree, signals, screenshots, layout,");
+        sb.AppendLine("accessibility, pixel sampling, interaction simulation. To connect:");
+        sb.AppendLine();
+        sb.AppendLine("- Build with DevTools (`-p:CascadeDevTools=true` for NuGet consumers).");
+        sb.AppendLine($"- Launch with `CASCADE_MCP=1` (PowerShell: `$env:CASCADE_MCP='1'; & '{appExePath}'`).");
+        sb.AppendLine($"- MCP clients use the bridge: `cascade mcp serve --app {appName}`.");
+        sb.AppendLine($"- One-shot CLI: `cascade mcp tree --app {appName}`, `cascade mcp screenshot -o shot.png --app {appName}`.");
         sb.AppendLine("**Always connect to MCP before making UI changes.**");
         sb.AppendLine();
 
@@ -112,10 +116,11 @@ internal static class AgentInstructionTemplate
         sb.Append("    \"");
         sb.Append(serverKey);
         sb.AppendLine("\": {");
-        sb.Append("      \"command\": \"");
-        sb.Append(appExePath.Replace("\\", "\\\\", StringComparison.Ordinal));
-        sb.AppendLine("\",");
-        sb.AppendLine("      \"args\": [\"--mcp\"]");
+        // The app hosts a TCP listener when run with CASCADE_MCP=1; the cascade CLI bridges it to stdio.
+        sb.AppendLine("      \"command\": \"cascade\",");
+        sb.Append("      \"args\": [\"mcp\", \"serve\", \"--app\", \"");
+        sb.Append(appName.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal));
+        sb.AppendLine("\"]");
         sb.AppendLine("    }");
         sb.AppendLine("  }");
         sb.AppendLine("}");

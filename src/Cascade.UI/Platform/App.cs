@@ -152,14 +152,14 @@ public static class App
     {
         Args.SetRaw(Environment.GetCommandLineArgs().Skip(1).ToArray());
 
-        // --mcp is no longer handled by the app binary. The standalone
-        // cascade-mcp bridge executable performs stdio↔TCP forwarding so the
-        // app process never loads proxy code or locks build outputs.
+        // --mcp is no longer handled by the app binary. The cascade CLI's bridge
+        // performs stdio↔TCP forwarding so the app process never loads proxy
+        // code or locks build outputs.
         if (Args.Has("--mcp"))
         {
             Console.Error.WriteLine(
                 "The application no longer hosts the MCP proxy directly. " +
-                "Launch the standalone bridge instead: cascade-mcp");
+                "Run the app with CASCADE_MCP=1 and connect with: cascade mcp serve --app <name>");
             Environment.Exit(1);
             return;
         }

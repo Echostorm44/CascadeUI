@@ -54,7 +54,8 @@ internal static class ApiIndexGenerator
 
         AppendComponents(sb, compilation, cascadeAssembly);
         AppendLayoutPrimitives(sb, cascadeAssembly);
-        AppendModifiers(sb, cascadeAssembly);
+        AppendControls(sb, compilation, cascadeAssembly);
+        AppendModifiers(sb, compilation, cascadeAssembly);
         AppendThemeTokens(sb, cascadeAssembly);
         AppendLocalizationKeys(sb, additionalTexts);
         AppendIcons(sb, additionalTexts);
@@ -304,14 +305,107 @@ internal static class ApiIndexGenerator
         }
     }
 
+    // ── Controls ─────────────────────────────────────────────────────
+
+    // Controls (Label, Button, TextInput, ListView<T>, Image, …) derive from Node, not Component, so
+    // the Components section never listed them. Each entry gives the constructors and the fluent
+    // methods, i.e. public instance methods that return the control itself (`.FontSize(13)`).
+    private static void AppendControls(StringBuilder sb, Compilation compilation, IAssemblySymbol? cascadeAssembly)
+    {
+        sb.AppendLine("## Controls");
+        sb.AppendLine();
+
+        var nodeBase = compilation.GetTypeByMetadataName("Cascade.UI.Node");
+        var componentBase = compilation.GetTypeByMetadataName("Cascade.UI.Component");
+        if (cascadeAssembly is null || nodeBase is null)
+        {
+            sb.AppendLine("_Cascade.UI assembly not referenced._");
+            sb.AppendLine();
+            return;
+        }
+
+        var layoutNames = new HashSet<string>(StringComparer.Ordinal) { "Row", "Column", "Grid", "Stack", "Wrap", "ZStack", "Spacer", "Divider" };
+        var controls = new List<INamedTypeSymbol>();
+        CollectPublicTypes(cascadeAssembly.GlobalNamespace, type =>
+            !type.IsAbstract &&
+            !type.IsStatic &&
+            type.TypeKind == TypeKind.Class &&
+            InheritsFrom(type, nodeBase) &&
+            (componentBase is null || !InheritsFrom(type, componentBase)) &&
+            !layoutNames.Contains(type.Name), controls);
+        controls.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.Ordinal));
+        var controlExtensions = CollectControlExtensions(cascadeAssembly);
+
+        foreach (var type in controls)
+        {
+            sb.Append("### ");
+            sb.AppendLine(type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat));
+
+            foreach (var ctor in type.Constructors)
+            {
+                if (ctor.DeclaredAccessibility == Accessibility.Public && !ctor.IsImplicitlyDeclared)
+                {
+                    sb.Append("- `");
+                    sb.Append(FormatCtorSignature(type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat), ctor));
+                    sb.AppendLine("`");
+                }
+            }
+
+            var fluent = new List<string>();
+            foreach (var member in type.GetMembers())
+            {
+                if (member is IMethodSymbol method &&
+                    method.DeclaredAccessibility == Accessibility.Public &&
+                    !method.IsStatic &&
+                    method.MethodKind == MethodKind.Ordinary &&
+                    SymbolEqualityComparer.Default.Equals(method.ReturnType.OriginalDefinition, type.OriginalDefinition))
+                {
+                    fluent.Add("." + method.Name + "(" + string.Join(", ", method.Parameters.Select(p =>
+                        $"{p.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)} {p.Name}")) + ")");
+                }
+            }
+            if (controlExtensions.TryGetValue(type.OriginalDefinition, out var extensions))
+            {
+                foreach (var method in extensions)
+                {
+                    fluent.Add(FormatExtensionSignature(method));
+                }
+            }
+            if (fluent.Count > 0)
+            {
+                sb.Append("- Fluent: ");
+                sb.AppendLine(string.Join(" ", fluent.Select(f => $"`{f}`")));
+            }
+            sb.AppendLine();
+        }
+    }
+
+    private static void CollectPublicTypes(INamespaceSymbol ns, Func<INamedTypeSymbol, bool> include, List<INamedTypeSymbol> result)
+    {
+        foreach (var type in ns.GetTypeMembers())
+        {
+            if (type.DeclaredAccessibility == Accessibility.Public && include(type))
+            {
+                result.Add(type);
+            }
+        }
+        foreach (var child in ns.GetNamespaceMembers())
+        {
+            CollectPublicTypes(child, include, result);
+        }
+    }
+
     // ── Modifiers ────────────────────────────────────────────────────
 
-    private static void AppendModifiers(StringBuilder sb, IAssemblySymbol? cascadeAssembly)
+    // Every public extension method in Cascade.UI that applies to any Node (receiver Node, or a
+    // type parameter constrained to it). A hard-coded list of four classes used to miss the rest.
+    private static void AppendModifiers(StringBuilder sb, Compilation compilation, IAssemblySymbol? cascadeAssembly)
     {
         sb.AppendLine("## Modifiers");
         sb.AppendLine();
 
-        if (cascadeAssembly is null)
+        var nodeBase = compilation.GetTypeByMetadataName("Cascade.UI.Node");
+        if (cascadeAssembly is null || nodeBase is null)
         {
             sb.AppendLine("_Cascade.UI assembly not referenced._");
             sb.AppendLine();
@@ -319,22 +413,16 @@ internal static class ApiIndexGenerator
         }
 
         var modifiers = new List<(string Name, string Signature)>();
-
-        // Find extension method classes
-        string[] extensionClasses = { "LayoutModifiers", "VisualModifiers", "AccessibilityModifiers", "ResponsiveModifiers" };
-        foreach (var className in extensionClasses)
+        var extensionClasses = new List<INamedTypeSymbol>();
+        CollectPublicTypes(cascadeAssembly.GlobalNamespace, type => type.IsStatic, extensionClasses);
+        foreach (var type in extensionClasses)
         {
-            var type = FindTypeInAssembly(cascadeAssembly, "Cascade.UI", className);
-            if (type is null)
-            {
-                continue;
-            }
-
             foreach (var member in type.GetMembers())
             {
                 if (member is IMethodSymbol method &&
                     method.IsExtensionMethod &&
-                    method.DeclaredAccessibility == Accessibility.Public)
+                    method.DeclaredAccessibility == Accessibility.Public &&
+                    IsGenericNodeReceiver(method.Parameters[0].Type, nodeBase))
                 {
                     modifiers.Add((method.Name, FormatExtensionSignature(method)));
                 }
@@ -355,7 +443,7 @@ internal static class ApiIndexGenerator
         sb.AppendLine("|----------|------------|");
         foreach (var group in grouped)
         {
-            var sigs = string.Join(", ", group.Select(g => $"`{g.Signature}`"));
+            var sigs = string.Join(", ", group.Select(g => g.Signature).Distinct(StringComparer.Ordinal).Select(s => $"`{s}`"));
             sb.Append("| ");
             sb.Append(group.Key);
             sb.Append(" | ");
@@ -940,6 +1028,45 @@ internal static class ApiIndexGenerator
             $"{p.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)} {p.Name}")));
         sb.Append(')');
         return sb.ToString();
+    }
+
+    // A modifier that applies to any node: the receiver is Node itself, or a type parameter
+    // constrained to Node. Extensions on a specific control are listed under that control.
+    private static bool IsGenericNodeReceiver(ITypeSymbol receiver, INamedTypeSymbol nodeBase)
+    {
+        if (receiver is ITypeParameterSymbol typeParameter)
+        {
+            return typeParameter.ConstraintTypes.OfType<INamedTypeSymbol>().Any(c => IsGenericNodeReceiver(c, nodeBase));
+        }
+        return SymbolEqualityComparer.Default.Equals(receiver, nodeBase);
+    }
+
+    // Public extension methods in Cascade.UI keyed by the concrete control type they extend.
+    private static Dictionary<INamedTypeSymbol, List<IMethodSymbol>> CollectControlExtensions(IAssemblySymbol cascadeAssembly)
+    {
+        var byControl = new Dictionary<INamedTypeSymbol, List<IMethodSymbol>>(SymbolEqualityComparer.Default);
+        var staticClasses = new List<INamedTypeSymbol>();
+        CollectPublicTypes(cascadeAssembly.GlobalNamespace, type => type.IsStatic, staticClasses);
+        foreach (var type in staticClasses)
+        {
+            foreach (var member in type.GetMembers())
+            {
+                if (member is IMethodSymbol method &&
+                    method.IsExtensionMethod &&
+                    method.DeclaredAccessibility == Accessibility.Public &&
+                    method.Parameters[0].Type is INamedTypeSymbol receiver)
+                {
+                    var key = receiver.OriginalDefinition;
+                    if (!byControl.TryGetValue(key, out var list))
+                    {
+                        list = new List<IMethodSymbol>();
+                        byControl[key] = list;
+                    }
+                    list.Add(method);
+                }
+            }
+        }
+        return byControl;
     }
 
     private static string FormatExtensionSignature(IMethodSymbol method)

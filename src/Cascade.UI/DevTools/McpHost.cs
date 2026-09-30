@@ -8,8 +8,8 @@ namespace Cascade.UI.DevTools;
 /// <summary>
 /// TCP-based MCP host that replaces the named-pipe DevToolsHost.
 /// Listens on <c>127.0.0.1:0</c> (OS-assigned port) and registers the
-/// instance in <see cref="SharedInstanceRegistry"/> so <c>--mcp</c> proxy
-/// mode can discover and connect to it.
+/// instance in <see cref="SharedInstanceRegistry"/> so the <c>cascade-mcp</c> bridge (and
+/// Cascade.UI.Testing's McpTestClient) can discover and connect to it.
 ///
 /// Accepts one client at a time. When a client disconnects, the host waits
 /// for the next connection.

@@ -275,6 +275,101 @@ namespace TestApp
         await TUnit.Assertions.Assert.That(Has(gen2, "ViewB")).IsTrue();
     }
 
+    // ── Controls and modifiers (from the referenced Cascade.UI assembly) ──
+
+    private const string CascadeLibrary = @"
+namespace Cascade.UI
+{
+    public abstract class Node { }
+    public abstract class Component : Node { protected abstract Node Render(); }
+    public sealed class Row : Node { }
+
+    public sealed class Label : Node
+    {
+        public Label(string text) { }
+        public Label FontSize(double size) => this;
+        public string Describe() => """";
+    }
+
+    public sealed class Card : Component { protected override Node Render() => this; }
+
+    public static class VisualModifiers
+    {
+        public static T Opacity<T>(this T node, double value) where T : Node => node;
+    }
+
+    public static class ExtraModifiers
+    {
+        public static Node Tooltip(this Node node, string text) => node;
+    }
+
+    public static class LabelExtensions
+    {
+        public static Label Bold(this Label label) => label;
+    }
+
+    public static class StringHelpers
+    {
+        public static string Shout(this string text) => text;
+    }
+}
+";
+
+    [TUnit.Core.Test]
+    public async Task Controls_ListedWithConstructorsAndFluentMethods()
+    {
+        var generated = GetGeneratedSource(RunAgainstCascadeLibrary(), "CascadeApiIndex.g.cs");
+
+        await TUnit.Assertions.Assert.That(Has(generated, "## Controls")).IsTrue();
+        await TUnit.Assertions.Assert.That(Has(generated, "### Label")).IsTrue();
+        await TUnit.Assertions.Assert.That(Has(generated, "Label(string text)")).IsTrue();
+        await TUnit.Assertions.Assert.That(Has(generated, ".FontSize(double size)")).IsTrue();
+        // Control-specific extensions are listed with the control, not in the generic table.
+        await TUnit.Assertions.Assert.That(Has(generated, "`.Bold()`")).IsTrue();
+        await TUnit.Assertions.Assert.That(Has(generated, "| Bold |")).IsFalse();
+        // Not fluent: returns string, not the control.
+        await TUnit.Assertions.Assert.That(Has(generated, ".Describe(")).IsFalse();
+        // Layout primitives and components have their own sections.
+        await TUnit.Assertions.Assert.That(Has(generated, "### Row")).IsFalse();
+        await TUnit.Assertions.Assert.That(Has(generated, "### Card")).IsFalse();
+    }
+
+    [TUnit.Core.Test]
+    public async Task Modifiers_DiscoveredFromEveryNodeExtensionClass()
+    {
+        var generated = GetGeneratedSource(RunAgainstCascadeLibrary(), "CascadeApiIndex.g.cs");
+
+        await TUnit.Assertions.Assert.That(Has(generated, "Opacity")).IsTrue();
+        await TUnit.Assertions.Assert.That(Has(generated, "Tooltip")).IsTrue();
+        // Extension on string, not a Node: not a modifier.
+        await TUnit.Assertions.Assert.That(Has(generated, "Shout")).IsFalse();
+    }
+
+    private static GeneratorRunResult RunAgainstCascadeLibrary()
+    {
+        var baseReferences = new List<MetadataReference>
+        {
+            MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
+            MetadataReference.CreateFromFile(Path.Combine(Path.GetDirectoryName(typeof(object).Assembly.Location)!, "System.Runtime.dll")),
+        };
+
+        var library = CSharpCompilation.Create(
+            "Cascade.UI",
+            new[] { CSharpSyntaxTree.ParseText(CascadeLibrary) },
+            baseReferences,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        var app = CSharpCompilation.Create(
+            "TestApp",
+            new[] { CSharpSyntaxTree.ParseText("namespace TestApp { public class Marker { } }") },
+            baseReferences.Append(library.ToMetadataReference()),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        GeneratorDriver driver = CSharpGeneratorDriver.Create(new CascadeGenerator().AsSourceGenerator());
+        driver = driver.RunGeneratorsAndUpdateCompilation(app, out _, out _);
+        return driver.GetRunResult().Results[0];
+    }
+
     // ── Test infrastructure ──────────────────────────────────────────
 
     private static bool Has(string? source, string value)

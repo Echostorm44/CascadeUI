@@ -283,20 +283,13 @@ internal static class McpTools
 
         if (node is Node uiNode)
         {
-            var layoutData = uiNode.LayoutData;
-            if (layoutData.A11yRole != AccessibleRole.None)
+            var resolvedRole = AccessibilityTreeBuilder.ResolveRole(uiNode);
+            if (resolvedRole != AccessibleRole.None)
             {
-                role = layoutData.A11yRole.ToString();
+                role = resolvedRole.ToString();
             }
-            label = layoutData.A11yLabel;
+            label = AccessibilityTreeBuilder.ResolveLabel(uiNode);
         }
-
-        label ??= node switch
-        {
-            Label labelNode => labelNode.Text ?? labelNode.LocText.Resolve(),
-            Button button => button.Label.Resolve(),
-            _ => null,
-        };
 
         return (role, label);
     }

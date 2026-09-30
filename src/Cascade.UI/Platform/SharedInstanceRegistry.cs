@@ -17,7 +17,7 @@ internal sealed partial class InstanceRegistryJsonContext : JsonSerializerContex
 
 /// <summary>
 /// Cross-process registry of running Cascade app instances, stored in a
-/// memory-mapped file. The <c>--mcp</c> proxy reads this to discover which
+/// memory-mapped file. The <c>cascade-mcp</c> bridge reads this to discover which
 /// GUI instance to connect to. The GUI app writes its entry on startup and
 /// removes it on shutdown.
 ///
@@ -115,7 +115,7 @@ internal sealed class SharedInstanceRegistry : IDisposable
     }
 
     /// <summary>
-    /// Finds the best target instance for an <c>--mcp</c> proxy connection,
+    /// Finds the best target instance for a <c>cascade-mcp</c> bridge connection,
     /// following the spec rules:
     /// <list type="bullet">
     ///   <item>If <paramref name="windowId"/> is specified: connect to that instance.</item>

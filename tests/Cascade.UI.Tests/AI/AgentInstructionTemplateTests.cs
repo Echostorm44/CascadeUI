@@ -32,7 +32,7 @@ public sealed class AgentInstructionTemplateTests
     {
         string content = AgentInstructionTemplate.Generate("App", "app");
 
-        int mcpIndex = content.IndexOf("--mcp", StringComparison.Ordinal);
+        int mcpIndex = content.IndexOf("CASCADE_MCP=1", StringComparison.Ordinal);
         int promptsIndex = content.IndexOf("cascade-debug-rerenders", StringComparison.Ordinal);
 
         await Assert.That(mcpIndex).IsGreaterThanOrEqualTo(0);
@@ -74,7 +74,10 @@ public sealed class AgentInstructionTemplateTests
         string content = AgentInstructionTemplate.Generate("HelloCascade", "HelloCascade.exe");
 
         await Assert.That(content).Contains("HelloCascade");
-        await Assert.That(content).Contains("HelloCascade.exe --mcp");
+        await Assert.That(content).Contains("& 'HelloCascade.exe'");
+        await Assert.That(content).Contains("cascade mcp serve --app HelloCascade");
+        // The app exits immediately when given --mcp (App.Run), so the template must never suggest it.
+        await Assert.That(content).DoesNotContain("--mcp");
     }
 
     [Test]
@@ -95,8 +98,9 @@ public sealed class AgentInstructionTemplateTests
 
         await Assert.That(json).Contains("\"mcpServers\"");
         await Assert.That(json).Contains("\"hellocascade\"");
-        await Assert.That(json).Contains("\"HelloCascade.exe\"");
-        await Assert.That(json).Contains("\"--mcp\"");
+        await Assert.That(json).Contains("\"command\": \"cascade\"");
+        await Assert.That(json).Contains("[\"mcp\", \"serve\", \"--app\", \"HelloCascade\"]");
+        await Assert.That(json).DoesNotContain("\"--mcp\"");
     }
 
     [Test]
@@ -113,10 +117,10 @@ public sealed class AgentInstructionTemplateTests
     }
 
     [Test]
-    public async Task GenerateMcpJson_escapes_backslashes()
+    public async Task GenerateMcpJson_escapes_app_name()
     {
-        string json = AgentInstructionTemplate.GenerateMcpJson("App", @"C:\Users\bin\App.exe");
+        string json = AgentInstructionTemplate.GenerateMcpJson(@"My\App ""X""", @"C:\Users\bin\App.exe");
 
-        await Assert.That(json).Contains(@"C:\\Users\\bin\\App.exe");
+        await Assert.That(json).Contains(@"""My\\App \""X\""""");
     }
 }

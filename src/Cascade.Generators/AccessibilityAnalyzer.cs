@@ -8,7 +8,7 @@ namespace Cascade.Generators;
 /// CASCADEA11Y001/002 checks actually fire (analyzer audit 2026-08-01). Conservative
 /// to avoid a false-positive flood: only an INLINE <c>new IconButton(...)</c> /
 /// <c>new Image(...)</c> whose fluent chain contains no <c>.AccessibleLabel(...)</c>
-/// call is flagged. A creation stored in a local/field is skipped — it may be labeled
+/// call (or, for an IconButton, no <c>.Tooltip(...)</c>) is flagged. A creation stored in a local/field is skipped — it may be labeled
 /// elsewhere. An icon-only button and an image are the two elements that carry no
 /// intrinsic text label, which is why only these two types are targeted.
 /// </summary>
@@ -99,6 +99,13 @@ internal static class AccessibilityAnalyzer
             if (ma.Name.Identifier.Text == "AccessibleLabel")
             {
                 return null; // explicitly labeled (empty string = decorative, also fine)
+            }
+
+            // An icon button's tooltip is its accessible name when no label is set
+            // (AccessibilityTreeBuilder.ResolveLabel).
+            if (!isImage && ma.Name.Identifier.Text == "Tooltip")
+            {
+                return null;
             }
 
             current = inv;

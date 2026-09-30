@@ -883,6 +883,7 @@ internal sealed class Win32Window : IDisposable
             case Win32.WM_KILLFOCUS:
             case Win32.WM_ACTIVATE:
             case Win32.WM_DISPATCH:
+            case Win32.WM_FRAME:
             {
                 MessageReceived?.Invoke(msg, wParam, lParam);
                 break;

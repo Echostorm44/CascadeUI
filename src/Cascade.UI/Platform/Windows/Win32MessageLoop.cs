@@ -7,8 +7,8 @@ namespace Cascade.UI;
 
 /// <summary>
 /// Win32 message loop. Runs the standard Win32 message pump on the main thread
-/// and provides mechanisms for posting callbacks to the UI thread and scheduling
-/// animation frame timers.
+/// and provides mechanisms for posting callbacks to the UI thread. Frame pacing lives in
+/// <see cref="Win32FrameClock"/>.
 /// </summary>
 internal sealed class Win32MessageLoop : IDisposable
 {
@@ -30,7 +30,7 @@ internal sealed class Win32MessageLoop : IDisposable
     internal bool IsOnMainThread => Thread.CurrentThread == mainThread;
 
     /// <summary>
-    /// The window used for receiving dispatched messages and timer events.
+    /// The window used for receiving dispatched messages.
     /// Set by the application bootstrap before Run() is called.
     /// </summary>
     internal Win32Window? Window
@@ -180,29 +180,6 @@ internal sealed class Win32MessageLoop : IDisposable
     }
 
     /// <summary>
-    /// Starts a repeating timer on the message window at the specified interval.
-    /// Used for animation frame scheduling.
-    /// </summary>
-    internal void StartFrameTimer(uint intervalMs)
-    {
-        if (messageWindow is { Handle: not 0 } window)
-        {
-            Win32.SetTimer(window.Handle, Win32.IDT_FRAME, intervalMs, 0);
-        }
-    }
-
-    /// <summary>
-    /// Stops the animation frame timer.
-    /// </summary>
-    internal void StopFrameTimer()
-    {
-        if (messageWindow is { Handle: not 0 } window)
-        {
-            Win32.KillTimer(window.Handle, Win32.IDT_FRAME);
-        }
-    }
-
-    /// <summary>
     /// Posts WM_QUIT to terminate the message loop.
     /// </summary>
     internal void Quit(int code = 0)
@@ -229,7 +206,6 @@ internal sealed class Win32MessageLoop : IDisposable
         }
 
         disposed = true;
-        StopFrameTimer();
 
         // Drain remaining callbacks.
         DrainDispatchQueue();

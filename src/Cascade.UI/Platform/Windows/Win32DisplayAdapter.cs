@@ -9,7 +9,8 @@ namespace Cascade.UI;
 /// </summary>
 /// <remarks>
 /// COM is called through vtable function pointers (no ComImport), which is AOT-safe. Slot numbers
-/// follow dxgi.h: IUnknown 0–2, IDXGIObject 3–6, then the interface's own methods.
+/// follow dxgi.h: IUnknown 0–2, IDXGIObject 3–6, then the interface's own methods. A successful
+/// HRESULT guarantees the out pointer; enumeration ends with DXGI_ERROR_NOT_FOUND (a failure code).
 /// </remarks>
 internal static unsafe partial class Win32DisplayAdapter
 {
@@ -45,7 +46,7 @@ internal static unsafe partial class Win32DisplayAdapter
 
         void* factory = null;
         Guid iid = IidDxgiFactory1;
-        if (CreateDXGIFactory1(&iid, &factory) < 0 || factory == null)
+        if (CreateDXGIFactory1(&iid, &factory) < 0)
         {
             return false;
         }
@@ -56,7 +57,7 @@ internal static unsafe partial class Win32DisplayAdapter
             {
                 void* adapter = null;
                 var enumAdapters = (delegate* unmanaged[Stdcall]<void*, uint, void**, int>)VTable(factory, EnumAdapters1Slot);
-                if (enumAdapters(factory, adapterIndex, &adapter) < 0 || adapter == null)
+                if (enumAdapters(factory, adapterIndex, &adapter) < 0)
                 {
                     return false;
                 }
@@ -98,7 +99,7 @@ internal static unsafe partial class Win32DisplayAdapter
         for (uint outputIndex = 0; outputIndex < MaxOutputsPerAdapter; outputIndex++)
         {
             void* output = null;
-            if (enumOutputs(adapter, outputIndex, &output) < 0 || output == null)
+            if (enumOutputs(adapter, outputIndex, &output) < 0)
             {
                 return false;
             }

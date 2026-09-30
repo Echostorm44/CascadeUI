@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -6,62 +8,81 @@ using System.Text.Json.Nodes;
 namespace Cascade.UI.Testing;
 
 /// <summary>
-/// Connects to a running Cascade app via the <c>--mcp</c> stdio proxy
-/// and sends/receives JSON-RPC 2.0 messages. This is the low-level transport
-/// used by <see cref="McpTestRunner"/>.
+/// Launches a Cascade app with its MCP DevTools listener enabled (<c>CASCADE_MCP=1</c>) and speaks
+/// JSON-RPC 2.0 to it over the loopback TCP port it registers. The low-level transport used by
+/// <see cref="McpTestRunner"/>. The app must be built with DevTools (Debug, or
+/// <c>-p:CascadeDevTools=true</c>).
 /// </summary>
 public sealed class McpTestClient : IAsyncDisposable
 {
     private readonly Process process;
+    private readonly TcpClient? connection;
     private readonly StreamReader stdout;
     private readonly StreamWriter stdin;
     private int nextId;
 
-    private McpTestClient(Process process)
+    private McpTestClient(Process process, StreamReader reader, StreamWriter writer, TcpClient? connection)
     {
         this.process = process;
-        stdout = process.StandardOutput;
-        stdin = process.StandardInput;
+        this.connection = connection;
+        stdout = reader;
+        stdin = writer;
         stdin.AutoFlush = true;
     }
 
     /// <summary>
-    /// Launches the app with <c>--mcp</c> and performs the MCP initialize handshake.
+    /// Launches the app with its MCP listener enabled, connects to it and performs the MCP
+    /// initialize handshake.
     /// </summary>
     /// <param name="appPath">Absolute path to the Cascade application executable.</param>
-    /// <param name="additionalArgs">Extra arguments after <c>--mcp</c>.</param>
-    /// <param name="timeout">Maximum time to wait for the process to respond.</param>
+    /// <param name="additionalArgs">Command-line arguments for the app.</param>
+    /// <param name="timeout">Maximum time to wait for the app to start listening and respond.</param>
     public static async Task<McpTestClient> ConnectAsync(
         string appPath,
         string[]? additionalArgs = null,
         TimeSpan? timeout = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(appPath);
-
-        var args = new List<string> { "--mcp" };
-        if (additionalArgs is not null)
-        {
-            args.AddRange(additionalArgs);
-        }
+        var effectiveTimeout = timeout ?? TimeSpan.FromSeconds(10);
 
         var psi = new ProcessStartInfo
         {
             FileName = appPath,
-            Arguments = string.Join(' ', args),
             UseShellExecute = false,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardInputEncoding = Encoding.UTF8,
         };
+        foreach (string arg in additionalArgs ?? [])
+        {
+            psi.ArgumentList.Add(arg);
+        }
+        // The DevTools listener only starts on request (see McpHost.Start).
+        psi.Environment["CASCADE_MCP"] = "1";
 
         var process = Process.Start(psi)
             ?? throw new InvalidOperationException($"Failed to start process: {appPath}");
 
-        var client = new McpTestClient(process);
-        var effectiveTimeout = timeout ?? TimeSpan.FromSeconds(10);
+        TcpClient connection;
+        try
+        {
+            int port = await WaitForListenerAsync(process, effectiveTimeout).ConfigureAwait(false);
+            connection = new TcpClient();
+            await connection.ConnectAsync(IPAddress.Loopback, port).ConfigureAwait(false);
+        }
+        catch
+        {
+            if (!process.HasExited)
+            {
+                process.Kill();
+            }
+            process.Dispose();
+            throw;
+        }
+
+        var stream = connection.GetStream();
+        var client = new McpTestClient(
+            process,
+            new StreamReader(stream, Encoding.UTF8),
+            new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)),
+            connection);
 
         // Initialize handshake
         var initResult = await client.SendAsync("initialize", new JsonObject
@@ -87,7 +108,31 @@ public sealed class McpTestClient : IAsyncDisposable
     /// </summary>
     internal static McpTestClient FromProcess(Process process)
     {
-        return new McpTestClient(process);
+        return new McpTestClient(process, process.StandardOutput, process.StandardInput, connection: null);
+    }
+
+    // The app registers {pid, port} in the shared instance registry once its listener is up;
+    // matching on the PID we launched picks our instance even when others are running.
+    private static async Task<int> WaitForListenerAsync(Process process, TimeSpan timeout)
+    {
+        using var registry = new SharedInstanceRegistry(DevTools.McpHost.GlobalRegistryId);
+        var deadline = Stopwatch.GetTimestamp() + (long)(timeout.TotalSeconds * Stopwatch.Frequency);
+        while (Stopwatch.GetTimestamp() < deadline)
+        {
+            if (process.HasExited)
+            {
+                throw new McpTestException($"The app exited (code {process.ExitCode}) before its MCP listener started. Is it built with DevTools (Debug or -p:CascadeDevTools=true)?");
+            }
+            foreach (var entry in registry.FindAll())
+            {
+                if (entry.Pid == process.Id)
+                {
+                    return entry.Port;
+                }
+            }
+            await Task.Delay(50).ConfigureAwait(false);
+        }
+        throw new McpTestException($"The app did not start its MCP listener within {timeout.TotalSeconds:0.#} s.");
     }
 
     /// <summary>
@@ -219,6 +264,20 @@ public sealed class McpTestClient : IAsyncDisposable
     /// <inheritdoc/>
     public async ValueTask DisposeAsync()
     {
+        // Over TCP the app keeps running when the client leaves; it was launched for this client,
+        // so end it rather than wait for an exit that will not come.
+        if (connection is not null)
+        {
+            connection.Dispose();
+            if (!process.HasExited)
+            {
+                process.Kill();
+                await process.WaitForExitAsync().ConfigureAwait(false);
+            }
+            process.Dispose();
+            return;
+        }
+
         try
         {
             await stdin.WriteLineAsync("{\"jsonrpc\":\"2.0\",\"method\":\"shutdown\"}").ConfigureAwait(false);
@@ -245,6 +304,7 @@ public sealed class McpTestClient : IAsyncDisposable
             process.Kill();
         }
 
+        connection?.Dispose();
         process.Dispose();
     }
 }

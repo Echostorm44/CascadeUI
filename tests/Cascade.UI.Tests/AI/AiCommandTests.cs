@@ -63,7 +63,7 @@ public sealed class AiCommandTests : IDisposable
         AiCommand.ExecuteSync(tempDir, "TestApp", "TestApp.exe");
 
         string claude = await File.ReadAllTextAsync(System.IO.Path.Combine(tempDir, "CLAUDE.md"));
-        await Assert.That(claude).Contains("--mcp");
+        await Assert.That(claude).Contains("CASCADE_MCP=1");
         await Assert.That(claude).Contains("cascade_api_index");
     }
 
@@ -79,7 +79,7 @@ public sealed class AiCommandTests : IDisposable
         await Assert.That(content).Contains("# My Custom Rules");
         await Assert.That(content).Contains("Do not use semicolons.");
         await Assert.That(content).Contains(AgentInstructionTemplate.BeginMarker);
-        await Assert.That(content).Contains("--mcp");
+        await Assert.That(content).Contains("CASCADE_MCP=1");
     }
 
     [Test]
@@ -97,7 +97,7 @@ public sealed class AiCommandTests : IDisposable
         await Assert.That(content).Contains("# My Rules");
         await Assert.That(content).Contains("# More Rules");
         await Assert.That(content).DoesNotContain("OLD CONTENT");
-        await Assert.That(content).Contains("--mcp");
+        await Assert.That(content).Contains("CASCADE_MCP=1");
     }
 
     [Test]
@@ -169,7 +169,7 @@ public sealed class AiCommandTests : IDisposable
         string json = await File.ReadAllTextAsync(System.IO.Path.Combine(tempDir, ".github", "copilot", "mcp.json"));
         await Assert.That(json).Contains("\"mcpServers\"");
         await Assert.That(json).Contains("\"testapp\"");
-        await Assert.That(json).Contains("\"--mcp\"");
+        await Assert.That(json).Contains("\"serve\"");
     }
 
     [Test]

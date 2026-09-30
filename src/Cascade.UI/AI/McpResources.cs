@@ -106,7 +106,7 @@ internal static class McpResources
 
     /// <summary>MCP reminder header prepended to API index content.</summary>
     internal const string McpReminderHeader =
-        "> **MCP Dev Tools available** — run your app with `--mcp` for 26+ live inspection tools.\n" +
+        "> **MCP Dev Tools available** — run your app (built with DevTools) with `CASCADE_MCP=1` and connect via `cascade mcp serve` for 26+ live inspection tools.\n" +
         "> Use `prompts/get` for framework-guided workflows.\n\n";
 
     private static string ReadApiIndex()

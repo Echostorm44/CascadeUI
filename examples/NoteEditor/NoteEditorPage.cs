@@ -374,7 +374,7 @@ internal sealed class NoteEditorPage : Component
                             .FontSize(18)
                             .Bold()
                             .Grow(1),
-                        new IconButton(PlusIcon, CreateNewNote)
+                        new IconButton(PlusIcon, CreateNewNote).Tooltip("New note")
                     ]
                 ).Padding(horizontal: 16, vertical: 12),
                 new Separator(),
@@ -450,7 +450,7 @@ internal sealed class NoteEditorPage : Component
                             placeholder: "Note title..."
                         )
                         .Grow(1),
-                        new IconButton(SaveIcon, SaveCurrentNote)
+                        new IconButton(SaveIcon, SaveCurrentNote).Tooltip("Save")
                             .Disabled(!undoStack.IsDirty)
                     ]
                 ).Padding(horizontal: 24, vertical: 16),

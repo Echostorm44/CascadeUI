@@ -311,20 +311,14 @@ internal static class AccessibilityTreeBuilder
         if (node is Node cascadeNode)
         {
             var data = cascadeNode.LayoutData;
-            role = data.A11yRole;
-            label = data.A11yLabel;
+            role = ResolveRole(cascadeNode);
+            label = ResolveLabel(cascadeNode);
             description = data.A11yDescription;
             liveRegion = data.A11yLiveRegion;
             tabIndex = data.A11yTabIndex;
             focusable = data.A11yFocusable;
             disabled = data.A11yDisabled;
             bounds = data.Bounds;
-
-            // Infer role from type name if not explicitly set
-            if (role == AccessibleRole.None)
-            {
-                role = InferRoleFromType(type);
-            }
 
             // Infer focusable from role if not explicitly set
             if (!focusable)
@@ -354,6 +348,40 @@ internal static class AccessibilityTreeBuilder
             LiveRegion: liveRegion,
             States: states,
             Bounds: bounds);
+    }
+
+    /// <summary>
+    /// The node's accessible role: the explicit <c>AccessibleRole()</c> when set, otherwise the
+    /// role inferred from its type. The single source for the platform tree and DevTools.
+    /// </summary>
+    internal static AccessibleRole ResolveRole(Node node)
+    {
+        var role = node.LayoutData.A11yRole;
+        return role != AccessibleRole.None ? role : InferRoleFromType(node.GetType());
+    }
+
+    /// <summary>
+    /// The node's accessible name: the explicit <c>AccessibleLabel()</c> when set (an empty string
+    /// marks it decorative), otherwise the control's own visible text. An <see cref="IconButton"/>
+    /// has none, so it falls back to its tooltip and then to its icon's accessible name.
+    /// </summary>
+    internal static string? ResolveLabel(Node node)
+    {
+        if (node.LayoutData.A11yLabel is { } label)
+        {
+            return label;
+        }
+
+        return node switch
+        {
+            Label labelNode => labelNode.Text ?? labelNode.LocText.Resolve(),
+            Button button => button.Label.Resolve(),
+            LinkButton link => link.Label.Resolve(),
+            IconButton iconButton => iconButton.TooltipText.Value is { Length: > 0 }
+                ? iconButton.TooltipText.Resolve()
+                : iconButton.Icon.AccessibleName,
+            _ => null,
+        };
     }
 
     /// <summary>

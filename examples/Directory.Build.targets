@@ -1,0 +1,14 @@
+<Project>
+  <!--
+    A NuGet consumer gets Cascade.Generators (source generators + CASCADE* analyzers) from the
+    package's analyzers/ folder. The examples reference Cascade.UI by project, and analyzer
+    ProjectReferences do not flow transitively, so without this they compiled without the
+    framework's own rules and produced no API index. Mirror the package here.
+  -->
+  <ItemGroup Condition="'$(MSBuildProjectName)' != 'Cascade.Generators'">
+    <ProjectReference Include="$(MSBuildThisFileDirectory)..\src\Cascade.Generators\Cascade.Generators.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false"
+                      UndefineProperties="TargetFramework;RuntimeIdentifier;SelfContained;PublishAot;PublishTrimmed;PublishSingleFile;PublishReadyToRun" />
+  </ItemGroup>
+</Project>

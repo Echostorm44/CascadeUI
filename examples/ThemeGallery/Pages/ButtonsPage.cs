@@ -95,14 +95,14 @@ internal static class ButtonsPage
             "Icon-only buttons in default, hover, and disabled states.",
             new Row(spacing: 16, children:
             [
-                new IconButton(PlusIcon, onClick: () => { }),
-                new IconButton(HeartIcon, onClick: () => { }),
-                new IconButton(SettingsIcon, onClick: () => { }),
-                new IconButton(TrashIcon, onClick: () => { }),
+                new IconButton(PlusIcon, onClick: () => { }).Tooltip("Add"),
+                new IconButton(HeartIcon, onClick: () => { }).Tooltip("Favorite"),
+                new IconButton(SettingsIcon, onClick: () => { }).Tooltip("Settings"),
+                new IconButton(TrashIcon, onClick: () => { }).Tooltip("Delete"),
                 new Separator(),
                 new Label("Disabled:").Color(ThemeHelper.SubtleText),
-                new IconButton(PlusIcon, onClick: () => { }).Disabled(),
-                new IconButton(HeartIcon, onClick: () => { }).Disabled(),
+                new IconButton(PlusIcon, onClick: () => { }).Tooltip("Add").Disabled(),
+                new IconButton(HeartIcon, onClick: () => { }).Tooltip("Favorite").Disabled(),
             ]));
 
     // ── Link Buttons ─────────────────────────────────────────────────────

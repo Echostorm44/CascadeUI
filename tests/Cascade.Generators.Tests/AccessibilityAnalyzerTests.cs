@@ -23,6 +23,8 @@ namespace Cascade.UI
         public static IconButton AccessibleLabel(this IconButton b, string label) => b;
         public static Image AccessibleLabel(this Image i, string label) => i;
         public static Image Fit(this Image i, int mode) => i;
+        public static IconButton Tooltip(this IconButton b, string text) => b;
+        public static Image Tooltip(this Image i, string text) => i;
     }
 }
 ";
@@ -59,6 +61,40 @@ namespace TestApp
 ";
         var diags = RunGenerator(source).Diagnostics;
         await TUnit.Assertions.Assert.That(diags.Count(d => d.Id == "CASCADEA11Y001")).IsEqualTo(0);
+    }
+
+    [TUnit.Core.Test]
+    public async Task TooltipIconButton_NoA11Y001()
+    {
+        string source = StubTypes + @"
+namespace TestApp
+{
+    public static class Ui
+    {
+        public static Cascade.UI.Node Make() =>
+            new Cascade.UI.IconButton(default, () => { }).Tooltip(""Close"");
+    }
+}
+";
+        var diags = RunGenerator(source).Diagnostics;
+        await TUnit.Assertions.Assert.That(diags.Count(d => d.Id == "CASCADEA11Y001")).IsEqualTo(0);
+    }
+
+    [TUnit.Core.Test]
+    public async Task TooltipImage_StillReportsA11Y002()
+    {
+        string source = StubTypes + @"
+namespace TestApp
+{
+    public static class Ui
+    {
+        public static Cascade.UI.Node Make() =>
+            new Cascade.UI.Image(""logo.png"").Tooltip(""Logo"");
+    }
+}
+";
+        var diags = RunGenerator(source).Diagnostics;
+        await TUnit.Assertions.Assert.That(diags.Count(d => d.Id == "CASCADEA11Y002")).IsGreaterThan(0);
     }
 
     [TUnit.Core.Test]

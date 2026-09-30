@@ -12,8 +12,8 @@ namespace Cascade.UI;
 /// {
 ///   "mcpServers": {
 ///     "server-key": {
-///       "command": "/path/to/exe",
-///       "args": ["--mcp"],
+///       "command": "cascade",
+///       "args": ["mcp", "serve", "--app", "MyApp"],
 ///       "description": "My App"
 ///     }
 ///   }

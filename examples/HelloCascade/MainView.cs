@@ -14,7 +14,6 @@ internal sealed class MainView : Component
 {
     // ── Counter state ──────────────────────────────────────────────────
     private int count = 0;
-    private bool commandsRegistered;
 
     private bool IsEven => count % 2 == 0;
     private string CountLabel => $"Count: {count}";
@@ -364,28 +363,33 @@ internal sealed class MainView : Component
         "M11 3a8 8 0 1 0 0 16 8 8 0 0 0 0-16zM21 21l-4.35-4.35",
         new Size(24, 24), 24f, "Search");
 
+    protected override Task OnMounted()
+    {
+        CommandPalette.Register(this,
+            new Command("Increment Counter", category: "Actions", action: () => { count++; Invalidate(); }),
+            new Command("Reset Counter", category: "Actions", action: () => { count = 0; Invalidate(); }),
+            new Command("Toggle Dark Mode", category: "Settings",
+                shortcut: Hotkey.From(ModifierKeys.Ctrl, Cascade.UI.Key.D),
+                action: () => { darkMode = !darkMode; Invalidate(); }),
+            new Command("Show Notifications", category: "Settings", action: () => { enableNotifications = true; Invalidate(); }),
+            new Command("New Document", category: "File",
+                shortcut: Hotkey.From(ModifierKeys.Ctrl, Cascade.UI.Key.N), action: () => { }),
+            new Command("Save Document", category: "File",
+                shortcut: Hotkey.From(ModifierKeys.Ctrl, Cascade.UI.Key.S), action: () => { }),
+            new Command("Open Settings", category: "Navigation", action: () => { }),
+            new Command("Search Files", category: "Navigation",
+                shortcut: Hotkey.From(ModifierKeys.Ctrl | ModifierKeys.Shift, Cascade.UI.Key.F), action: () => { })
+        );
+        return Task.CompletedTask;
+    }
+
+    protected override void OnUnmounted()
+    {
+        CommandPalette.Unregister(this);
+    }
+
     protected override Node Render()
     {
-        if (!commandsRegistered)
-        {
-            commandsRegistered = true;
-            CommandPalette.Register(
-                new Command("Increment Counter", category: "Actions", action: () => { count++; Invalidate(); }),
-                new Command("Reset Counter", category: "Actions", action: () => { count = 0; Invalidate(); }),
-                new Command("Toggle Dark Mode", category: "Settings",
-                    shortcut: Hotkey.From(ModifierKeys.Ctrl, Cascade.UI.Key.D),
-                    action: () => { darkMode = !darkMode; Invalidate(); }),
-                new Command("Show Notifications", category: "Settings", action: () => { enableNotifications = true; Invalidate(); }),
-                new Command("New Document", category: "File",
-                    shortcut: Hotkey.From(ModifierKeys.Ctrl, Cascade.UI.Key.N), action: () => { }),
-                new Command("Save Document", category: "File",
-                    shortcut: Hotkey.From(ModifierKeys.Ctrl, Cascade.UI.Key.S), action: () => { }),
-                new Command("Open Settings", category: "Navigation", action: () => { }),
-                new Command("Search Files", category: "Navigation",
-                    shortcut: Hotkey.From(ModifierKeys.Ctrl | ModifierKeys.Shift, Cascade.UI.Key.F), action: () => { })
-            );
-        }
-
         var colorBind  = new Bindable<string>(selectedColor,  v => { selectedColor  = v; Invalidate(); });
         var fruitsBind = new Bindable<IReadOnlyList<string>>(selectedFruits, v => { selectedFruits = v.ToList(); Invalidate(); });
         var sliderBind = new Bindable<float>(sliderValue, v => { sliderValue = v; Invalidate(); });
@@ -1555,7 +1559,7 @@ internal sealed class MainView : Component
 
                         // ── Image ──────────────────────────────────────────────
                         new Label("Image").FontSize(16),
-                        new Image(CreateGradientImage()).Fit(ImageFit.Contain),
+                        new Image(CreateGradientImage()).Fit(ImageFit.Contain).AccessibleLabel("Blue-to-purple gradient"),
 
                         // ── Separator ──────────────────────────────────────────
                         new Separator().Width(320f),

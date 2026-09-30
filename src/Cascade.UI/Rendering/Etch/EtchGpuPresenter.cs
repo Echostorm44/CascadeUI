@@ -914,42 +914,109 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
         return t * t * (3f - 2f * t);
     }
 
-    public EtchGpuPresenter(nint hwnd, uint width, uint height)
+    // Auto prefers the GPU driving the window's monitor. Otherwise hardware first unless Software was
+    // asked for; the software adapter (WARP) is the fallback when no hardware adapter can present,
+    // which keeps rendering on the GPU pipeline instead of dropping to the reduced-resolution CPU
+    // rasterizer.
+    private static RequestAdapterResult RequestAdapter(Instance instance, Surface surface, nint hwnd, GpuPreference preference)
     {
+        if (preference == GpuPreference.Auto
+            && Win32DisplayAdapter.TryGetForWindow(hwnd, out uint vendorId, out uint deviceId))
+        {
+            Adapter display = FindHardwareAdapter(instance, surface, vendorId, deviceId);
+            if (!display.IsInvalid)
+            {
+                return new RequestAdapterResult(RequestAdapterStatus.Success, display, null);
+            }
+        }
+
+        if (preference != GpuPreference.Software)
+        {
+            PowerPreference power = preference switch
+            {
+                GpuPreference.LowPower => PowerPreference.LowPower,
+                GpuPreference.HighPerformance => PowerPreference.HighPerformance,
+                _ => PowerPreference.Undefined,
+            };
+            var hardware = AsyncRequest.RequestAdapterSync(instance, surface, power);
+            if (hardware.Status == RequestAdapterStatus.Success && !hardware.Adapter.IsInvalid)
+            {
+                return hardware;
+            }
+        }
+
+        return AsyncRequest.RequestAdapterSync(instance, surface, forceFallbackAdapter: true);
+    }
+
+    // The first hardware adapter with this PCI id that can present to the surface; every other
+    // enumerated adapter is released.
+    private static Adapter FindHardwareAdapter(Instance instance, Surface surface, uint vendorId, uint deviceId)
+    {
+        Adapter chosen = default;
+        foreach (Adapter candidate in instance.EnumerateAdapters())
+        {
+            if (chosen.IsInvalid)
+            {
+                AdapterDescription description = candidate.GetDescription();
+                if (!description.IsSoftware
+                    && description.VendorId == vendorId
+                    && description.DeviceId == deviceId
+                    && candidate.CanPresentTo(surface))
+                {
+                    chosen = candidate;
+                    continue;
+                }
+            }
+            candidate.Dispose();
+        }
+        return chosen;
+    }
+
+    public EtchGpuPresenter(nint hwnd, uint width, uint height, GpuPreference preference = GpuPreference.Auto)
+    {
+        // Etch's default instance enables only the platform's primary backend (D3D12 on Windows),
+        // so no other driver stack is loaded into the process.
         _instance = Instance.Create();
         if (_instance.IsInvalid)
         {
             throw new InvalidOperationException("Failed to create wgpu instance");
         }
 
-        var adapterResult = AsyncRequest.RequestAdapterSync(_instance, backendType: BackendType.Undefined);
-        if (adapterResult.Status != RequestAdapterStatus.Success || adapterResult.Adapter.IsInvalid)
+        // The surface comes first so the adapter request can insist on one that presents to it.
+        nint hinstance = Win32.GetModuleHandleW(null);
+        _surface = SurfaceFactory.CreateFromWin32(_instance, hwnd, hinstance, "CascadeUI");
+        if (!_surface.IsValid)
         {
             _instance.Dispose();
-            throw new InvalidOperationException("No GPU adapter available");
+            throw new InvalidOperationException("Failed to create surface from HWND");
+        }
+
+        var adapterResult = RequestAdapter(_instance, _surface, hwnd, preference);
+        if (adapterResult.Status != RequestAdapterStatus.Success || adapterResult.Adapter.IsInvalid)
+        {
+            _surface.Dispose();
+            _instance.Dispose();
+            throw new InvalidOperationException($"No GPU adapter available: {adapterResult.Message ?? adapterResult.Status.ToString()}");
         }
         _adapter = adapterResult.Adapter;
+        if (DebugLog.IsEnabled(DebugLogCategory.Present))
+        {
+            DebugLog.Write(DebugLogCategory.Present, $"[{DateTime.Now:O}] GPU adapter ({preference}): {_adapter.GetDescription()}");
+        }
 
+        // Etch's device defaults: allocator blocks sized for UI content and a descriptor heap sized for
+        // Cascade's bind-group usage, instead of wgpu's game-sized defaults (~200 MB committed up front).
         DeviceDescriptor deviceDesc = default;
         ValidationBridge.ConfigureDeviceDescriptor(&deviceDesc);
         var deviceResult = AsyncRequest.RequestDeviceSync(_instance, _adapter, &deviceDesc);
         if (deviceResult.Status != RequestDeviceStatus.Success || deviceResult.Device.IsInvalid)
         {
             _adapter.Dispose();
+            _surface.Dispose();
             _instance.Dispose();
-            throw new InvalidOperationException("Failed to create wgpu device");
+            throw new InvalidOperationException($"Failed to create wgpu device: {deviceResult.Message ?? deviceResult.Status.ToString()}");
         }
         _device = deviceResult.Device;
-
-        nint hinstance = Win32.GetModuleHandleW(null);
-        _surface = SurfaceFactory.CreateFromWin32(_instance, hwnd, hinstance, "CascadeUI");
-        if (!_surface.IsValid)
-        {
-            _device.Dispose();
-            _adapter.Dispose();
-            _instance.Dispose();
-            throw new InvalidOperationException("Failed to create surface from HWND");
-        }
 
         _currentWidth = width;
         _currentHeight = height;

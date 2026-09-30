@@ -74,6 +74,11 @@ public static class App
     /// </summary>
     public static AppHotkeys Hotkeys { get; } = new();
 
+    // ── Screens ──────────────────────────────────────────────────────
+
+    /// <summary>Monitors and the mouse cursor position.</summary>
+    public static AppScreens Screens { get; } = new();
+
     // ── Undo/Redo ────────────────────────────────────────────────────
 
     private static UndoStack? activeUndoStack;
@@ -218,6 +223,8 @@ public static class App
         int w = config.WindowSize.HasValue ? (int)config.WindowSize.Value.Width : 1280;
         int h = config.WindowSize.HasValue ? (int)config.WindowSize.Value.Height : 720;
         window.Create(title, w, h, WindowStyle.Normal);
+        Window.Attach(window);
+        window.TaskbarCreated = TrayIcon.ReAddAll;
 
         var frameClock = new Win32FrameClock(window.Handle);
         var orchestrator = new FrameOrchestrator(
@@ -307,7 +314,7 @@ public static class App
         singleInstanceGuard?.StartListening(args =>
             Dispatcher.Post(() =>
             {
-                window.Activate();
+                window.ShowAndActivate();
                 secondInstanceHandler?.Invoke(args);
             }));
 
@@ -369,7 +376,15 @@ public static class App
         // Open the hot-reload pipe when launched by `cascade run --watch` (no-op otherwise).
         Core.Internal.HotReloadHost.StartIfRequested();
 
-        if (config.StartMinimized)
+        Tray?.Show();
+
+        // Tray/hotkey apps start hidden: ShowOnStartup = false, or minimized with HideOnMinimize.
+        bool startHidden = !Window.ShowOnStartup || (config.StartMinimized && Window.HideOnMinimize);
+        if (startHidden)
+        {
+            // The window exists (hotkeys, tray and clipboard monitoring need it) but stays hidden.
+        }
+        else if (config.StartMinimized)
         {
             window.ShowMinimized();
         }
@@ -384,6 +399,8 @@ public static class App
 
         mcpHost.Dispose();
 
+        // Remove the tray icon now; otherwise it lingers until the user hovers over it.
+        Tray?.Dispose();
         frameClock.Dispose();
         orchestrator.Dispose();
         gpu.Dispose();
@@ -879,43 +896,266 @@ public sealed class AppWindow
         }
     }
 
+    private WindowChrome? chrome;
+    private bool resizable = true;
+    private bool alwaysOnTop;
+    private float opacity = 1.0f;
+    private bool showInTaskbar = true;
+    private TaskbarProgress? taskbarProgress;
+
     /// <summary>
-    /// The window chrome configuration. Set to <see cref="WindowChrome.None"/>
-    /// for a frameless window.
+    /// The window chrome. <see cref="WindowChrome.None"/> makes the window frameless: no title bar or
+    /// borders, keeping the system shadow and (Windows 11) rounded corners; move it with
+    /// <see cref="BeginDrag"/>. Other chrome content is not rendered yet — only <c>None</c> changes
+    /// the window. Windows only.
     /// </summary>
-    public WindowChrome? Chrome { get; set; }
+    public WindowChrome? Chrome
+    {
+        get => chrome;
+        set
+        {
+            chrome = value;
+            ApplyChrome(getWin32Window());
+        }
+    }
+
+    /// <summary>
+    /// Whether the user can resize (and maximize) the window. Default: true. A frameless window keeps
+    /// resize grips at its edges only while this is true.
+    /// </summary>
+    public bool Resizable
+    {
+        get => resizable;
+        set
+        {
+            resizable = value;
+            ApplyChrome(getWin32Window());
+        }
+    }
 
     /// <summary>Whether the window always appears above other windows.</summary>
-    public bool AlwaysOnTop { get; set; }
+    public bool AlwaysOnTop
+    {
+        get => alwaysOnTop;
+        set
+        {
+            alwaysOnTop = value;
+            getWin32Window()?.SetAlwaysOnTop(value);
+        }
+    }
 
     /// <summary>
     /// The opacity of the entire window (0.0–1.0). Uses platform-specific
     /// layered window support (DWM on Windows, NSWindow.alphaValue on macOS).
     /// </summary>
-    public float Opacity { get; set; } = 1.0f;
+    public float Opacity
+    {
+        get => opacity;
+        set
+        {
+            opacity = value;
+            getWin32Window()?.SetOpacity(value);
+        }
+    }
 
-    /// <summary>Whether the window appears in the OS taskbar.</summary>
-    public bool ShowInTaskbar { get; set; } = true;
+    /// <summary>
+    /// Whether the window has a taskbar button and an Alt+Tab entry. Default: true. Windows only.
+    /// </summary>
+    public bool ShowInTaskbar
+    {
+        get => showInTaskbar;
+        set
+        {
+            showInTaskbar = value;
+            getWin32Window()?.SetShowInTaskbar(value);
+        }
+    }
 
-    /// <summary>Whether the window is visible on app startup.</summary>
+    /// <summary>
+    /// Whether the window is shown when the app starts. Set it to false (before or during
+    /// <c>App.Run</c> configuration) for an app that starts in the tray or waits for a hotkey.
+    /// </summary>
     public bool ShowOnStartup { get; set; } = true;
 
     /// <summary>
-    /// When true, minimizing hides to tray instead of taskbar.
+    /// When true, minimizing hides the window (leaving the tray icon) instead of minimizing to the
+    /// taskbar.
     /// </summary>
     public bool HideOnMinimize { get; set; }
 
     /// <summary>
-    /// When true, the close button hides to tray instead of exiting.
+    /// When true, the close button hides the window instead of exiting. The app keeps running (in
+    /// the tray); exit with <see cref="ForceClose"/>.
     /// </summary>
     public bool HideOnClose { get; set; }
 
     /// <summary>
-    /// Taskbar progress indicator (Windows 11). No-op on macOS and Linux.
+    /// Called when the user asks to close the window (close button, Alt+F4, <see cref="Close"/>).
+    /// Return <see cref="CloseResult.Handled"/> to keep the window open. Runs before
+    /// <see cref="HideOnClose"/>.
     /// </summary>
-    public TaskbarProgress? TaskbarProgress { get; set; }
+    public Func<CloseResult>? OnCloseRequested { get; set; }
+
+    /// <summary>Raised when the window becomes the active (foreground) window.</summary>
+    public event Action? Activated;
+
+    /// <summary>
+    /// Raised when the window stops being the active window — the user clicked another window or
+    /// switched apps. Launcher-style windows hide themselves here.
+    /// </summary>
+    public event Action? Deactivated;
+
+    /// <summary>Whether the window is currently shown (not hidden).</summary>
+    public bool IsVisible => getWin32Window()?.IsVisible ?? false;
+
+    /// <summary>Whether the window is the active (foreground) window.</summary>
+    public bool IsActive => getWin32Window()?.IsForeground ?? false;
+
+    /// <summary>
+    /// Taskbar button progress indicator. Windows only; set it to null or
+    /// <see cref="UI.TaskbarProgress.None"/> to clear it.
+    /// </summary>
+    public TaskbarProgress? TaskbarProgress
+    {
+        get => taskbarProgress;
+        set
+        {
+            taskbarProgress = value;
+            if (OperatingSystem.IsWindows())
+            {
+                Win32TaskbarProgress.Apply(getWin32Window()?.Handle ?? 0, value);
+            }
+        }
+    }
+
+    // ── Native wiring ────────────────────────────────────────────────
+
+    /// <summary>Applies the configured state to a just-created window and hooks its events.</summary>
+    internal void Attach(Win32Window window)
+    {
+        ApplyChrome(window);
+        if (alwaysOnTop)
+        {
+            window.SetAlwaysOnTop(true);
+        }
+        if (opacity < 1.0f)
+        {
+            window.SetOpacity(opacity);
+        }
+        if (!showInTaskbar)
+        {
+            window.SetShowInTaskbar(false);
+        }
+
+        window.CloseRequested = HandleCloseRequest;
+        window.MinimizeRequested = () =>
+        {
+            if (!HideOnMinimize)
+            {
+                return false;
+            }
+            window.Hide();
+            return true;
+        };
+        window.ActivationChanged = active => (active ? Activated : Deactivated)?.Invoke();
+        window.TaskbarButtonCreated = () =>
+        {
+            if (taskbarProgress is not null)
+            {
+                Win32TaskbarProgress.Apply(window.Handle, taskbarProgress);
+            }
+        };
+    }
+
+    private void ApplyChrome(Win32Window? window)
+    {
+        if (window is null)
+        {
+            return;
+        }
+
+        bool frameless = ReferenceEquals(chrome, WindowChrome.None);
+        window.SetFrameless(frameless, resizable);
+        window.SetResizable(resizable);
+    }
+
+    private bool HandleCloseRequest()
+    {
+        if (OnCloseRequested?.Invoke() == CloseResult.Handled)
+        {
+            return true;
+        }
+
+        if (HideOnClose)
+        {
+            Hide();
+            return true;
+        }
+
+        return false;
+    }
 
     // ── Actions ──────────────────────────────────────────────────────
+
+    /// <summary>Shows the window without activating it.</summary>
+    public void Show()
+    {
+        getWin32Window()?.Show();
+        getCocoaWindow()?.Show();
+        getX11Window()?.Show();
+        getWaylandWindow()?.Show();
+    }
+
+    /// <summary>Hides the window; the app keeps running (tray, hotkeys).</summary>
+    public void Hide()
+    {
+        getWin32Window()?.Hide();
+        getCocoaWindow()?.Hide();
+        getX11Window()?.Hide();
+        getWaylandWindow()?.Hide();
+    }
+
+    /// <summary>
+    /// Shows the window (restoring it if minimized) and brings it to the foreground with keyboard
+    /// focus — how a tray click or global hotkey summons the app.
+    /// </summary>
+    public void Activate()
+    {
+        getWin32Window()?.ShowAndActivate();
+        getCocoaWindow()?.Show();
+        getX11Window()?.Show();
+        getWaylandWindow()?.Show();
+    }
+
+    /// <summary>
+    /// Moves the window with the mouse as if its title bar were dragged — for frameless windows.
+    /// Call from a mouse-down handler (e.g. <c>OnPointerDown</c> on a header); returns when the
+    /// button is released. Windows only.
+    /// </summary>
+    public void BeginDrag()
+    {
+        if (getWin32Window() is not { } window)
+        {
+            return;
+        }
+
+        window.BeginDrag();
+        // The move loop consumed the mouse-up, so the dispatcher never saw the release.
+        App.activeOrchestrator?.Input.CancelPointerPress();
+    }
+
+    /// <summary>
+    /// Centers the window in <paramref name="screen"/>'s work area — e.g.
+    /// <c>App.Window.CenterOn(App.Screens.AtCursor)</c> to open on the monitor the user is looking
+    /// at. Windows only.
+    /// </summary>
+    public void CenterOn(ScreenInfo? screen)
+    {
+        if (screen is not null)
+        {
+            getWin32Window()?.CenterOnMonitor(screen.Handle);
+        }
+    }
 
     /// <summary>Minimizes the window.</summary>
     public void Minimize()
@@ -1005,7 +1245,8 @@ public sealed class AppWindow
     }
 
     /// <summary>
-    /// Centers the window on the primary screen.
+    /// Centers the window in the work area of the monitor it is currently on (see
+    /// <see cref="CenterOn"/> to choose the monitor).
     /// </summary>
     public void CenterOnScreen()
     {

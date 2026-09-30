@@ -2448,6 +2448,20 @@ internal sealed class InputDispatcher
         }
     }
 
+    /// <summary>
+    /// Forgets the pressed button state after something outside the dispatcher consumed the
+    /// release — a window move (<c>AppWindow.BeginDrag</c>) runs its own loop and eats the mouse-up.
+    /// </summary>
+    internal void CancelPointerPress()
+    {
+        isMouseDown = false;
+        pressedNode = null;
+        dragDropPending = false;
+        dragDropSourceNode = null;
+        dragDropPayload = null;
+        RequestRepaint?.Invoke();
+    }
+
     private void HandleMouseLeave()
     {
         UpdateTreeViewHover(null);

@@ -23,6 +23,14 @@ if (string.Equals(view, "parity", StringComparison.OrdinalIgnoreCase))
 {
     App.Run<CompositorParityView>(Configure);
 }
+else if (string.Equals(view, "shell", StringComparison.OrdinalIgnoreCase))
+{
+    App.Run<ShellView>(config =>
+    {
+        Configure(config);
+        ShellView.Configure(config);
+    });
+}
 else
 {
     App.Run<FixtureView>(Configure);

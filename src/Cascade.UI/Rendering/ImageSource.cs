@@ -34,6 +34,9 @@ public sealed class ImageSource : IDisposable
     /// <summary>The height of the image in pixels.</summary>
     public int Height { get; }
 
+    /// <summary>The decoded RGBA8 pixels (straight alpha), row-major.</summary>
+    internal ReadOnlySpan<byte> Pixels => pixels;
+
     /// <summary>Loads and decodes an image from a file path (any SharpImage-supported format).</summary>
     public static ImageSource FromFile(string path)
     {

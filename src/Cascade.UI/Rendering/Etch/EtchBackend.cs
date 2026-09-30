@@ -282,6 +282,16 @@ internal sealed class EtchBackend : IDisposable
             opMaxY = Math.Max(op.Y, op.H);
         }
 
+        // A shadow is visible 3σ past its rect.
+        if (op.Kind == OpKind.DrawShadow)
+        {
+            float extent = 3f * op.StrokeWidth;
+            opMinX -= extent;
+            opMinY -= extent;
+            opMaxX += extent;
+            opMaxY += extent;
+        }
+
         // Arcs and circles are centered; expand to bounding box
         if (op.Kind == OpKind.DrawArc || op.Kind == OpKind.DrawCircle)
         {
@@ -757,14 +767,23 @@ internal sealed class EtchBackend : IDisposable
         }
     }
 
-    // No-op: blurred-shadow compositing happens through EtchBackendProvider's
-    // layer-scene capture path, not this per-op backend call. Instance method to
-    // match the call surface in DrawContext, so suppress the "could be static" hint.
-    // (Drop-shadow blur is done in DrawContext.DrawBlurredRoundedRect via layered
-    // rounded rects, not here.)
-#pragma warning disable CA1822
-    public void DrawBlurredRoundedRect(ulong frame, float x, float y, float w, float h, float r, float sd, ColorValue color) { }
-#pragma warning restore CA1822
+    /// <summary>
+    /// A Gaussian-blurred rounded rect (drop shadow / glow), recorded as one op and rendered
+    /// analytically (Etch DrawShadow / ShadowShape) — Radius is the corner, StrokeWidth the σ.
+    /// </summary>
+    public void DrawBlurredRoundedRect(ulong frame, float x, float y, float w, float h, float r, float sd, ColorValue color)
+    {
+        var op = RentOp();
+        op.Kind = OpKind.DrawShadow;
+        op.X = x;
+        op.Y = y;
+        op.W = w;
+        op.H = h;
+        op.Radius = r;
+        op.StrokeWidth = sd;
+        op.Fill = color;
+        AddCommand(op);
+    }
 
     /// <summary>
     /// Frosted-glass backdrop blur: records a rounded rect that the presenter fills
@@ -1195,6 +1214,7 @@ internal sealed class EtchBackend : IDisposable
         // Rendered by a dedicated presenter pass (not the SceneBuffer), so skipped
         // in AppendSceneOp. Coords are baked to device space at emission.
         DrawBackdropBlur,
+        DrawShadow,
     }
 
     internal sealed class SceneOp
@@ -1444,10 +1464,11 @@ internal sealed class EtchBackend : IDisposable
         {
             return 0;
         }
-        // Etch expects linear values, not gamma-encoded sRGB.
-        // The uint is stored little-endian as [B,G,R,A] — i.e. linear BGRA.
-        float ra = Math.Clamp(c.R / a, 0f, 1f), ga = Math.Clamp(c.G / a, 0f, 1f), ba = Math.Clamp(c.B / a, 0f, 1f);
-        return (uint)(((int)(a * 255f + 0.5f) << 24) | ((int)(ra * 255f + 0.5f) << 16) | ((int)(ga * 255f + 0.5f) << 8) | (int)(ba * 255f + 0.5f));
+        // ColorValue holds premultiplied linear channels; Etch paints are sRGB-encoded with straight
+        // alpha (Etch PaintColor). Packing linear channels into 8 bits instead snapped dark colours
+        // (#0A0A0A rendered #0D0D0D, #050505 black) and made the CPU fallback, which decodes sRGB,
+        // draw every colour darker.
+        return PaintColor.FromLinear(c.R / a, c.G / a, c.B / a, a);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

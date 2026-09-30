@@ -257,34 +257,10 @@ public sealed class DrawContext
             return;
         }
 
-        // The GPU backend has no render-to-texture blur pass, so approximate a
-        // Gaussian drop shadow by stacking translucent rounded rects that grow
-        // outward with Gaussian-weighted alpha (drawn largest/faintest first, so
-        // they composite into a soft falloff). This uses the normal rounded-rect
-        // primitive, so ordering, clipping and scene caching all work, and it reads
-        // as a smooth shadow at this layer count.
-        const int layers = 12;
-        float sigma = blurSigma;
-        float extent = sigma * 3f;       // shadow reaches ~3σ past the shape edge
-        float baseA = color.A;
-
-        for (int k = layers; k >= 1; k--)
-        {
-            float grow = extent * k / layers;
-            float weight = MathF.Exp(-(grow * grow) / (2f * sigma * sigma));
-            float layerA = baseA * weight * (1.7f / layers);
-            if (layerA < 0.002f)
-            {
-                continue;
-            }
-
-            var lr = new Rect(rect.X - grow, rect.Y - grow, rect.Width + 2f * grow, rect.Height + 2f * grow);
-            DrawRect(lr, fill: color.Opacity(Math.Clamp(layerA, 0f, 1f)), radius: radius + grow);
-        }
-
-        // Solid core at the shape footprint — the element the shadow sits behind
-        // covers most of it; its edge keeps the shadow solid right at the shape.
-        DrawRect(rect, fill: color, radius: radius);
+        // One op, rendered analytically: a Gaussian-blurred rounded rect has a closed form (Etch
+        // ShadowShape), so the GPU presenter and the CPU fallback shade it exactly in one pass.
+        // It used to be 13 stacked translucent rects per shadow — banded, and 13× the draw work.
+        backend.DrawBlurredRoundedRect(frame, rect.X, rect.Y, rect.Width, rect.Height, radius, blurSigma, color);
     }
 
     /// <summary>

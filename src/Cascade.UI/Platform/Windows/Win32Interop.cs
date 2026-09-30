@@ -278,10 +278,6 @@ internal static partial class Win32
     internal const uint PM_REMOVE  = 0x0001;
     internal const uint PM_NOREMOVE = 0x0000;
 
-    // ── Timer ────────────────────────────────────────────────────────
-
-    internal const nuint IDT_FRAME = 1;
-
     // ── System Command ───────────────────────────────────────────────
 
     internal const int SC_CLOSE     = 0xF060;
@@ -854,6 +850,9 @@ internal static partial class Win32
 
     // Custom tray callback message. WM_USER+1 is already WM_DISPATCH.
     internal const uint WM_TRAYICON = WM_USER + 2;
+
+    // Posted by Win32FrameClock once per vertical blank while frames are wanted.
+    internal const uint WM_FRAME = WM_USER + 3;
 
     // ── Shell_NotifyIcon Struct ───────────────────────────────────────
 

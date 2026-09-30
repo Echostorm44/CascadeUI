@@ -134,11 +134,11 @@ internal sealed class FrameOrchestrator : IDisposable
 
     /// <param name="requestFrame">
     /// Called when the orchestrator needs the platform to start delivering frame ticks.
-    /// On Windows this calls Win32MessageLoop.StartFrameTimer(16).
+    /// On Windows this starts the vblank-paced <see cref="Win32FrameClock"/>.
     /// </param>
     /// <param name="cancelFrame">
     /// Called when no more frames are needed (nothing dirty, no animations).
-    /// On Windows this calls Win32MessageLoop.StopFrameTimer().
+    /// On Windows this stops the <see cref="Win32FrameClock"/>.
     /// </param>
     internal FrameOrchestrator(Action requestFrame, Action cancelFrame)
     {

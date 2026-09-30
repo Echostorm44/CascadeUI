@@ -219,9 +219,10 @@ public static class App
         int h = config.WindowSize.HasValue ? (int)config.WindowSize.Value.Height : 720;
         window.Create(title, w, h, WindowStyle.Normal);
 
+        var frameClock = new Win32FrameClock(window.Handle);
         var orchestrator = new FrameOrchestrator(
-            requestFrame: () => loop.StartFrameTimer(16),
-            cancelFrame:  () => loop.StopFrameTimer());
+            requestFrame: () => frameClock.Start(),
+            cancelFrame:  () => frameClock.Stop());
 
         // Wire the GPU backend. Etch is the default renderer — a windowed app always
         // needs one, and forgetting to opt in used to open a blank, non-rendering
@@ -275,6 +276,7 @@ public static class App
 
         window.Destroyed = () =>
         {
+            frameClock.Dispose();
             orchestrator.Dispose();
             gpu.Dispose();
             loop.Quit(0);
@@ -315,9 +317,19 @@ public static class App
             {
                 loop.HandleDispatchMessage();
             }
-            else if (msg == Win32.WM_TIMER && wParam == Win32.IDT_FRAME)
+            else if (msg == Win32.WM_FRAME)
             {
-                orchestrator.Tick();
+                try
+                {
+                    if (orchestrator.IsFrameRequested)
+                    {
+                        orchestrator.Tick();
+                    }
+                }
+                finally
+                {
+                    frameClock.FrameHandled();
+                }
             }
             else if (msg == Win32.WM_HOTKEY)
             {

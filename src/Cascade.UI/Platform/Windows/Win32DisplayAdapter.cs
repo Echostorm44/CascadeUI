@@ -28,6 +28,9 @@ internal static unsafe partial class Win32DisplayAdapter
     [LibraryImport("dxgi", EntryPoint = "CreateDXGIFactory1")]
     private static partial int CreateDXGIFactory1(Guid* riid, void** factory);
 
+    /// <summary>IDXGIOutput::WaitForVBlank.</summary>
+    internal const int WaitForVBlankSlot = 10;
+
     /// <summary>
     /// PCI vendor and device id of the adapter whose output shows <paramref name="hwnd"/>'s monitor.
     /// False when the monitor belongs to no enumerable adapter (e.g. a remote-desktop display) or
@@ -38,7 +41,50 @@ internal static unsafe partial class Win32DisplayAdapter
         vendorId = 0;
         deviceId = 0;
 
-        nint monitor = Win32.MonitorFromWindow(hwnd, Win32.MONITOR_DEFAULTTONEAREST);
+        if (!TryFindOutput(Win32.MonitorFromWindow(hwnd, Win32.MONITOR_DEFAULTTONEAREST), out void* adapter, out void* output))
+        {
+            return false;
+        }
+
+        try
+        {
+            AdapterDesc1 desc;
+            var getDesc1 = (delegate* unmanaged[Stdcall]<void*, AdapterDesc1*, int>)VTable(adapter, GetAdapterDesc1Slot);
+            if (getDesc1(adapter, &desc) < 0)
+            {
+                return false;
+            }
+            vendorId = desc.VendorId;
+            deviceId = desc.DeviceId;
+            return true;
+        }
+        finally
+        {
+            Release(output);
+            Release(adapter);
+        }
+    }
+
+    /// <summary>
+    /// The IDXGIOutput that shows <paramref name="monitor"/>, with a reference the caller must
+    /// release (IUnknown slot 2); null when there is none.
+    /// </summary>
+    internal static void* TryGetOutputForMonitor(nint monitor)
+    {
+        if (!TryFindOutput(monitor, out void* adapter, out void* output))
+        {
+            return null;
+        }
+        Release(adapter);
+        return output;
+    }
+
+    // Walks every adapter's outputs for the one showing `monitor`. On success both returned
+    // objects carry a reference owned by the caller.
+    private static bool TryFindOutput(nint monitor, out void* foundAdapter, out void* foundOutput)
+    {
+        foundAdapter = null;
+        foundOutput = null;
         if (monitor == 0)
         {
             return false;
@@ -53,37 +99,23 @@ internal static unsafe partial class Win32DisplayAdapter
 
         try
         {
+            var enumAdapters = (delegate* unmanaged[Stdcall]<void*, uint, void**, int>)VTable(factory, EnumAdapters1Slot);
             for (uint adapterIndex = 0; adapterIndex < MaxAdapters; adapterIndex++)
             {
                 void* adapter = null;
-                var enumAdapters = (delegate* unmanaged[Stdcall]<void*, uint, void**, int>)VTable(factory, EnumAdapters1Slot);
                 if (enumAdapters(factory, adapterIndex, &adapter) < 0)
                 {
                     return false;
                 }
 
-                try
+                void* output = FindOutputShowing(adapter, monitor);
+                if (output != null)
                 {
-                    if (!AdapterShowsMonitor(adapter, monitor))
-                    {
-                        continue;
-                    }
-
-                    AdapterDesc1 desc;
-                    var getDesc1 = (delegate* unmanaged[Stdcall]<void*, AdapterDesc1*, int>)VTable(adapter, GetAdapterDesc1Slot);
-                    if (getDesc1(adapter, &desc) < 0)
-                    {
-                        return false;
-                    }
-
-                    vendorId = desc.VendorId;
-                    deviceId = desc.DeviceId;
+                    foundAdapter = adapter;
+                    foundOutput = output;
                     return true;
                 }
-                finally
-                {
-                    Release(adapter);
-                }
+                Release(adapter);
             }
             return false;
         }
@@ -93,7 +125,7 @@ internal static unsafe partial class Win32DisplayAdapter
         }
     }
 
-    private static bool AdapterShowsMonitor(void* adapter, nint monitor)
+    private static void* FindOutputShowing(void* adapter, nint monitor)
     {
         var enumOutputs = (delegate* unmanaged[Stdcall]<void*, uint, void**, int>)VTable(adapter, EnumOutputsSlot);
         for (uint outputIndex = 0; outputIndex < MaxOutputsPerAdapter; outputIndex++)
@@ -101,24 +133,18 @@ internal static unsafe partial class Win32DisplayAdapter
             void* output = null;
             if (enumOutputs(adapter, outputIndex, &output) < 0)
             {
-                return false;
+                return null;
             }
 
-            try
+            OutputDesc desc;
+            var getDesc = (delegate* unmanaged[Stdcall]<void*, OutputDesc*, int>)VTable(output, GetOutputDescSlot);
+            if (getDesc(output, &desc) >= 0 && desc.Monitor == monitor)
             {
-                OutputDesc desc;
-                var getDesc = (delegate* unmanaged[Stdcall]<void*, OutputDesc*, int>)VTable(output, GetOutputDescSlot);
-                if (getDesc(output, &desc) >= 0 && desc.Monitor == monitor)
-                {
-                    return true;
-                }
+                return output;
             }
-            finally
-            {
-                Release(output);
-            }
+            Release(output);
         }
-        return false;
+        return null;
     }
 
     private static void* VTable(void* comObject, int slot) => (*(void***)comObject)[slot];

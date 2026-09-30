@@ -118,6 +118,17 @@ internal static class GoldenHarness
             UseShellExecute = false,
         };
         startInfo.Environment["CASCADE_GOLDEN_PAGE"] = pageId;
+
+        // The goldens were recorded on a discrete GPU. GPUs from different vendors differ by a few
+        // levels in gamma-weighted text coverage on light backgrounds (measured: AMD vs NVIDIA,
+        // max error 8/255 on ~0.5% of pixels), which is enough to trip the 0.1% budget. Pin the
+        // adapter so the result does not depend on which GPU drives the display (GpuPreference.Auto).
+        // A caller's extraEnv can still override it.
+        if (Environment.GetEnvironmentVariable("CASCADE_GPU") is null)
+        {
+            startInfo.Environment["CASCADE_GPU"] = "highperformance";
+        }
+
         if (extraEnv is not null)
         {
             foreach ((string envKey, string envValue) in extraEnv)

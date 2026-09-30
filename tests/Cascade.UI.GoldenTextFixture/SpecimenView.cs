@@ -30,6 +30,21 @@ internal sealed class SpecimenView : Component
         return CanvasFactory.Canvas(Size.Fill, DrawSheet);
     }
 
+    // Shadow parity sheet (ShadowParityTests): black shadows on white, compared pixel-by-pixel
+    // against Etch's analytic ShadowShape.Coverage. Keep in sync with ShadowParityTests.Shapes.
+    private static void DrawShadowSheet(DrawContext ctx)
+    {
+        ctx.DrawRect(new Rect(0, 0, PageSpec.SheetWidth, PageSpec.SheetHeight), new ColorValue("#FFFFFF"));
+        var black = new ColorValue("#000000");
+        ctx.DrawBlurredRoundedRect(new Rect(40, 40, 160, 120), black, radius: 0f, blurSigma: 8f);
+        ctx.DrawBlurredRoundedRect(new Rect(260, 40, 160, 120), black.Opacity(0.6f), radius: 24f, blurSigma: 12f);
+        ctx.DrawBlurredRoundedRect(new Rect(490, 50, 100, 100), black, radius: 50f, blurSigma: 6f);
+        using (ctx.PushClip(new Rect(0, 220, 170, 220)))
+        {
+            ctx.DrawBlurredRoundedRect(new Rect(40, 250, 260, 150), black, radius: 12f, blurSigma: 10f);
+        }
+    }
+
     private void DrawSheet(DrawContext ctx, Size size)
     {
         if (Environment.GetEnvironmentVariable("CASCADE_GOLDEN_DEBUG") == "1" && !debugDumped)
@@ -42,6 +57,27 @@ internal sealed class SpecimenView : Component
 
         float deviceScale = page.Scale / ctx.PixelRatio;
         using var scale = ctx.PushScale(deviceScale, deviceScale);
+
+        // Colour fidelity sheet (ShadowParityTests.DarkColors_RenderExactly).
+        if (Environment.GetEnvironmentVariable("CASCADE_GOLDEN_SCENE") == "colors")
+        {
+            ctx.DrawRect(new Rect(0, 0, PageSpec.SheetWidth, PageSpec.SheetHeight), new ColorValue("#FFFFFF"));
+            string[] darks = ["#050505", "#0A0A0A", "#101010", "#1E1E1E", "#404040"];
+            for (int i = 0; i < darks.Length; i++)
+            {
+                ctx.DrawRect(new Rect(20 + i * 60, 20, 50, 50), new ColorValue(darks[i]));
+            }
+            ctx.DrawRect(new Rect(20, 100, 50, 50), new ColorValue("#000000").Opacity(0.5f));
+            ctx.DrawRect(new Rect(80, 100, 50, 50), new ColorValue("#000000").Opacity(0.99f));
+            ctx.DrawRect(new Rect(140, 100, 50, 50), new ColorValue("#000000").Opacity(0.996f));
+            return;
+        }
+
+        if (Environment.GetEnvironmentVariable("CASCADE_GOLDEN_SCENE") == "shadow")
+        {
+            DrawShadowSheet(ctx);
+            return;
+        }
 
         ctx.DrawRect(new Rect(0, 0, PageSpec.SheetWidth, PageSpec.SheetHeight), page.Background);
 

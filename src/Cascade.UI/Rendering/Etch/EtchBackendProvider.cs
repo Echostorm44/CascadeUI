@@ -1353,6 +1353,15 @@ internal sealed class EtchBackendProvider : IDisposable
         int identityTransformId = st.IdentityTransformId;
         switch (cmd.Kind)
         {
+            case EtchBackend.OpKind.DrawShadow:
+                if (cmd.Fill.HasValue && cmd.Fill.Value.A > 0 && cmd.W > 0 && cmd.H > 0)
+                {
+                    uint argb = EtchBackend.ToArgb(cmd.Fill.Value);
+                    var path = EtchBackend.BuildRoundedRectPath(cmd.X, cmd.Y, cmd.W, cmd.H, Math.Min(cmd.Radius, Math.Min(cmd.W, cmd.H) * 0.5f));
+                    sb.DrawShadow(sb.AddPath(path), sb.AddPaint(Paint.Solid(argb)), identityTransformId, default, cmd.StrokeWidth, argb);
+                }
+                break;
+
             case EtchBackend.OpKind.DrawBackdropBlur:
                 // Handled by the presenter's dedicated backdrop-blur pass (it reads
                 // these ops straight from backend.Commands), not the SceneBuffer.

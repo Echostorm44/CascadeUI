@@ -249,6 +249,44 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
             return clamp(fw, 0.35, 1.5);
         }
 
+        // Drop shadow: coverage of a rounded rect blurred by a Gaussian (σ). Mirrors Etch's
+        // ShadowShape.Coverage (the CPU fallback) — exact across x via erf, four Gaussian-weighted
+        // samples over y (Evan Wallace, "Fast Rounded Rectangle Shadows").
+        fn shadow_erf(x: vec2<f32>) -> vec2<f32> {
+            let s = sign(x);
+            let a = abs(x);
+            var r = 1.0 + (0.278393 + (0.230389 + 0.078108 * (a * a)) * a) * a;
+            r = r * r;
+            return s - s / (r * r);
+        }
+
+        fn shadow_x(x: f32, y: f32, sigma: f32, corner: f32, half_size: vec2<f32>) -> f32 {
+            let delta = min(half_size.y - corner - abs(y), 0.0);
+            let curved = half_size.x - corner + sqrt(max(0.0, corner * corner - delta * delta));
+            let integral = 0.5 + 0.5 * shadow_erf((vec2<f32>(x, x) + vec2<f32>(-curved, curved)) * (0.70710678 / sigma));
+            return integral.y - integral.x;
+        }
+
+        fn rounded_box_shadow(lower: vec2<f32>, upper: vec2<f32>, point: vec2<f32>, sigma: f32, corner_in: f32) -> f32 {
+            let center = (lower + upper) * 0.5;
+            let half_size = (upper - lower) * 0.5;
+            let corner = min(corner_in, min(half_size.x, half_size.y));
+            let p = point - center;
+            let low = p.y - half_size.y;
+            let high = p.y + half_size.y;
+            let start = clamp(-3.0 * sigma, low, high);
+            let end = clamp(3.0 * sigma, low, high);
+            let step = (end - start) / 4.0;
+            var y = start + step * 0.5;
+            var value = 0.0;
+            for (var i = 0; i < 4; i = i + 1) {
+                let g = exp(-(y * y) / (2.0 * sigma * sigma)) / (2.50662827 * sigma);
+                value = value + shadow_x(p.x, p.y - y, sigma, corner, half_size) * g * step;
+                y = y + step;
+            }
+            return clamp(value, 0.0, 1.0);
+        }
+
         @fragment
         fn fs(in: VertexOutput) -> @location(0) vec4<f32> {
             if (surface.dissolve > 0.0) {
@@ -344,6 +382,15 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
                     let coverage = 1.0 - smoothstep(half_sw, half_sw + stroke_aa, abs_dist);
                     return vec4<f32>(inst.color0.rgb, inst.color0.a * coverage);
                 }
+            }
+            if (inst.shape_type == 9u) {
+                // Drop shadow: p0..p1 = shadow rect, radius = corner, stroke_width = σ. The quad
+                // (bounds) is the rect grown by 3σ and already clipped.
+                let coverage = rounded_box_shadow(inst.p0, inst.p1, in.position.xy, inst.stroke_width, inst.radius);
+                if (coverage <= 0.0) {
+                    discard;
+                }
+                return vec4<f32>(inst.color0.rgb, inst.color0.a * coverage);
             }
             if (inst.shape_type == 8u) {
                 // Annular sector (pie/donut slice) with radial and angular antialiasing
@@ -1510,6 +1557,7 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
                 case SceneOpcode.FillPath:
                 case SceneOpcode.StrokePath:
                 case SceneOpcode.FillSector:
+                case SceneOpcode.DrawShadow:
                 case SceneOpcode.DrawImage:
                     hasRenderableContent = true;
                     continue;
@@ -2597,11 +2645,7 @@ int overlayCulled = 0;
                 continue;
             }
 
-            uint argb = EtchBackend.ToArgb(cmd.Fill.Value);
-            float ta = ((argb >> 24) & 0xFF) / 255f;
-            float tr = ((argb >> 16) & 0xFF) / 255f;
-            float tg = ((argb >> 8) & 0xFF) / 255f;
-            float tb = (argb & 0xFF) / 255f;
+            var (tr, tg, tb, ta) = PaintColor.ToLinear(EtchBackend.ToArgb(cmd.Fill.Value));
 
             _blurInstances.Add(new BlurInstance
             {
@@ -3677,6 +3721,43 @@ int overlayCulled = 0;
                         break;
                     }
 
+                case SceneOpcode.DrawShadow:
+                    {
+                        if (!scene.TryGetPath(cmd.DrawShadow.PathId, out var shadowPath)
+                            || !ShadowShape.TryResolve(shadowPath.Path, out var shadowRect, out double shadowCorner))
+                        {
+                            break;
+                        }
+                        var xf = cur * scene.GetTransform(cmd.DrawShadow.TransformId);
+                        float scale = (float)Math.Sqrt(xf.M00 * xf.M00 + xf.M10 * xf.M10);
+                        var shifted = new EGeometry.Rect(
+                            shadowRect.MinX + cmd.DrawShadow.ShadowOffsetX, shadowRect.MinY + cmd.DrawShadow.ShadowOffsetY,
+                            shadowRect.MaxX + cmd.DrawShadow.ShadowOffsetX, shadowRect.MaxY + cmd.DrawShadow.ShadowOffsetY);
+                        var device = shifted.Transform(xf);
+                        if (device.IsEmpty)
+                        {
+                            break;
+                        }
+                        float sigma = (float)ShadowShape.EffectiveSigma(cmd.DrawShadow.BlurRadius * scale);
+                        float extent = (float)ShadowShape.Extent(sigma);
+                        var quad = new EGeometry.Rect(device.MinX - extent, device.MinY - extent, device.MaxX + extent, device.MaxY + extent);
+                        var clip = GetClip();
+                        if (clipStack.Count > 0)
+                        {
+                            if (clip.IsEmpty)
+                            {
+                                break;
+                            }
+                            quad = quad.Intersect(clip);
+                            if (quad.IsEmpty)
+                            {
+                                break;
+                            }
+                        }
+                        instances.Add(BuildShadowInstance(quad, device, (float)(shadowCorner * scale), sigma, cmd.DrawShadow.ShadowColor));
+                        break;
+                    }
+
                 case SceneOpcode.FillSector:
                     {
                         var paint = scene.GetPaint(cmd.FillSector.PaintId);
@@ -3886,12 +3967,11 @@ int overlayCulled = 0;
 
     }
 
+    // Paint colours are sRGB-encoded (PaintColor); the shaders blend into the sRGB swapchain in
+    // linear light, so instances carry linear channels.
     private static ShapeInstance BuildSolidInstance(EGeometry.Rect rect, uint argb, uint shapeType)
     {
-        float a = ((argb >> 24) & 0xFF) / 255.0f;
-        float r = ((argb >> 16) & 0xFF) / 255.0f;
-        float g = ((argb >> 8) & 0xFF) / 255.0f;
-        float b = (argb & 0xFF) / 255.0f;
+        var (r, g, b, a) = PaintColor.ToLinear(argb);
         return new ShapeInstance
         {
             MinX = (float)rect.MinX, MinY = (float)rect.MinY,
@@ -3913,14 +3993,8 @@ int overlayCulled = 0;
 
     private static ShapeInstance BuildGradientInstance(EGeometry.Rect rect, PaintKind kind, float stop0, uint color0, float stop1, uint color1)
     {
-        float a0 = ((color0 >> 24) & 0xFF) / 255.0f;
-        float r0 = ((color0 >> 16) & 0xFF) / 255.0f;
-        float g0 = ((color0 >> 8) & 0xFF) / 255.0f;
-        float b0 = (color0 & 0xFF) / 255.0f;
-        float a1 = ((color1 >> 24) & 0xFF) / 255.0f;
-        float r1 = ((color1 >> 16) & 0xFF) / 255.0f;
-        float g1 = ((color1 >> 8) & 0xFF) / 255.0f;
-        float b1 = (color1 & 0xFF) / 255.0f;
+        var (r0, g0, b0, a0) = PaintColor.ToLinear(color0);
+        var (r1, g1, b1, a1) = PaintColor.ToLinear(color1);
 
         float x0 = (float)rect.MinX;
         float y0 = (float)rect.MinY;
@@ -3976,6 +4050,20 @@ int overlayCulled = 0;
         inst.P1Y = (float)p1.Y;
         inst.StrokeWidth = strokeWidth;
         inst.Expand = strokeWidth * 0.5f + SdfAntialiasBand;
+        return inst;
+    }
+
+    // Shape 9: the quad is the (clipped) 3σ-grown extent; the shader evaluates the blur of the
+    // shadow rect in P0..P1, so clipping the quad never reshapes the shadow.
+    private static ShapeInstance BuildShadowInstance(EGeometry.Rect quad, EGeometry.Rect shadow, float corner, float sigma, uint argb)
+    {
+        var inst = BuildSolidInstance(quad, argb, 9);
+        inst.P0X = (float)shadow.MinX;
+        inst.P0Y = (float)shadow.MinY;
+        inst.P1X = (float)shadow.MaxX;
+        inst.P1Y = (float)shadow.MaxY;
+        inst.Radius = corner;
+        inst.StrokeWidth = sigma;
         return inst;
     }
 

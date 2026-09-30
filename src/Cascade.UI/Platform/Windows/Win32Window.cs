@@ -38,9 +38,24 @@ internal sealed class Win32Window : IDisposable
     private nint cursorSizeWE;
     private nint cursorSizeNS;
 
+    // Frameless (App.Window.Chrome = WindowChrome.None): WM_NCCALCSIZE gives the whole window to the
+    // client area. The frame styles stay, so DWM keeps the shadow, rounded corners and Snap; a
+    // resizable frameless window keeps resize hit-testing along its edges.
+    private bool frameless;
+    private bool framelessResizable;
+
+    // Broadcast when Explorer (re)creates the taskbar — tray icons must be re-added — and when this
+    // window's taskbar button exists (taskbar progress can only be set after that).
+    private static readonly uint taskbarCreatedMessage = Win32.RegisterWindowMessageW("TaskbarCreated");
+    private static readonly uint taskbarButtonCreatedMessage = Win32.RegisterWindowMessageW("TaskbarButtonCreated");
+
     // Callbacks for message routing.
     internal Action<uint, nuint, nint>? MessageReceived;
     internal Func<bool>? CloseRequested;
+    internal Func<bool>? MinimizeRequested;
+    internal Action<bool>? ActivationChanged;
+    internal Action? TaskbarCreated;
+    internal Action? TaskbarButtonCreated;
     internal Action? Destroyed;
     internal Action<uint>? DpiChanged;
     internal Action<int, int>? SizeChanged;
@@ -57,6 +72,8 @@ internal sealed class Win32Window : IDisposable
     internal bool IsMaximized => handle != 0 && Win32.IsZoomed(handle);
 
     internal bool IsVisible => handle != 0 && Win32.IsWindowVisible(handle);
+
+    internal bool IsForeground => handle != 0 && Win32.GetForegroundWindow() == handle;
 
     internal Rect Bounds
     {
@@ -414,6 +431,120 @@ internal sealed class Win32Window : IDisposable
         Win32.SetForegroundWindow(handle);
     }
 
+    /// <summary>
+    /// Shows the window (restoring it if minimized) and brings it to the foreground — the way to
+    /// surface a tray or hotkey-summoned window.
+    /// </summary>
+    internal void ShowAndActivate()
+    {
+        if (handle == 0)
+        {
+            return;
+        }
+
+        Win32.ShowWindow(handle, Win32.IsIconic(handle) ? Win32.SW_RESTORE : Win32.SW_SHOW);
+        if (Win32.SetForegroundWindow(handle) && Win32.GetForegroundWindow() == handle)
+        {
+            return;
+        }
+
+        // Windows refuses to hand the foreground to a process that did not receive the last input
+        // event (activation from a pipe, timer or background thread). Pressing and releasing Alt
+        // makes this process the last to receive input, which lifts that lock.
+        Win32.keybd_event((byte)Win32.VK_MENU, 0, 0, 0);
+        Win32.keybd_event((byte)Win32.VK_MENU, 0, Win32.KEYEVENTF_KEYUP, 0);
+        Win32.SetForegroundWindow(handle);
+    }
+
+    /// <summary>
+    /// Starts moving the window with the mouse, as if its caption were dragged. Call from a
+    /// mouse-down handler; returns when the button is released.
+    /// </summary>
+    internal void BeginDrag()
+    {
+        if (handle == 0)
+        {
+            return;
+        }
+
+        Win32.ReleaseCapture();
+        Win32.SendMessageW(handle, Win32.WM_NCLBUTTONDOWN, (nuint)Win32.HTCAPTION, 0);
+    }
+
+    /// <summary>Removes (or restores) the caption and borders; see <see cref="frameless"/>.</summary>
+    internal void SetFrameless(bool enabled, bool resizable)
+    {
+        frameless = enabled;
+        framelessResizable = resizable;
+        if (handle == 0)
+        {
+            return;
+        }
+
+        if (enabled)
+        {
+            int corner = Win32.DWMWCP_ROUND;
+            Win32.DwmSetWindowAttribute(handle, Win32.DWMWA_WINDOW_CORNER_PREFERENCE, ref corner, sizeof(int));
+        }
+
+        // A one-pixel extended frame keeps DWM drawing the drop shadow once the frame is gone.
+        var margins = new Win32.MARGINS { cyTopHeight = enabled ? 1 : 0 };
+        Win32.DwmExtendFrameIntoClientArea(handle, ref margins);
+        Win32.SetWindowPos(handle, 0, 0, 0, 0, 0,
+            Win32.SWP_FRAMECHANGED | Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE);
+    }
+
+    /// <summary>
+    /// Shows or removes the taskbar button (and the Alt+Tab entry). The extended style can only be
+    /// switched while the window is hidden, so a visible window is hidden and re-shown around it.
+    /// </summary>
+    internal void SetShowInTaskbar(bool show)
+    {
+        if (handle == 0)
+        {
+            return;
+        }
+
+        nint exStyle = Win32.GetWindowLongPtrW(handle, Win32.GWL_EXSTYLE);
+        nint updated = show
+            ? (exStyle & ~(nint)Win32.WS_EX_TOOLWINDOW) | (nint)Win32.WS_EX_APPWINDOW
+            : (exStyle & ~(nint)Win32.WS_EX_APPWINDOW) | (nint)Win32.WS_EX_TOOLWINDOW;
+        if (updated == exStyle)
+        {
+            return;
+        }
+
+        bool visible = Win32.IsWindowVisible(handle);
+        if (visible)
+        {
+            Win32.ShowWindow(handle, Win32.SW_HIDE);
+        }
+        Win32.SetWindowLongPtrW(handle, Win32.GWL_EXSTYLE, updated);
+        if (visible)
+        {
+            Win32.ShowWindow(handle, Win32.SW_SHOWNA);
+        }
+    }
+
+    /// <summary>Allows or prevents resizing (and maximizing) a framed window.</summary>
+    internal void SetResizable(bool resizable)
+    {
+        if (handle == 0 || frameless)
+        {
+            return;
+        }
+
+        nint style = Win32.GetWindowLongPtrW(handle, Win32.GWL_STYLE);
+        nint bits = (nint)(Win32.WS_THICKFRAME | Win32.WS_MAXIMIZEBOX);
+        nint updated = resizable ? style | bits : style & ~bits;
+        if (updated != style)
+        {
+            Win32.SetWindowLongPtrW(handle, Win32.GWL_STYLE, updated);
+            Win32.SetWindowPos(handle, 0, 0, 0, 0, 0,
+                Win32.SWP_FRAMECHANGED | Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE);
+        }
+    }
+
     internal void Close()
     {
         if (handle == 0)
@@ -500,6 +631,7 @@ internal sealed class Win32Window : IDisposable
             Win32.SWP_NOSIZE | Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE);
     }
 
+    /// <summary>Centers the window in the work area of the monitor it is on.</summary>
     internal void CenterOnScreen()
     {
         if (handle == 0)
@@ -507,22 +639,45 @@ internal sealed class Win32Window : IDisposable
             return;
         }
 
-        nint monitor = Win32.MonitorFromWindow(handle, Win32.MONITOR_DEFAULTTONEAREST);
+        CenterOnMonitor(Win32.MonitorFromWindow(handle, Win32.MONITOR_DEFAULTTONEAREST));
+    }
+
+    /// <summary>
+    /// Centers the window in <paramref name="monitor"/>'s work area. Moving onto a monitor with a
+    /// different DPI resizes the window (WM_DPICHANGED) during the move, so it is centered again
+    /// with its new size.
+    /// </summary>
+    internal void CenterOnMonitor(nint monitor)
+    {
+        if (handle == 0 || monitor == 0)
+        {
+            return;
+        }
+
         Win32.MONITORINFO monitorInfo = new() { cbSize = (uint)Marshal.SizeOf<Win32.MONITORINFO>() };
-        Win32.GetMonitorInfoW(monitor, ref monitorInfo);
+        if (!Win32.GetMonitorInfoW(monitor, ref monitorInfo))
+        {
+            return;
+        }
 
-        Win32.GetWindowRect(handle, out Win32.RECT windowRect);
-        int windowWidth = windowRect.right - windowRect.left;
-        int windowHeight = windowRect.bottom - windowRect.top;
+        for (int pass = 0; pass < 2; pass++)
+        {
+            Win32.GetWindowRect(handle, out Win32.RECT windowRect);
+            int windowWidth = windowRect.right - windowRect.left;
+            int windowHeight = windowRect.bottom - windowRect.top;
+            int workWidth = monitorInfo.rcWork.right - monitorInfo.rcWork.left;
+            int workHeight = monitorInfo.rcWork.bottom - monitorInfo.rcWork.top;
+            int x = monitorInfo.rcWork.left + (workWidth - windowWidth) / 2;
+            int y = monitorInfo.rcWork.top + (workHeight - windowHeight) / 2;
 
-        int workWidth = monitorInfo.rcWork.right - monitorInfo.rcWork.left;
-        int workHeight = monitorInfo.rcWork.bottom - monitorInfo.rcWork.top;
-
-        int x = monitorInfo.rcWork.left + (workWidth - windowWidth) / 2;
-        int y = monitorInfo.rcWork.top + (workHeight - windowHeight) / 2;
-
-        Win32.SetWindowPos(handle, 0, x, y, 0, 0,
-            Win32.SWP_NOSIZE | Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE);
+            uint dpiBefore = currentDpi;
+            Win32.SetWindowPos(handle, 0, x, y, 0, 0,
+                Win32.SWP_NOSIZE | Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE);
+            if (currentDpi == dpiBefore)
+            {
+                break;
+            }
+        }
     }
 
     internal void SetAlwaysOnTop(bool topmost)
@@ -740,10 +895,98 @@ internal sealed class Win32Window : IDisposable
         }
     }
 
+    // Resize grips of a frameless window; everything else is client area (apps start window moves
+    // themselves through BeginDrag).
+    private nint HitTestFrameless(nint lParam)
+    {
+        if (!framelessResizable || Win32.IsZoomed(handle))
+        {
+            return Win32.HTCLIENT;
+        }
+
+        int x = Win32.GetXLParam(lParam);
+        int y = Win32.GetYLParam(lParam);
+        Win32.GetWindowRect(handle, out Win32.RECT r);
+        int grip = (int)MathF.Ceiling(6 * DpiScale);
+        bool left = x < r.left + grip;
+        bool right = x >= r.right - grip;
+        bool top = y < r.top + grip;
+        bool bottom = y >= r.bottom - grip;
+
+        if (top)
+        {
+            return left ? Win32.HTTOPLEFT : right ? Win32.HTTOPRIGHT : Win32.HTTOP;
+        }
+        if (bottom)
+        {
+            return left ? Win32.HTBOTTOMLEFT : right ? Win32.HTBOTTOMRIGHT : Win32.HTBOTTOM;
+        }
+        return left ? Win32.HTLEFT : right ? Win32.HTRIGHT : Win32.HTCLIENT;
+    }
+
     private nint HandleMessage(uint msg, nuint wParam, nint lParam)
     {
+        if (msg != 0 && msg == taskbarCreatedMessage)
+        {
+            TaskbarCreated?.Invoke();
+        }
+        else if (msg != 0 && msg == taskbarButtonCreatedMessage)
+        {
+            TaskbarButtonCreated?.Invoke();
+        }
+
         switch (msg)
         {
+            case Win32.WM_NCCALCSIZE:
+            {
+                if (!frameless || wParam == 0)
+                {
+                    break;
+                }
+
+                // The whole window is client area. A maximized window is sized past the monitor by
+                // its (now invisible) frame, so pull the client back inside the work area.
+                if (Win32.IsZoomed(handle))
+                {
+                    unsafe
+                    {
+                        var p = (Win32.NCCALCSIZE_PARAMS*)lParam;
+                        int frameX = Win32.GetSystemMetricsForDpi(Win32.SM_CXFRAME, currentDpi) + Win32.GetSystemMetricsForDpi(Win32.SM_CXPADDEDBORDER, currentDpi);
+                        int frameY = Win32.GetSystemMetricsForDpi(Win32.SM_CYFRAME, currentDpi) + Win32.GetSystemMetricsForDpi(Win32.SM_CXPADDEDBORDER, currentDpi);
+                        p->rgrc0.left += frameX;
+                        p->rgrc0.right -= frameX;
+                        p->rgrc0.top += frameY;
+                        p->rgrc0.bottom -= frameY;
+                    }
+                }
+                return 0;
+            }
+
+            case Win32.WM_NCHITTEST:
+            {
+                if (frameless)
+                {
+                    return HitTestFrameless(lParam);
+                }
+                break;
+            }
+
+            case Win32.WM_SYSCOMMAND:
+            {
+                if (((int)wParam & 0xFFF0) == Win32.SC_MINIMIZE && MinimizeRequested?.Invoke() == true)
+                {
+                    return 0;
+                }
+                break;
+            }
+
+            case Win32.WM_ACTIVATE:
+            {
+                ActivationChanged?.Invoke(Win32.LoWord((nint)wParam) != Win32.WA_INACTIVE);
+                MessageReceived?.Invoke(msg, wParam, lParam);
+                break;
+            }
+
             case Win32.WM_CLOSE:
             {
                 if (CloseRequested?.Invoke() == true)
@@ -881,7 +1124,7 @@ internal sealed class Win32Window : IDisposable
             case Win32.WM_HOTKEY:
             case Win32.WM_SETFOCUS:
             case Win32.WM_KILLFOCUS:
-            case Win32.WM_ACTIVATE:
+            case Win32.WM_TRAYICON:
             case Win32.WM_DISPATCH:
             case Win32.WM_FRAME:
             {

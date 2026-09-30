@@ -112,6 +112,9 @@ internal sealed class EtchBackendProvider : IDisposable
 
     public EtchBackend Backend => _backend;
 
+    /// <summary>Adapter choice passed to the GPU presenter when the surface is created.</summary>
+    internal GpuPreference GpuPreference { get; set; } = GpuPreference.Auto;
+
     /// <summary>
     /// The device (physical) framebuffer size in pixels — the resolution a GPU
     /// readback / screenshot is captured at, before any vision-API downscale.
@@ -136,7 +139,7 @@ internal sealed class EtchBackendProvider : IDisposable
 
         try
         {
-            _etchGpuPresenter = new EtchGpuPresenter(windowHandle, width, height);
+            _etchGpuPresenter = new EtchGpuPresenter(windowHandle, width, height, ResolveGpuPreference(GpuPreference));
             _etchGpuPresenter.TextGamma = _textGamma;
             _etchGpuPresenter.LightWeight = _lightWeight;
             _useGpu = true;
@@ -148,6 +151,21 @@ internal sealed class EtchBackendProvider : IDisposable
             System.IO.File.AppendAllText(logPath, $"[{DateTime.Now:O}] GPU init failed: {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}\n\n");
             _useGpu = false;
         }
+    }
+
+    // CASCADE_GPU=auto|lowpower|highperformance|software overrides AppConfig.Gpu, so a specific
+    // adapter can be exercised (goldens recorded on one GPU, a user report from another) without a
+    // rebuild. Unset or unrecognised values keep the configured preference.
+    private static GpuPreference ResolveGpuPreference(GpuPreference configured)
+    {
+        return Environment.GetEnvironmentVariable("CASCADE_GPU")?.Trim().ToLowerInvariant() switch
+        {
+            "auto" => GpuPreference.Auto,
+            "lowpower" => GpuPreference.LowPower,
+            "highperformance" => GpuPreference.HighPerformance,
+            "software" => GpuPreference.Software,
+            _ => configured,
+        };
     }
 
     public void CreateSurfaceX11(nint display, uint window, int screen, uint width, uint height)

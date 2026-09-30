@@ -227,6 +227,7 @@ public static class App
         // needs one, and forgetting to opt in used to open a blank, non-rendering
         // window. config.UseEtch() is therefore optional (kept for back-compat).
         var gpu = config.BackendProvider ?? new EtchBackendProvider();
+        gpu.GpuPreference = config.Gpu;
         uint pixelWidth = 0;
         uint pixelHeight = 0;
 
@@ -1251,11 +1252,40 @@ public sealed class AppConfig
     public TrayIcon? Tray { get; set; }
 
     /// <summary>
+    /// Which GPU renders the app. The default, <see cref="GpuPreference.Auto"/>, lets the operating
+    /// system choose (the GPU driving the display, honouring the user's per-app graphics setting).
+    /// </summary>
+    public GpuPreference Gpu { get; set; } = GpuPreference.Auto;
+
+    /// <summary>
     /// GPU render backend provider. Defaults to Etch in <see cref="App.Run{T}(System.Action{AppConfig})"/>,
     /// so apps render without any explicit setup. <c>config.UseEtch()</c> is optional
     /// (it sets this to the same Etch provider) and kept for back-compat.
     /// </summary>
     internal EtchBackendProvider? BackendProvider { get; set; }
+}
+
+/// <summary>Which GPU adapter renders the app (<see cref="AppConfig.Gpu"/>).</summary>
+public enum GpuPreference
+{
+    /// <summary>
+    /// The operating system's choice: on Windows the GPU driving the display, adjusted by the user's
+    /// per-app graphics setting. Falls back to the software adapter when there is no usable GPU
+    /// (virtual machines, some remote sessions).
+    /// </summary>
+    Auto,
+
+    /// <summary>Prefer the integrated GPU. Keeps a discrete GPU asleep on hybrid laptops.</summary>
+    LowPower,
+
+    /// <summary>Prefer the discrete GPU, for content that genuinely needs it.</summary>
+    HighPerformance,
+
+    /// <summary>
+    /// Render on the CPU through the platform's software GPU (WARP on Windows). No graphics driver
+    /// is loaded, which minimises memory for small, mostly-idle windows.
+    /// </summary>
+    Software,
 }
 
 

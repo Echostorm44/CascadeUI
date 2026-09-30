@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 
 namespace Cascade.UI;
 
@@ -22,9 +23,10 @@ internal sealed unsafe partial class Win32FrameClock : IDisposable
     private const int FallbackIntervalMs = 16;
     private const int MaxInstantWaits = 3;
     private const uint Infinite = 0xFFFFFFFF;
+    private const uint WaitObject0 = 0;
 
     private readonly nint window;
-    private readonly nint wakeEvent;
+    private readonly AutoResetEvent wakeEvent = new(false);
     private readonly Thread thread;
     private volatile bool running;
     private volatile bool disposed;
@@ -33,13 +35,12 @@ internal sealed unsafe partial class Win32FrameClock : IDisposable
     // Owned by the clock thread.
     private nint vblankMonitor;
     private void* vblankOutput;
-    private nint fallbackTimer;
+    private SafeWaitHandle? fallbackTimer;
     private int instantWaits;
 
     internal Win32FrameClock(nint window)
     {
         this.window = window;
-        wakeEvent = CreateEventW(0, 0, 0, 0);
         thread = new Thread(Run) { IsBackground = true, Name = "Cascade frame clock", Priority = ThreadPriority.AboveNormal };
         thread.Start();
     }
@@ -52,7 +53,7 @@ internal sealed unsafe partial class Win32FrameClock : IDisposable
             return;
         }
         running = true;
-        SetEvent(wakeEvent);
+        wakeEvent.Set();
     }
 
     /// <summary>Stops delivering frames after the current one.</summary>
@@ -75,9 +76,13 @@ internal sealed unsafe partial class Win32FrameClock : IDisposable
         }
         disposed = true;
         running = false;
-        SetEvent(wakeEvent);
-        thread.Join(500);
-        CloseHandle(wakeEvent);
+        wakeEvent.Set();
+        // The clock thread disposes the timer and output on exit; the event is released only once it
+        // has, since the thread may still be waiting on it.
+        if (thread.Join(500))
+        {
+            wakeEvent.Dispose();
+        }
     }
 
     private void Run()
@@ -91,7 +96,7 @@ internal sealed unsafe partial class Win32FrameClock : IDisposable
             {
                 if (!running)
                 {
-                    WaitForSingleObject(wakeEvent, Infinite);
+                    wakeEvent.WaitOne();
                     firstFrame = true;
                     continue;
                 }
@@ -111,10 +116,7 @@ internal sealed unsafe partial class Win32FrameClock : IDisposable
         finally
         {
             ReleaseOutput();
-            if (fallbackTimer != 0)
-            {
-                CloseHandle(fallbackTimer);
-            }
+            fallbackTimer?.Dispose();
         }
     }
 
@@ -151,19 +153,18 @@ internal sealed unsafe partial class Win32FrameClock : IDisposable
 
     private void WaitFallbackInterval()
     {
-        if (fallbackTimer == 0)
-        {
-            fallbackTimer = CreateWaitableTimerExW(0, 0, CreateWaitableTimerHighResolution, TimerAllAccess);
-        }
-        if (fallbackTimer == 0)
+        fallbackTimer ??= CreateWaitableTimerExW(0, 0, CreateWaitableTimerHighResolution, TimerAllAccess);
+        if (fallbackTimer.IsInvalid)
         {
             Thread.Sleep(FallbackIntervalMs);
             return;
         }
 
         long dueTime = -FallbackIntervalMs * 10_000L; // relative, in 100 ns units
-        SetWaitableTimer(fallbackTimer, &dueTime, 0, 0, 0, 0);
-        WaitForSingleObject(fallbackTimer, Infinite);
+        if (!SetWaitableTimer(fallbackTimer, &dueTime, 0, 0, 0, 0) || WaitForSingleObject(fallbackTimer, Infinite) != WaitObject0)
+        {
+            Thread.Sleep(FallbackIntervalMs);
+        }
     }
 
     private void ReleaseOutput()
@@ -180,24 +181,13 @@ internal sealed unsafe partial class Win32FrameClock : IDisposable
     private const uint CreateWaitableTimerHighResolution = 0x00000002;
     private const uint TimerAllAccess = 0x1F0003;
 
-    [LibraryImport("kernel32", EntryPoint = "CreateEventW")]
-    private static partial nint CreateEventW(nint attributes, int manualReset, int initialState, nint name);
-
     [LibraryImport("kernel32")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool SetEvent(nint handle);
-
-    [LibraryImport("kernel32")]
-    private static partial uint WaitForSingleObject(nint handle, uint milliseconds);
-
-    [LibraryImport("kernel32")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool CloseHandle(nint handle);
+    private static partial uint WaitForSingleObject(SafeWaitHandle handle, uint milliseconds);
 
     [LibraryImport("kernel32", EntryPoint = "CreateWaitableTimerExW")]
-    private static partial nint CreateWaitableTimerExW(nint attributes, nint name, uint flags, uint access);
+    private static partial SafeWaitHandle CreateWaitableTimerExW(nint attributes, nint name, uint flags, uint access);
 
     [LibraryImport("kernel32")]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool SetWaitableTimer(nint timer, long* dueTime, int period, nint completionRoutine, nint argument, int resume);
+    private static partial bool SetWaitableTimer(SafeWaitHandle timer, long* dueTime, int period, nint completionRoutine, nint argument, int resume);
 }

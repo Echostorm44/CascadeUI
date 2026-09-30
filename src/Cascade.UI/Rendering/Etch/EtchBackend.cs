@@ -169,6 +169,26 @@ internal sealed class EtchBackend : IDisposable
         currentDebugNodeId = nodeId;
     }
 
+    // SceneOps come from a frame arena: every op rented since the last Reset is live (in Commands
+    // or a layer capture), and Reset drops both, so it recycles them all at once. Allocating one
+    // per draw call was ~40% of a canvas-heavy frame's garbage (Starfield: ~120 KB/frame).
+    private readonly List<SceneOp> _opArena = new();
+    private int _opArenaUsed;
+
+    private SceneOp RentOp()
+    {
+        if (_opArenaUsed < _opArena.Count)
+        {
+            var reused = _opArena[_opArenaUsed++];
+            reused.Clear();
+            return reused;
+        }
+        var op = new SceneOp();
+        _opArena.Add(op);
+        _opArenaUsed++;
+        return op;
+    }
+
     private void AddCommand(SceneOp op)
     {
         op.DebugNodeId = currentDebugNodeId;
@@ -385,6 +405,7 @@ internal sealed class EtchBackend : IDisposable
     {
         currentDebugNodeId = null;
         Commands.Clear();
+        _opArenaUsed = 0;
         GlyphCommands.Clear();
         OverlayGlyphCommands.Clear();
         OverlayBounds.Clear();
@@ -440,22 +461,46 @@ internal sealed class EtchBackend : IDisposable
     public void DrawRect(ulong frame, float x, float y, float w, float h, float radius,
         ColorValue? fill, ColorValue? strokeColor, float strokeWidth)
     {
-        AddCommand(new SceneOp { Kind = OpKind.DrawRect, X = x, Y = y, W = w, H = h, Radius = radius,
-            Fill = fill, StrokeColor = strokeColor, StrokeWidth = strokeWidth });
+        var op = RentOp();
+        op.Kind = OpKind.DrawRect;
+        op.X = x;
+        op.Y = y;
+        op.W = w;
+        op.H = h;
+        op.Radius = radius;
+        op.Fill = fill;
+        op.StrokeColor = strokeColor;
+        op.StrokeWidth = strokeWidth;
+        AddCommand(op);
     }
 
     public void DrawRectGradient(ulong frame, float x, float y, float w, float h, float radius,
         int gradientKind, ReadOnlySpan<GradientStop> stops, float p0, float p1, float p2, float p3)
     {
-        AddCommand(new SceneOp { Kind = OpKind.DrawRectGradient, X = x, Y = y, W = w, H = h, Radius = radius,
-            GradientKind = gradientKind, G0 = p0, G1 = p1, G2 = p2, G3 = p3, GradientStops = stops.ToArray() });
+        var op = RentOp();
+        op.Kind = OpKind.DrawRectGradient;
+        op.X = x;
+        op.Y = y;
+        op.W = w;
+        op.H = h;
+        op.Radius = radius;
+        op.GradientKind = gradientKind;
+        op.G0 = p0;
+        op.G1 = p1;
+        op.G2 = p2;
+        op.G3 = p3;
+        op.GradientStops = stops.ToArray();
+        AddCommand(op);
     }
 
     public void PushTransform(ulong frame, Matrix3x2 matrix)
     {
         _transformStack.Push(_currentTransform);
         _currentTransform = matrix * _currentTransform;
-        AddCommand(new SceneOp { Kind = OpKind.PushTransform, Matrix = matrix });
+        var op = RentOp();
+        op.Kind = OpKind.PushTransform;
+        op.Matrix = matrix;
+        AddCommand(op);
     }
 
     public void PopTransform(ulong frame)
@@ -464,12 +509,20 @@ internal sealed class EtchBackend : IDisposable
         {
             _currentTransform = _transformStack.Pop();
         }
-        AddCommand(new SceneOp { Kind = OpKind.PopTransform });
+        var op = RentOp();
+        op.Kind = OpKind.PopTransform;
+        AddCommand(op);
     }
 
     public void PushClip(ulong frame, float x, float y, float w, float h)
     {
-        AddCommand(new SceneOp { Kind = OpKind.PushClip, X = x, Y = y, W = w, H = h });
+        var op = RentOp();
+        op.Kind = OpKind.PushClip;
+        op.X = x;
+        op.Y = y;
+        op.W = w;
+        op.H = h;
+        AddCommand(op);
         // Transform clip rect to absolute coordinates for glyph culling.
         // Glyph positions in DrawGlyphs are transformed by _currentTransform,
         // so clip bounds must also be in absolute/screen coordinates.
@@ -490,12 +543,22 @@ internal sealed class EtchBackend : IDisposable
 
     public void PushClipPath(ulong frame, ulong path)
     {
-        AddCommand(new SceneOp { Kind = OpKind.PushClipPath, PathHandle = path });
+        var op = RentOp();
+        op.Kind = OpKind.PushClipPath;
+        op.PathHandle = path;
+        AddCommand(op);
     }
 
     public void PushClipRoundedRect(ulong frame, float x, float y, float w, float h, float radius)
     {
-        AddCommand(new SceneOp { Kind = OpKind.PushClipRoundedRect, X = x, Y = y, W = w, H = h, Radius = radius });
+        var op = RentOp();
+        op.Kind = OpKind.PushClipRoundedRect;
+        op.X = x;
+        op.Y = y;
+        op.W = w;
+        op.H = h;
+        op.Radius = radius;
+        AddCommand(op);
         var tl = Vector2.Transform(new Vector2(x, y), _currentTransform);
         var br = Vector2.Transform(new Vector2(x + w, y + h), _currentTransform);
         var tr = Vector2.Transform(new Vector2(x + w, y), _currentTransform);
@@ -513,7 +576,9 @@ internal sealed class EtchBackend : IDisposable
 
     public void PopClip(ulong frame)
     {
-        AddCommand(new SceneOp { Kind = OpKind.PopClip });
+        var op = RentOp();
+        op.Kind = OpKind.PopClip;
+        AddCommand(op);
         if (_clipStack.Count > 0)
         {
             _clipStack.Pop();
@@ -562,8 +627,13 @@ internal sealed class EtchBackend : IDisposable
     public void DrawPath(ulong frame, ulong pathHandle,
         ColorValue? fill, ColorValue? strokeColor, float strokeWidth, StrokeCap cap, StrokeJoin join)
     {
-        AddCommand(new SceneOp { Kind = OpKind.DrawPath, PathHandle = pathHandle,
-            Fill = fill, StrokeColor = strokeColor, StrokeWidth = strokeWidth });
+        var op = RentOp();
+        op.Kind = OpKind.DrawPath;
+        op.PathHandle = pathHandle;
+        op.Fill = fill;
+        op.StrokeColor = strokeColor;
+        op.StrokeWidth = strokeWidth;
+        AddCommand(op);
     }
 
     // No-op stub (path handles are retained for the frame); instance method to match
@@ -575,51 +645,72 @@ internal sealed class EtchBackend : IDisposable
     public void DrawCircle(ulong frame, float cx, float cy, float radius,
         ColorValue? fill, ColorValue? strokeColor, float strokeWidth, StrokeCap cap, StrokeJoin join)
     {
-        AddCommand(new SceneOp { Kind = OpKind.DrawCircle, X = cx, Y = cy, Radius = radius,
-            Fill = fill, StrokeColor = strokeColor, StrokeWidth = strokeWidth });
+        var op = RentOp();
+        op.Kind = OpKind.DrawCircle;
+        op.X = cx;
+        op.Y = cy;
+        op.Radius = radius;
+        op.Fill = fill;
+        op.StrokeColor = strokeColor;
+        op.StrokeWidth = strokeWidth;
+        AddCommand(op);
     }
 
     public void DrawSector(ulong frame, float cx, float cy, float outerRadius,
         float innerRadius, float startRad, float sweepRad, ColorValue fill)
     {
-        AddCommand(new SceneOp
-        {
-            Kind = OpKind.DrawSector,
-            X = cx,
-            Y = cy,
-            Radius = outerRadius,
-            InnerRadius = innerRadius,
-            StartRad = startRad,
-            SweepRad = sweepRad,
-            Fill = fill
-        });
+        var op = RentOp();
+        op.Kind = OpKind.DrawSector;
+        op.X = cx;
+        op.Y = cy;
+        op.Radius = outerRadius;
+        op.InnerRadius = innerRadius;
+        op.StartRad = startRad;
+        op.SweepRad = sweepRad;
+        op.Fill = fill;
+        AddCommand(op);
     }
 
     public void DrawArc(ulong frame, float cx, float cy, float radius,
         float startRad, float sweepRad, ColorValue sc, float sw, StrokeCap cap, StrokeJoin join)
     {
-        AddCommand(new SceneOp { Kind = OpKind.DrawArc, X = cx, Y = cy, Radius = radius,
-            StartRad = startRad, SweepRad = sweepRad, StrokeColor = sc, StrokeWidth = sw });
+        var op = RentOp();
+        op.Kind = OpKind.DrawArc;
+        op.X = cx;
+        op.Y = cy;
+        op.Radius = radius;
+        op.StartRad = startRad;
+        op.SweepRad = sweepRad;
+        op.StrokeColor = sc;
+        op.StrokeWidth = sw;
+        AddCommand(op);
     }
 
     public void DrawLine(ulong frame, float x1, float y1, float x2, float y2,
         ColorValue sc, float sw, StrokeCap cap, StrokeJoin join)
     {
-        AddCommand(new SceneOp { Kind = OpKind.DrawLine, X = x1, Y = y1, W = x2, H = y2, StrokeColor = sc, StrokeWidth = sw });
+        var op = RentOp();
+        op.Kind = OpKind.DrawLine;
+        op.X = x1;
+        op.Y = y1;
+        op.W = x2;
+        op.H = y2;
+        op.StrokeColor = sc;
+        op.StrokeWidth = sw;
+        AddCommand(op);
     }
 
     public void DrawImage(ulong frame, ulong image, float dx, float dy, float dw, float dh, float o)
     {
-        AddCommand(new SceneOp
-        {
-            Kind = OpKind.DrawImage,
-            ImageHandle = image,
-            X = dx,
-            Y = dy,
-            W = dw,
-            H = dh,
-            Opacity = o,
-        });
+        var op = RentOp();
+        op.Kind = OpKind.DrawImage;
+        op.ImageHandle = image;
+        op.X = dx;
+        op.Y = dy;
+        op.W = dw;
+        op.H = dh;
+        op.Opacity = o;
+        AddCommand(op);
     }
 
     public ulong UploadImage(ReadOnlySpan<byte> pixels, int width, int height)
@@ -636,15 +727,18 @@ internal sealed class EtchBackend : IDisposable
     }
     public void DrawPathGradient(ulong frame, ulong path, int gk, ReadOnlySpan<GradientStop> s, float p0, float p1, float p2, float p3, ColorValue? sc, float sw, StrokeCap c, StrokeJoin j)
     {
-        AddCommand(new SceneOp
-        {
-            Kind = OpKind.DrawPathGradient,
-            PathHandle = path,
-            GradientKind = gk,
-            GradientStops = s.ToArray(),
-            G0 = p0, G1 = p1, G2 = p2, G3 = p3,
-            StrokeColor = sc, StrokeWidth = sw
-        });
+        var op = RentOp();
+        op.Kind = OpKind.DrawPathGradient;
+        op.PathHandle = path;
+        op.GradientKind = gk;
+        op.GradientStops = s.ToArray();
+        op.G0 = p0;
+        op.G1 = p1;
+        op.G2 = p2;
+        op.G3 = p3;
+        op.StrokeColor = sc;
+        op.StrokeWidth = sw;
+        AddCommand(op);
     }
     // PushLayer applies an opacity to everything drawn until the matching PopLayer,
     // by scaling emitted colour alpha (see _currentOpacity). Blend modes other than
@@ -684,17 +778,16 @@ internal sealed class EtchBackend : IDisposable
         var br = Vector2.Transform(new Vector2(x + w, y + h), _currentTransform);
         float scale = MathF.Max(0.0001f, (_currentTransform.M11 + _currentTransform.M22) * 0.5f);
 
-        AddCommand(new SceneOp
-        {
-            Kind = OpKind.DrawBackdropBlur,
-            X = tl.X,
-            Y = tl.Y,
-            W = br.X - tl.X,
-            H = br.Y - tl.Y,
-            Radius = radius * scale,
-            StrokeWidth = sigma * scale,
-            Fill = tint,
-        });
+        var op = RentOp();
+        op.Kind = OpKind.DrawBackdropBlur;
+        op.X = tl.X;
+        op.Y = tl.Y;
+        op.W = br.X - tl.X;
+        op.H = br.Y - tl.Y;
+        op.Radius = radius * scale;
+        op.StrokeWidth = sigma * scale;
+        op.Fill = tint;
+        AddCommand(op);
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -849,19 +942,18 @@ internal sealed class EtchBackend : IDisposable
     public void DrawLayerTexture(ulong frame, ulong layerHandle, float x, float y, float opacity)
     {
         var t = Vector2.Transform(new Vector2(x, y), _currentTransform);
-        AddCommand(new SceneOp
-        {
-            Kind = OpKind.DrawLayerTexture,
-            X = t.X,
-            Y = t.Y,
-            W = layerHandle,
-            Opacity = opacity,
-            // Capture the active (screen-space) clip so the presenter can clip
-            // the composited layer to its viewport — _currentClipBounds is
-            // already transformed to absolute coords, matching the offset above.
-            ClipBounds = _currentClipBounds,
-            HasClipBounds = _clipStack.Count > 0,
-        });
+        var op = RentOp();
+        // Capture the active (screen-space) clip so the presenter can clip
+        // the composited layer to its viewport — _currentClipBounds is
+        // already transformed to absolute coords, matching the offset above.
+        op.Kind = OpKind.DrawLayerTexture;
+        op.X = t.X;
+        op.Y = t.Y;
+        op.W = layerHandle;
+        op.Opacity = opacity;
+        op.ClipBounds = _currentClipBounds;
+        op.HasClipBounds = _clipStack.Count > 0;
+        AddCommand(op);
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -1133,6 +1225,25 @@ internal sealed class EtchBackend : IDisposable
         /// </summary>
         public Rect ClipBounds;
         public bool HasClipBounds;
+
+        /// <summary>Returns every field to its default so a pooled op starts like a new one.</summary>
+        public void Clear()
+        {
+            Kind = default;
+            X = Y = W = H = Radius = InnerRadius = StartRad = SweepRad = StrokeWidth = 0;
+            G0 = G1 = G2 = G3 = 0;
+            GradientKind = 0;
+            Fill = null;
+            StrokeColor = null;
+            PathHandle = 0;
+            Matrix = default;
+            GradientStops = null;
+            ImageHandle = 0;
+            Opacity = 0;
+            DebugNodeId = null;
+            ClipBounds = default;
+            HasClipBounds = false;
+        }
     }
 
     internal sealed class GlyphOp
@@ -1158,6 +1269,44 @@ internal sealed class EtchBackend : IDisposable
     // Path helpers
     // ════════════════════════════════════════════════════════════════
 
+    // A path built here only has to live until SceneBuilder.AddPath, which copies it into the
+    // scene arena. So the builders share constant verb arrays and write coordinates into
+    // per-thread scratch arrays instead of allocating two arrays per shape per frame (a circle
+    // cost ~240 bytes; Starfield allocated ~165 KB/frame here). The returned path is valid until
+    // the next Build*Path call on the same thread. Scratch is keyed by exact length because
+    // BezPath takes its coordinate count from the array length.
+    private static readonly byte[] RectVerbs = { 0, 1, 1, 1, 1, 4 };
+    private static readonly byte[] CircleVerbs = { 0, 3, 3, 3, 3, 4 };
+    private static readonly byte[] RoundedRectVerbs = { 0, 1, 3, 1, 3, 1, 3, 1, 3, 4 };
+    private static readonly byte[] LineVerbs = { 0, 1 };
+
+    [ThreadStatic] private static Dictionary<int, double[]>? coordScratch;
+    [ThreadStatic] private static Dictionary<int, byte[]>? polylineVerbs;
+
+    private static double[] ScratchCoords(int length)
+    {
+        coordScratch ??= new Dictionary<int, double[]>();
+        if (!coordScratch.TryGetValue(length, out var coords))
+        {
+            coords = new double[length];
+            coordScratch[length] = coords;
+        }
+        return coords;
+    }
+
+    // MoveTo followed by lineCount LineTos; constant per length, so cached.
+    private static byte[] PolylineVerbs(int lineCount)
+    {
+        polylineVerbs ??= new Dictionary<int, byte[]>();
+        if (!polylineVerbs.TryGetValue(lineCount, out var verbs))
+        {
+            verbs = new byte[1 + lineCount];
+            verbs.AsSpan(1).Fill(1);
+            polylineVerbs[lineCount] = verbs;
+        }
+        return verbs;
+    }
+
     internal static BezPath BuildRoundedRectPath(float x, float y, float w, float h, float r)
     {
         if (r <= 0)
@@ -1177,50 +1326,44 @@ internal sealed class EtchBackend : IDisposable
 
         float k = 0.5522847498f;
 
-        return new BezPath(
-            new byte[] { 0, 1, 3, 1, 3, 1, 3, 1, 3, 4 },
-            new double[]
-            {
-                x + rx, y,
-                x + w - rx, y,
-                x + w - rx + rx * k, y, x + w, y + ry - ry * k, x + w, y + ry,
-                x + w, y + h - ry,
-                x + w, y + h - ry + ry * k, x + w - rx + rx * k, y + h, x + w - rx, y + h,
-                x + rx, y + h,
-                x + rx - rx * k, y + h, x, y + h - ry + ry * k, x, y + h - ry,
-                x, y + ry,
-                x, y + ry - ry * k, x + rx - rx * k, y, x + rx, y,
-            },
-            10);
+        var c = ScratchCoords(34);
+        c[0] = x + rx; c[1] = y;
+        c[2] = x + w - rx; c[3] = y;
+        c[4] = x + w - rx + rx * k; c[5] = y; c[6] = x + w; c[7] = y + ry - ry * k; c[8] = x + w; c[9] = y + ry;
+        c[10] = x + w; c[11] = y + h - ry;
+        c[12] = x + w; c[13] = y + h - ry + ry * k; c[14] = x + w - rx + rx * k; c[15] = y + h; c[16] = x + w - rx; c[17] = y + h;
+        c[18] = x + rx; c[19] = y + h;
+        c[20] = x + rx - rx * k; c[21] = y + h; c[22] = x; c[23] = y + h - ry + ry * k; c[24] = x; c[25] = y + h - ry;
+        c[26] = x; c[27] = y + ry;
+        c[28] = x; c[29] = y + ry - ry * k; c[30] = x + rx - rx * k; c[31] = y; c[32] = x + rx; c[33] = y;
+        return new BezPath(RoundedRectVerbs, c, 10);
     }
 
     internal static BezPath BuildRectPath(float x, float y, float w, float h)
-        => new(
-            new byte[] { 0, 1, 1, 1, 1, 4 },
-            new double[] { x, y, x + w, y, x + w, y + h, x, y + h, x, y },
-            6);
+    {
+        var c = ScratchCoords(10);
+        c[0] = x; c[1] = y; c[2] = x + w; c[3] = y; c[4] = x + w; c[5] = y + h; c[6] = x; c[7] = y + h; c[8] = x; c[9] = y;
+        return new BezPath(RectVerbs, c, 6);
+    }
 
     internal static BezPath BuildCirclePath(float cx, float cy, float r)
     {
         float k = 0.5522847498f * r;
-        return new BezPath(
-            new byte[] { 0, 3, 3, 3, 3, 4 },
-            new double[]
-            {
-                cx + r, cy,
-                cx + r, cy - k, cx + k, cy - r, cx, cy - r,
-                cx - k, cy - r, cx - r, cy - k, cx - r, cy,
-                cx - r, cy + k, cx - k, cy + r, cx, cy + r,
-                cx + k, cy + r, cx + r, cy + k, cx + r, cy,
-            },
-            6);
+        var c = ScratchCoords(26);
+        c[0] = cx + r; c[1] = cy;
+        c[2] = cx + r; c[3] = cy - k; c[4] = cx + k; c[5] = cy - r; c[6] = cx; c[7] = cy - r;
+        c[8] = cx - k; c[9] = cy - r; c[10] = cx - r; c[11] = cy - k; c[12] = cx - r; c[13] = cy;
+        c[14] = cx - r; c[15] = cy + k; c[16] = cx - k; c[17] = cy + r; c[18] = cx; c[19] = cy + r;
+        c[20] = cx + k; c[21] = cy + r; c[22] = cx + r; c[23] = cy + k; c[24] = cx + r; c[25] = cy;
+        return new BezPath(CircleVerbs, c, 6);
     }
 
     internal static BezPath BuildLinePath(float x1, float y1, float x2, float y2)
-        => new(
-            new byte[] { 0, 1 },
-            new double[] { x1, y1, x2, y2 },
-            2);
+    {
+        var c = ScratchCoords(4);
+        c[0] = x1; c[1] = y1; c[2] = x2; c[3] = y2;
+        return new BezPath(LineVerbs, c, 2);
+    }
 
     internal static BezPath BuildArcPath(float cx, float cy, float r, float startRad, float sweepRad)
     {
@@ -1232,7 +1375,7 @@ internal sealed class EtchBackend : IDisposable
         float anglePerSegment = 2.0f * MathF.Acos(cosHalfAngle);
         int segments = Math.Min(512, Math.Max(4, (int)MathF.Ceiling(MathF.Abs(sweepRad) / anglePerSegment)));
 
-        var coords = new double[2 + segments * 2];
+        var coords = ScratchCoords(2 + segments * 2);
         coords[0] = cx + r * MathF.Cos(startRad);
         coords[1] = cy + r * MathF.Sin(startRad);
         for (int i = 1; i <= segments; i++)
@@ -1243,13 +1386,7 @@ internal sealed class EtchBackend : IDisposable
             coords[idx + 1] = cy + r * MathF.Sin(angle);
         }
 
-        var verbs = new byte[1 + segments];
-        verbs[0] = 0;
-        for (int i = 0; i < segments; i++)
-        {
-            verbs[1 + i] = 1;
-        }
-
+        var verbs = PolylineVerbs(segments);
         return new BezPath(verbs, coords, verbs.Length);
     }
 

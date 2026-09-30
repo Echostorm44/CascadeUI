@@ -384,6 +384,7 @@ public static class App
 
         mcpHost.Dispose();
 
+        frameClock.Dispose();
         orchestrator.Dispose();
         gpu.Dispose();
         loop.Dispose();

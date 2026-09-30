@@ -1069,8 +1069,17 @@ internal sealed class EtchBackendProvider : IDisposable
                 capture.GlyphCommands.ToList(), ExtractImageCommands(capture.Commands, layerInitial));
         }
 
+        // Size the builder from the previous frame (plus headroom) so a steady-state frame never
+        // grows a table: each growth copied the table and zeroed the old one.
         int estimatedCommands = Math.Max(4096, _backend.Commands.Count * 4);
-        var sb = SceneBuilder.Begin(estimatedCommands);
+        var last = _lastSceneCapacity;
+        var sb = SceneBuilder.Begin(new SceneCapacity(
+            Math.Max(estimatedCommands, WithHeadroom(last.Commands)),
+            WithHeadroom(last.PathArenaBytes),
+            WithHeadroom(last.Paths),
+            WithHeadroom(last.Paints),
+            WithHeadroom(last.Transforms),
+            WithHeadroom(last.Rects)));
         sb.BeginFrame();
 
         var initialAffine = scale == 1.0f
@@ -1120,6 +1129,7 @@ internal sealed class EtchBackendProvider : IDisposable
         }
         sb.EndFrame();
         var sceneBuffer = sb.End();
+        _lastSceneCapacity = sceneBuffer.Capacity;
 
         if (DebugLog.IsEnabled(DebugLogCategory.Transform))
         {
@@ -1550,6 +1560,10 @@ internal sealed class EtchBackendProvider : IDisposable
                 break;
         }
     }
+
+    private SceneCapacity _lastSceneCapacity;
+
+    private static int WithHeadroom(int count) => count + (count >> 2) + 16;
 
     private SceneBuffer BuildLayerSceneBuffer(EtchBackend.LayerCapture capture, float scale)
     {

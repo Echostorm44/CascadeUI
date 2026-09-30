@@ -4418,6 +4418,7 @@ int overlayCulled = 0;
         var enumerator = path.Iterate();
         int cubicCount = 0;
         double cx = 0, cy = 0, rx = 0, ry = 0;
+        double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
         bool hasMove = false;
         bool hasLine = false;
         while (enumerator.MoveNext())
@@ -4425,9 +4426,19 @@ int overlayCulled = 0;
             var seg = enumerator.Current;
             switch (seg.Verb)
             {
-                case PathVerb.MoveTo: rx = seg.End.X; ry = seg.End.Y; hasMove = true; break;
+                case PathVerb.MoveTo:
+                    rx = seg.End.X; ry = seg.End.Y; hasMove = true;
+                    Extend(seg.End);
+                    break;
                 case PathVerb.LineTo: hasLine = true; break;
-                case PathVerb.CubicTo: cubicCount++; cx += seg.Control0.X + seg.Control1.X + seg.End.X; cy += seg.Control0.Y + seg.Control1.Y + seg.End.Y; break;
+                case PathVerb.CubicTo:
+                    cubicCount++;
+                    cx += seg.Control0.X + seg.Control1.X + seg.End.X;
+                    cy += seg.Control0.Y + seg.Control1.Y + seg.End.Y;
+                    Extend(seg.Control0);
+                    Extend(seg.Control1);
+                    Extend(seg.End);
+                    break;
             }
         }
         if (cubicCount == 4 && hasMove && !hasLine)
@@ -4437,10 +4448,12 @@ int overlayCulled = 0;
             double radius = Math.Sqrt(dx * dx + dy * dy);
 
             // Validate: bounding box must be roughly square with size ≈ 2*radius
-            // (rejects rounded rects which also have 4 cubic segments)
-            var aabb = path.Aabb();
-            double width = aabb.MaxX - aabb.MinX;
-            double height = aabb.MaxY - aabb.MinY;
+            // (rejects rounded rects which also have 4 cubic segments). The box of the control
+            // points is used: for a cubic circle the controls lie on the tangents at the extremes,
+            // so it equals the curve's box, and it costs nothing. The exact curve AABB (solving
+            // for cubic extrema) made this check ~17% of a canvas-heavy frame (EnergyOrbs).
+            double width = maxX - minX;
+            double height = maxY - minY;
             double diameter = radius * 2;
             double tolerance = diameter * 0.15;
 
@@ -4450,6 +4463,14 @@ int overlayCulled = 0;
             }
         }
         return (false, default, 0);
+
+        void Extend(EGeometry.Point p)
+        {
+            minX = Math.Min(minX, p.X);
+            minY = Math.Min(minY, p.Y);
+            maxX = Math.Max(maxX, p.X);
+            maxY = Math.Max(maxY, p.Y);
+        }
     }
 
     /// <summary>

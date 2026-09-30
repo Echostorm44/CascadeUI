@@ -158,14 +158,24 @@ internal sealed class EtchBackendProvider : IDisposable
     // rebuild. Unset or unrecognised values keep the configured preference.
     private static GpuPreference ResolveGpuPreference(GpuPreference configured)
     {
-        return Environment.GetEnvironmentVariable("CASCADE_GPU")?.Trim().ToLowerInvariant() switch
+        string? value = Environment.GetEnvironmentVariable("CASCADE_GPU")?.Trim();
+        if (string.Equals(value, "auto", StringComparison.OrdinalIgnoreCase))
         {
-            "auto" => GpuPreference.Auto,
-            "lowpower" => GpuPreference.LowPower,
-            "highperformance" => GpuPreference.HighPerformance,
-            "software" => GpuPreference.Software,
-            _ => configured,
-        };
+            return GpuPreference.Auto;
+        }
+        if (string.Equals(value, "lowpower", StringComparison.OrdinalIgnoreCase))
+        {
+            return GpuPreference.LowPower;
+        }
+        if (string.Equals(value, "highperformance", StringComparison.OrdinalIgnoreCase))
+        {
+            return GpuPreference.HighPerformance;
+        }
+        if (string.Equals(value, "software", StringComparison.OrdinalIgnoreCase))
+        {
+            return GpuPreference.Software;
+        }
+        return configured;
     }
 
     public void CreateSurfaceX11(nint display, uint window, int screen, uint width, uint height)

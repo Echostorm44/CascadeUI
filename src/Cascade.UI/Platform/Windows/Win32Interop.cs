@@ -562,6 +562,14 @@ internal static partial class Win32
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool SetForegroundWindow(nint hWnd);
 
+    // Lets another process take the foreground (ASFW_ANY: any process). Only effective when the
+    // caller itself may set the foreground, e.g. a just-launched second instance.
+    [LibraryImport("user32", EntryPoint = "AllowSetForegroundWindow", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool AllowSetForegroundWindow(uint processId);
+
+    internal const uint ASFW_ANY = unchecked((uint)-1);
+
     [LibraryImport("user32", EntryPoint = "SetFocus")]
     internal static partial nint SetFocus(nint hWnd);
 

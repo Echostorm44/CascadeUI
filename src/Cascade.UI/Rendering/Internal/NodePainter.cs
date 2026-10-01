@@ -1908,7 +1908,8 @@ internal sealed class NodePainter
             fontWeight: textStyle.Weight,
             alignment: lbl.Alignment,
             overflow: lbl.OverflowMode,
-            maxLines: lbl.MaxLineCount ?? 0);
+            maxLines: lbl.MaxLineCount ?? 0,
+            noWrap: lbl.WrapMode == TextWrap.NoWrap);
     }
 
     // ── TextInput ──────────────────────────────────────────────────────
@@ -1991,9 +1992,19 @@ internal sealed class NodePainter
         // Clip content to control bounds
         using var contentClip = ctx.PushRoundedClip(bounds, t.Radius);
 
-        float fontSize = theme.Typography.Scale.Body.Size;
+        float fontSize = TextInputMetrics.FontSize(theme);
         float scrollX = focused ? InputDispatcher.TextInputScrollOffsetX : 0f;
-        float availableWidth = bounds.Width - t.PaddingH * 2;
+        float contentLeft = TextInputMetrics.ContentLeft(ti, theme);
+        float availableWidth = bounds.Width - contentLeft - t.PaddingH;
+
+        // Leading icon (e.g. a magnifier on a search field), in the placeholder's colour.
+        float iconSize = TextInputMetrics.IconSize(ti, theme);
+        if (iconSize > 0f)
+        {
+            var iconColor = disabled ? t.DisabledTextColor : t.PlaceholderColor;
+            PaintIconBitmap(ti.Icon, bounds.X + t.PaddingH + iconSize / 2f, bounds.Y + bounds.Height / 2f,
+                iconSize, 1f, iconColor, MathF.Max(1.5f, iconSize / 12f));
+        }
 
         // Placeholder — fades out smoothly when text is entered
         if (placeholderHidden < 0.999f)
@@ -2002,9 +2013,15 @@ internal sealed class NodePainter
             if (!string.IsNullOrEmpty(placeholder))
             {
                 float placeholderOpacity = 1f - placeholderHidden;
-                PaintText(placeholder, bounds, t.PaddingH, t.PlaceholderColor.Opacity(placeholderOpacity));
+                var placeholderBounds = new Rect(bounds.X + contentLeft - t.PaddingH, bounds.Y, bounds.Width - (contentLeft - t.PaddingH), bounds.Height);
+                PaintText(placeholder, placeholderBounds, t.PaddingH, t.PlaceholderColor.Opacity(placeholderOpacity));
             }
         }
+
+        // With an icon, horizontally scrolled text must not slide under it.
+        using var textClip = iconSize > 0f
+            ? ctx.PushClip(new Rect(bounds.X + contentLeft - 1f, bounds.Y, bounds.Width - contentLeft + 1f, bounds.Height))
+            : default;
 
         if (!string.IsNullOrEmpty(text))
         {
@@ -2025,7 +2042,7 @@ internal sealed class NodePainter
 
                 string prefix = text[..selStart];
                 string selected = text[selStart..selEnd];
-                float hlX = bounds.X + t.PaddingH - scrollX +
+                float hlX = bounds.X + contentLeft - scrollX +
                     (string.IsNullOrEmpty(prefix) ? 0f : ctx.MeasureTextAdvance(prefix, fontSize).Width);
                 float hlW = string.IsNullOrEmpty(selected) ? 0f : ctx.MeasureTextAdvance(selected, fontSize).Width;
                 if (hlW > 0)
@@ -2037,7 +2054,7 @@ internal sealed class NodePainter
             }
 
             // Draw text with infinite maxWidth (never wraps) and apply horizontal scroll
-            float textX = MathF.Round(bounds.X + t.PaddingH - scrollX);
+            float textX = MathF.Round(bounds.X + contentLeft - scrollX);
             ctx.DrawText(text, textX, textY, fontSize, textColor,
                 maxWidth: float.PositiveInfinity, maxLines: 1);
         }
@@ -2069,7 +2086,7 @@ internal sealed class NodePainter
                 float caretTextWidth = string.IsNullOrEmpty(beforeCaret)
                     ? 0f
                     : ctx.MeasureTextAdvance(beforeCaret, fontSize).Width;
-                float caretX = bounds.X + t.PaddingH + caretTextWidth - scrollX;
+                float caretX = bounds.X + contentLeft + caretTextWidth - scrollX;
                 float caretPadY = 6f;
                 float caretY = bounds.Y + caretPadY;
                 float caretH = bounds.Height - caretPadY * 2;
@@ -11656,9 +11673,12 @@ internal sealed class NodePainter
         // Absolute bounds, for control-level drag-to-reorder hit-testing.
         lvn.ReorderBounds = new Rect(absoluteX, absoluteY, bounds.Width, bounds.Height);
 
-        // Card chrome.
-        ctx.DrawRect(bounds, theme.Colors.Surface, radius: 4f);
-        ctx.DrawRect(bounds, stroke: new Stroke(theme.Colors.Border, 1f), radius: 4f);
+        // Card chrome, unless the list is plain.
+        if (!lvn.IsPlain)
+        {
+            ctx.DrawRect(bounds, theme.Colors.Surface, radius: 4f);
+            ctx.DrawRect(bounds, stroke: new Stroke(theme.Colors.Border, 1f), radius: 4f);
+        }
 
         // The rows are a real node tree built from the render callback. Paint it,
         // clipped to the list bounds; a wrapping ScrollView (if any) handles scroll.
@@ -12710,7 +12730,8 @@ internal sealed class NodePainter
         TextAlignment alignment = TextAlignment.Start,
         TextOverflow overflow = TextOverflow.Clip,
         int maxLines = 1,
-        FontWeight fontWeight = FontWeight.Regular)
+        FontWeight fontWeight = FontWeight.Regular,
+        bool noWrap = false)
     {
         if (string.IsNullOrEmpty(text))
         {
@@ -12741,8 +12762,8 @@ internal sealed class NodePainter
         // so use it to short-circuit the common (fits-on-one-line) case and only
         // pay for a full wrapping layout when the text can actually span lines.
         Size singleLineSize = ctx.MeasureText(text, effectiveFontSize, fontPath);
-        bool singleLine = ShouldCenterAsSingleLine(
-            maxLines, text, singleLineSize.Width, availableWidth);
+        bool singleLine = (noWrap && !text.Contains('\n', StringComparison.Ordinal))
+            || ShouldCenterAsSingleLine(maxLines, text, singleLineSize.Width, availableWidth);
 
         if (singleLine)
         {
@@ -12778,6 +12799,7 @@ internal sealed class NodePainter
                     MaxWidth = availableWidth,
                     MaxLines = maxLines,
                     Overflow = overflow,
+                    NoWrap = noWrap,
                 };
                 textSize = TextLayoutEngine.Layout(text, measureOptions).BoundingBox;
             }
@@ -12794,7 +12816,8 @@ internal sealed class NodePainter
             alignment: alignment,
             overflow: overflow,
             maxWidth: availableWidth,
-            maxLines: maxLines);
+            maxLines: maxLines,
+            noWrap: noWrap);
     }
 
     private static Rect ScaleBounds(Rect bounds, float scale)

@@ -40,7 +40,7 @@ public sealed class Label : Node
     internal ColorValue? TextColorOverride { get; set; }
     internal TextOverflow OverflowMode { get; set; } = TextOverflow.Clip;
     internal int? MaxLineCount { get; set; }
-    internal TextWrap WrapMode { get; set; } = TextWrap.NoWrap;
+    internal TextWrap WrapMode { get; set; } = TextWrap.WordWrap;
     internal TextAlignment Alignment { get; set; } = TextAlignment.Start;
     internal bool IsSelectable { get; set; }
     internal TextDecoration DecorationMode { get; set; } = TextDecoration.None;
@@ -99,7 +99,11 @@ public sealed class Label : Node
         return this;
     }
 
-    /// <summary>Sets the text wrapping behavior.</summary>
+    /// <summary>
+    /// Sets the text wrapping behavior (default: <see cref="TextWrap.WordWrap"/>). Use
+    /// <see cref="TextWrap.NoWrap"/> with <see cref="TextOverflow.Ellipsis"/> for a one-line label cut at
+    /// a character ("https://github.com/Echo…"), not at the last word that fits.
+    /// </summary>
     public Label Wrap(TextWrap wrap)
     {
         WrapMode = wrap;
@@ -154,13 +158,13 @@ public enum TextOverflow
 /// </summary>
 public enum TextWrap
 {
-    /// <summary>No wrapping — text stays on one line.</summary>
+    /// <summary>No wrapping: each line (split only at hard line breaks) stays whole; wider text overflows or is ellipsized.</summary>
     NoWrap,
 
-    /// <summary>Wraps at any character when needed.</summary>
+    /// <summary>Wraps when needed, at Unicode line-break opportunities (currently the same as <see cref="WordWrap"/>).</summary>
     Wrap,
 
-    /// <summary>Wraps at word boundaries.</summary>
+    /// <summary>Wraps at word boundaries (Unicode line-break opportunities, UAX #14). The default.</summary>
     WordWrap
 }
 

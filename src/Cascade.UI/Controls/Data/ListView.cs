@@ -11,6 +11,8 @@ internal interface IListViewNode
     float GetItemHeight();
     bool IsItemSelected(int index);
     SelectionMode SelectionModeValue { get; }
+    /// <summary>No card background or border (see <see cref="ListView{T}.Plain"/>).</summary>
+    bool IsPlain { get; }
     int SectionCount { get; }
     string GetSectionKey(int sectionIndex);
     int GetSectionItemCount(int sectionIndex);
@@ -198,6 +200,7 @@ public sealed class ListView<T> : Node, IListViewNode
     internal Func<T, IReadOnlyList<ContextMenuItem>>? contextMenuFactory;
     internal Action<T>? onActivateHandler;
     internal bool selectionHighlight = true;
+    private bool plain;
     internal int scrollIntoViewIndex = -1;
     private int lastScrolledIntoView = -1;
 
@@ -294,6 +297,18 @@ public sealed class ListView<T> : Node, IListViewNode
         selectionHighlight = enabled;
         return this;
     }
+
+    /// <summary>
+    /// Drops the card chrome (surface fill and border): rows sit directly on the parent's
+    /// background, as in sidebars and launcher-style lists whose rows draw their own state.
+    /// </summary>
+    public ListView<T> Plain(bool plain = true)
+    {
+        this.plain = plain;
+        return this;
+    }
+
+    bool IListViewNode.IsPlain => plain;
 
     /// <summary>
     /// Scrolls the item at <paramref name="index"/> into view whenever the index changes — e.g. pass

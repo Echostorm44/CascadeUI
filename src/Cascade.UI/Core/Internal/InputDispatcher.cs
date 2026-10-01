@@ -3987,36 +3987,58 @@ internal sealed class InputDispatcher
     }
 
     /// <summary>
-    /// Computes caret position from mouse click coordinates on a TextInput.
-    /// Uses the TextInput's AbsoluteBounds and approximate character width.
+    /// Places the caret where a click lands on a TextInput: the click is measured against the text
+    /// laid out exactly as the painter draws it (same font, size, content origin and scroll).
     /// </summary>
     private static void PositionTextInputCaretFromMouse(TextInput ti, NativeMouseEvent evt)
     {
-        var bounds = ti.AbsoluteBounds;
-        if (bounds.Width <= 0)
+        if (ti.AbsoluteBounds.Width <= 0)
         {
             return;
         }
+        TextInputCaretIndex = CaretIndexAt(ti, ActiveEditBuffer ?? ti.Value.Value ?? "", evt.X);
+    }
 
-        string buf = ActiveEditBuffer ?? ti.Value.Value ?? "";
+    /// <summary>The caret index for a click at window x <paramref name="x"/> on <paramref name="ti"/> showing <paramref name="buf"/>.</summary>
+    internal static int CaretIndexAt(TextInput ti, string buf, float x)
+    {
+        var bounds = ti.AbsoluteBounds;
         if (buf.Length == 0)
         {
-            TextInputCaretIndex = 0;
-            return;
+            return 0;
         }
 
-        float paddingH = 12f; // theme.TextInput.PaddingH default
-        float fontSize = 17f; // Apple theme body size
-
-        float relX = evt.X - bounds.X - paddingH;
+        var theme = ThemeSwitcher.Current;
+        float scrollX = ReferenceEquals(FocusManager.FocusedElement, ti) ? TextInputScrollOffsetX : 0f;
+        float relX = x - bounds.X - TextInputMetrics.ContentLeft(ti, theme) + scrollX;
         if (relX <= 0)
         {
-            TextInputCaretIndex = 0;
-            return;
+            return 0;
         }
 
-        float avgCharWidth = fontSize * 0.52f;
-        TextInputCaretIndex = Math.Clamp((int)(relX / avgCharWidth + 0.5f), 0, buf.Length);
+        // Password fields paint one mask glyph per character; measure what is drawn.
+        string drawn = ti.InputType == InputType.Password ? new string('●', buf.Length) : buf;
+        string? fontPath = LayoutSolver.DefaultFontPath;
+        if (string.IsNullOrEmpty(fontPath))
+        {
+            return buf.Length;
+        }
+        var layout = TextLayoutEngine.Layout(drawn, new TextLayoutOptions
+        {
+            FontPath = fontPath,
+            FontSize = TextInputMetrics.FontSize(theme),
+            MaxWidth = float.PositiveInfinity,
+            MaxLines = 1,
+            Overflow = TextOverflow.Clip,
+        });
+        if (layout.Lines.Count == 0)
+        {
+            return buf.Length;
+        }
+
+        var line = layout.Lines[0];
+        var hit = layout.HitTest(relX, line.Y + line.Height / 2f);
+        return Math.Clamp(hit.Offset + (hit.IsTrailingEdge ? 1 : 0), 0, buf.Length);
     }
 
     // ── Clipboard and selection helpers ────────────────────────────────

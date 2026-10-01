@@ -317,6 +317,7 @@ internal sealed class ComponentHost
         {
             if (current.Component is ErrorBoundary boundary)
             {
+                Diagnostics.ComponentErrorLog.Report(component.GetType().Name, ex, handledByBoundary: true);
                 boundary.ReportError(ex);
                 if (current.IsMounted)
                 {
@@ -328,8 +329,8 @@ internal sealed class ComponentHost
             current = current.parentHost;
         }
 
-        // No ErrorBoundary found — log to debug output so the error isn't silently lost.
-        System.Diagnostics.Debug.WriteLine(
-            $"[Cascade] Unhandled component error (no ErrorBoundary): {ex}");
+        // No ErrorBoundary: the component keeps its last good tree, so record the error where it
+        // can be found (stderr, debug output, cascade mcp diagnostics) instead of losing it.
+        Diagnostics.ComponentErrorLog.Report(component.GetType().Name, ex, handledByBoundary: false);
     }
 }

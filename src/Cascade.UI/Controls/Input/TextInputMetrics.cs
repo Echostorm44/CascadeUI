@@ -11,10 +11,17 @@ internal static class TextInputMetrics
 
     public static float FontSize(CascadeTheme theme) => theme.Typography.Scale.Body.Size;
 
-    /// <summary>The leading icon's size (0 without one): a little under the text's em size.</summary>
+    /// <summary>
+    /// The leading icon's size (0 without one): the size the icon declares, else a little under the
+    /// text's em size.
+    /// </summary>
     public static float IconSize(TextInput input, CascadeTheme theme)
     {
-        return input.Icon.Paths.Length == 0 ? 0f : MathF.Round(FontSize(theme) * 0.95f);
+        if (input.Icon.Paths.Length == 0)
+        {
+            return 0f;
+        }
+        return input.Icon.DefaultSize > 0f ? input.Icon.DefaultSize : MathF.Round(FontSize(theme) * 0.95f);
     }
 
     /// <summary>Distance from the input's left edge to where its text starts.</summary>

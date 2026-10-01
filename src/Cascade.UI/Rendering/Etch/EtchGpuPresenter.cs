@@ -147,6 +147,9 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
 
     // Color glyph atlas for COLR/CPAL emoji (RGBA8Unorm)
     private readonly GlyphAtlas _colorGlyphAtlas;
+
+    private const int GlyphAtlasSize = 2048;
+    private const int ColorGlyphAtlasSize = 1024;
     private readonly TextureView _colorGlyphAtlasView;
     private readonly ShaderModule _colorGlyphShader;
     private readonly RenderPipeline _colorGlyphPipeline;
@@ -1111,8 +1114,10 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
         _device.Queue.WriteBuffer(_textVertexBuffer, 0, MemoryMarshal.AsBytes(TextQuadVertices));
         _textPipeline = BuildTextPipeline(out _textPipelineLayout, out _textBgLayout);
 
-        // Glyph atlas text pipeline setup
-        _glyphAtlas = new GlyphAtlas(_device, 4096, TextureFormat.R8Unorm, 128, maxPages: 1);
+        // Glyph atlas text pipeline setup. Atlas sizes are a resident-memory budget (they exist for
+        // the life of the window, hidden or not): 2048² R8 is 4 MB and holds thousands of UI glyphs;
+        // when it fills it is reset and refilled (WasExhausted). 4096² cost 16 MB.
+        _glyphAtlas = new GlyphAtlas(_device, GlyphAtlasSize, TextureFormat.R8Unorm, 128, maxPages: 1);
         _glyphAtlasView = _glyphAtlas.GetPage(0).Texture.CreateView();
         _glyphShader = _device.CreateShaderModuleWgsl(GlyphAtlasWgsl, "GlyphAtlas");
         _glyphSampler = _device.CreateSampler(new SamplerDescriptor
@@ -1145,8 +1150,9 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
         _glyphInstanceBindGroup = default;
         UpdateGlyphAtlasBindGroup();
 
-        // Color glyph atlas for emoji (RGBA8Unorm)
-        _colorGlyphAtlas = new GlyphAtlas(_device, 4096, TextureFormat.Rgba8UnormSrgb, 128, maxPages: 1);
+        // Color glyph atlas for emoji: 1024² RGBA is 4 MB (4096² was 64 MB, for apps that may never
+        // show an emoji). Resets when full like the text atlas.
+        _colorGlyphAtlas = new GlyphAtlas(_device, ColorGlyphAtlasSize, TextureFormat.Rgba8UnormSrgb, 128, maxPages: 1);
         _colorGlyphAtlasView = _colorGlyphAtlas.GetPage(0).Texture.CreateView();
         _colorGlyphShader = _device.CreateShaderModuleWgsl(ColorGlyphAtlasWgsl, "ColorGlyphAtlas");
         _colorGlyphSampler = _device.CreateSampler(new SamplerDescriptor

@@ -1159,7 +1159,7 @@ internal static class McpCommand
 
             case "whodrew":
                 Console.WriteLine("Lists every draw from the last presented frame touching the pixel,");
-                Console.WriteLine("in paint order (shapes, then images, then glyphs), each with the");
+                Console.WriteLine("in paint order (later entries draw over earlier ones), each with the");
                 Console.WriteLine("DevTools node id that emitted it. Coordinates are device pixels —");
                 Console.WriteLine("the same space screenshots use. The first call enables draw capture");
                 Console.WriteLine("and repaints once.");

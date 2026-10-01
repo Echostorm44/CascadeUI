@@ -57,22 +57,6 @@ internal sealed class EtchBackend : IDisposable
     private readonly Stack<Rect> _clipStack = new();
     private Rect _currentClipBounds;
 
-    // Overlay capture — popup text rendered on top of main frame text
-    private readonly Stack<object?> _overlayStack = new();
-    private readonly Stack<Rect> _overlayBoundsStack = new();
-    internal readonly List<GlyphOp> OverlayGlyphCommands = new();
-    internal readonly List<Rect> OverlayBounds = new();
-    private bool IsCapturingOverlay => _overlayStack.Count > 0;
-
-    // Command-stream index at which deferred-overlay (popup) painting begins. DrawImage ops BEFORE
-    // this are main-frame content — culled where an OverlayBounds rect covers them, so a row icon
-    // behind an open dropdown doesn't bleed through it (glyphs are already culled the same way). Ops
-    // at/after this belong to the overlays themselves and are never culled. int.MaxValue = no overlay.
-    internal int OverlayCommandStart = int.MaxValue;
-
-    /// <summary>Records that deferred-overlay painting is about to begin (see OverlayCommandStart).</summary>
-    internal void MarkOverlayStart() => OverlayCommandStart = Commands.Count;
-
     // Layer texture compositing — Flutter-style retained layers
     private ulong _nextLayerHandle = 1;
     private ulong? _activeLayerHandle;
@@ -198,11 +182,6 @@ internal sealed class EtchBackend : IDisposable
             ApplyLayerOpacity(op);
         }
 
-        if (IsCapturingOverlay)
-        {
-            ExpandOverlayBounds(op);
-        }
-
         if (_activeLayerHandle.HasValue)
         {
             if (LayerCaptures.TryGetValue(_activeLayerHandle.Value, out var layer))
@@ -248,120 +227,20 @@ internal sealed class EtchBackend : IDisposable
         }
     }
 
-    private void ExpandOverlayBounds(SceneOp op)
-    {
-        if (_overlayBoundsStack.Count == 0)
-        {
-            return;
-        }
-
-        // Skip non-drawing commands: clips, transforms, layer ops.
-        // Skip DrawPath / DrawPathGradient — path bounds are not available
-        // at this point (only the compiled handle is stored). The enclosing
-        // rects (checkbox bg, dropdown bg) already cover the area.
-        if (op.Kind == OpKind.PushClip || op.Kind == OpKind.PopClip ||
-            op.Kind == OpKind.PushClipPath || op.Kind == OpKind.PushClipRoundedRect ||
-            op.Kind == OpKind.PushTransform || op.Kind == OpKind.PopTransform ||
-            op.Kind == OpKind.DrawLayerTexture ||
-            op.Kind == OpKind.DrawPath || op.Kind == OpKind.DrawPathGradient)
-        {
-            return;
-        }
-
-        float opMinX = op.X;
-        float opMinY = op.Y;
-        float opMaxX = op.X + op.W;
-        float opMaxY = op.Y + op.H;
-
-        // DrawLine stores end point in W/H, not width/height.
-        if (op.Kind == OpKind.DrawLine)
-        {
-            opMinX = Math.Min(op.X, op.W);
-            opMinY = Math.Min(op.Y, op.H);
-            opMaxX = Math.Max(op.X, op.W);
-            opMaxY = Math.Max(op.Y, op.H);
-        }
-
-        // A shadow is visible 3σ past its rect.
-        if (op.Kind == OpKind.DrawShadow)
-        {
-            float extent = 3f * op.StrokeWidth;
-            opMinX -= extent;
-            opMinY -= extent;
-            opMaxX += extent;
-            opMaxY += extent;
-        }
-
-        // Arcs and circles are centered; expand to bounding box
-        if (op.Kind == OpKind.DrawArc || op.Kind == OpKind.DrawCircle)
-        {
-            opMinX = op.X - op.Radius;
-            opMinY = op.Y - op.Radius;
-            opMaxX = op.X + op.Radius;
-            opMaxY = op.Y + op.Radius;
-        }
-
-        // Geometry commands are stored in logical coordinates, but glyph
-        // positions are transformed by _currentTransform (DPI scale).
-        // Transform geometry bounds to physical coordinates so they match.
-        if (_currentTransform != Matrix3x2.Identity)
-        {
-            var tl = Vector2.Transform(new Vector2(opMinX, opMinY), _currentTransform);
-            var tr = Vector2.Transform(new Vector2(opMaxX, opMinY), _currentTransform);
-            var bl = Vector2.Transform(new Vector2(opMinX, opMaxY), _currentTransform);
-            var br = Vector2.Transform(new Vector2(opMaxX, opMaxY), _currentTransform);
-            opMinX = Math.Min(Math.Min(tl.X, tr.X), Math.Min(bl.X, br.X));
-            opMinY = Math.Min(Math.Min(tl.Y, tr.Y), Math.Min(bl.Y, br.Y));
-            opMaxX = Math.Max(Math.Max(tl.X, tr.X), Math.Max(bl.X, br.X));
-            opMaxY = Math.Max(Math.Max(tl.Y, tr.Y), Math.Max(bl.Y, br.Y));
-        }
-
-        var current = _overlayBoundsStack.Pop();
-        float minX, minY, maxX, maxY;
-
-        // Empty state sentinel: first command in this overlay scope
-        if (current.X == float.MaxValue && current.Y == float.MaxValue &&
-            current.Width == 0 && current.Height == 0)
-        {
-            minX = opMinX;
-            minY = opMinY;
-            maxX = opMaxX;
-            maxY = opMaxY;
-        }
-        else
-        {
-            minX = current.X;
-            minY = current.Y;
-            maxX = current.X + current.Width;
-            maxY = current.Y + current.Height;
-        }
-
-        if (opMinX < minX) { minX = opMinX; }
-        if (opMinY < minY) { minY = opMinY; }
-        if (opMaxX > maxX) { maxX = opMaxX; }
-        if (opMaxY > maxY) { maxY = opMaxY; }
-
-        _overlayBoundsStack.Push(new Rect(minX, minY, maxX - minX, maxY - minY));
-    }
-
-
-
     private void AddGlyphCommand(GlyphOp op)
     {
         op.DebugNodeId = currentDebugNodeId;
-        if (IsCapturingOverlay)
-        {
-            OverlayGlyphCommands.Add(op);
-        }
-        else if (_activeLayerHandle.HasValue)
+        if (_activeLayerHandle.HasValue)
         {
             if (LayerCaptures.TryGetValue(_activeLayerHandle.Value, out var layer))
             {
+                op.CommandIndex = layer.Commands.Count;
                 layer.GlyphCommands.Add(op);
             }
         }
         else
         {
+            op.CommandIndex = Commands.Count;
             GlyphCommands.Add(op);
             // Fold glyph colour into the scene hash so a text-only opacity change
             // (a fading page with no shapes) still invalidates the cached scene.
@@ -417,11 +296,6 @@ internal sealed class EtchBackend : IDisposable
         Commands.Clear();
         _opArenaUsed = 0;
         GlyphCommands.Clear();
-        OverlayGlyphCommands.Clear();
-        OverlayBounds.Clear();
-        OverlayCommandStart = int.MaxValue;
-        _overlayStack.Clear();
-        _overlayBoundsStack.Clear();
         _clipStack.Clear();
         _currentClipBounds = default;
         _compiledPaths.Clear();
@@ -849,8 +723,8 @@ internal sealed class EtchBackend : IDisposable
             pos[i * 2 + 1] = t.Y;
         }
 
-        // Fade text with the enclosing PushOpacity scope (glyphs render in their
-        // own final pass, so this is the only way opacity reaches them).
+        // Fade text with the enclosing PushOpacity scope (glyphs never become SceneOps,
+        // so this is the only way opacity reaches them).
         if (_currentOpacity < 1f)
         {
             color = color.ScaleAlpha(_currentOpacity);
@@ -868,29 +742,6 @@ internal sealed class EtchBackend : IDisposable
             ClipBounds = _currentClipBounds,
             HasClipBounds = _clipStack.Count > 0,
         });
-    }
-
-    // ════════════════════════════════════════════════════════════════
-    // Overlay capture — popup text rendered on top of main frame
-    // ════════════════════════════════════════════════════════════════
-
-    public void PushOverlay(ulong frame)
-    {
-        _overlayStack.Push(null);
-        _overlayBoundsStack.Push(new Rect(float.MaxValue, float.MaxValue, 0, 0));
-    }
-
-    public void PopOverlay(ulong frame)
-    {
-        if (_overlayStack.Count > 0)
-        {
-            _overlayStack.Pop();
-            var bounds = _overlayBoundsStack.Pop();
-            if (bounds.X < float.MaxValue && bounds.Width > 0 && bounds.Height > 0)
-            {
-                OverlayBounds.Add(bounds);
-            }
-        }
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -1277,6 +1128,15 @@ internal sealed class EtchBackend : IDisposable
         public float ScaleY = 1f;
         public Rect ClipBounds;
         public bool HasClipBounds;
+
+        /// <summary>
+        /// Where this run sits in paint order: the number of <see cref="SceneOp"/>s already in its
+        /// command stream (the frame's <see cref="Commands"/>, or the capturing layer's own
+        /// <see cref="LayerCapture.Commands"/>) when it was painted. It draws after
+        /// <c>Commands[CommandIndex - 1]</c> and before <c>Commands[CommandIndex]</c>, which is how
+        /// the GPU presenter interleaves text with shapes and images instead of drawing all text last.
+        /// </summary>
+        public int CommandIndex;
 
         /// <summary>
         /// DevTools node id of the node that emitted this op, or null. Only

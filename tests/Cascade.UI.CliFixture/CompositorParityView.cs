@@ -112,13 +112,16 @@ internal sealed class CompositorParityView : Component
         ctx.DrawImage(SolidImage, new Rect(0, 0, size.Width, size.Height));
     }
 
-    /// <summary>Builds a small solid-colour RGBA bitmap for the image-parity row.</summary>
+    /// <summary>
+    /// Builds a small solid-colour RGBA bitmap for the image-parity row. Image bytes are
+    /// sRGB-encoded, so they come straight from the hex digits — ColorValue channels are
+    /// linear, and packing them made the "orange" image (255,77,0).
+    /// </summary>
     private static ImageSource MakeSolidImage(string hex)
     {
-        var c = new ColorValue(hex);
-        byte r = (byte)Math.Clamp((int)MathF.Round(c.R * 255f), 0, 255);
-        byte g = (byte)Math.Clamp((int)MathF.Round(c.G * 255f), 0, 255);
-        byte b = (byte)Math.Clamp((int)MathF.Round(c.B * 255f), 0, 255);
+        byte r = Convert.ToByte(hex.Substring(1, 2), 16);
+        byte g = Convert.ToByte(hex.Substring(3, 2), 16);
+        byte b = Convert.ToByte(hex.Substring(5, 2), 16);
         const int dim = 16;
         var rgba = new byte[dim * dim * 4];
         for (int i = 0; i < dim * dim; i++)

@@ -360,13 +360,8 @@ internal static class NodeTreeWalker
         foreach (char ch in text)
         {
             Key key = CharToKey(ch);
-            inputDispatcher.HandleKeyEvent(new NativeKeyEvent
-            {
-                Type = NativeKeyEventType.KeyDown,
-                Key = key,
-                Character = ch,
-                Modifiers = ModifierKeys.None,
-            });
+            ModifierKeys modifiers = ch is >= 'A' and <= 'Z' ? ModifierKeys.Shift : ModifierKeys.None;
+            Press(key, modifiers, ch);
             count++;
         }
 
@@ -374,7 +369,10 @@ internal static class NodeTreeWalker
     }
 
     /// <summary>
-    /// Simulates a single key press with optional modifiers.
+    /// Simulates a key press with optional modifiers the way Win32 delivers it: key-down, the
+    /// character (a separate message with <see cref="Key.None"/>), key-up, then the modifiers'
+    /// release — so key-up handlers, suppressed characters and <see cref="Keyboard.ModifiersChanged"/>
+    /// behave as with a real keyboard.
     /// </summary>
     internal static bool SimulateKeyPress(Key key, ModifierKeys modifiers, char? character)
     {
@@ -383,15 +381,30 @@ internal static class NodeTreeWalker
             return false;
         }
 
-        inputDispatcher.HandleKeyEvent(new NativeKeyEvent
-        {
-            Type = NativeKeyEventType.KeyDown,
-            Key = key,
-            Character = character,
-            Modifiers = modifiers,
-        });
-
+        Press(key, modifiers, character);
         return true;
+    }
+
+    private static void Press(Key key, ModifierKeys modifiers, char? character)
+    {
+        var dispatcher = inputDispatcher!;
+        if (key != Key.None)
+        {
+            dispatcher.HandleKeyEvent(new NativeKeyEvent { Type = NativeKeyEventType.KeyDown, Key = key, Modifiers = modifiers });
+        }
+        if (character is { } ch)
+        {
+            dispatcher.HandleKeyEvent(new NativeKeyEvent { Type = NativeKeyEventType.KeyDown, Key = Key.None, Character = ch, Modifiers = modifiers });
+        }
+        if (key != Key.None)
+        {
+            dispatcher.HandleKeyEvent(new NativeKeyEvent { Type = NativeKeyEventType.KeyUp, Key = key, Modifiers = modifiers });
+        }
+        if (modifiers != ModifierKeys.None)
+        {
+            // Releasing the modifier keys: a key-up with no key and no modifiers left.
+            dispatcher.HandleKeyEvent(new NativeKeyEvent { Type = NativeKeyEventType.KeyUp, Key = Key.None, Modifiers = ModifierKeys.None });
+        }
     }
 
     /// <summary>

@@ -191,7 +191,7 @@ internal static class McpToolRegistry
             Name: "cascade_screenshot",
             Description: "Capture the current window as a PNG image. Returns base64-encoded image content " +
                          "plus a metadata text block with width, height, device_width/device_height (the full " +
-                         "physical framebuffer), and captured_frame (the presented frame the pixels belong to). " +
+                         "physical framebuffer), captured_frame (the presented frame the pixels belong to), and window_visible (false: the window is hidden and this is its last frame). " +
                          "region coordinates are in the returned screenshot's own pixel space by default, so you " +
                          "can read a feature off a full capture and crop it directly (set region_space=\"device\" " +
                          "for raw framebuffer pixels). Pass after_frame to wait until that frame has presented " +
@@ -451,7 +451,7 @@ internal static class McpToolRegistry
             Description: "Type text or send key events to the focused element. " +
                          "Frame-synchronous: the response includes presented_frame and timed_out " +
                          "(timed_out=true means nothing repainted within ~2s).",
-            InputSchemaJson: """{"type":"object","properties":{"text":{"type":"string","description":"Text to type"},"key":{"type":"string","description":"Special key: Enter, Tab, Escape, Backspace, Delete, ArrowUp, ArrowDown, ArrowLeft, ArrowRight"},"modifiers":{"type":"array","items":{"type":"string","enum":["Ctrl","Shift","Alt"]}},"wait_frames":{"type":"integer","default":1,"description":"How many new presented frames to wait for before responding (1-240)"}},"required":[]}""",
+            InputSchemaJson: """{"type":"object","properties":{"text":{"type":"string","description":"Text to type"},"key":{"type":"string","description":"A key press (down, character, up): Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown, F1-F12, A-Z, 0-9, or any Cascade.UI.Key name (Comma, Backtick, ...)"},"modifiers":{"type":"array","items":{"type":"string","enum":["Ctrl","Shift","Alt","Win"]},"description":"Held for the key press, then released"},"wait_frames":{"type":"integer","default":1,"description":"How many new presented frames to wait for before responding (1-240)"}},"required":[]}""",
             DebugOnly: true,
             RawResponse: false,
             RequiresLiveInstance: true,
@@ -466,6 +466,8 @@ internal static class McpToolRegistry
                     ],
                     Options:
                     [
+                        new CliOptionMapping("--key", "key", CliValueKind.String),
+                        new CliOptionMapping("--modifiers", "modifiers", CliValueKind.String),
                         new CliOptionMapping("--wait-frames", "wait_frames", CliValueKind.Int),
                     ]),
             ]),

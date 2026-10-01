@@ -1361,41 +1361,48 @@ internal static class McpTools
         Key parsedKey = ParseKeyName(keyName);
         if (parsedKey == Key.None && !string.Equals(keyName, "None", StringComparison.OrdinalIgnoreCase))
         {
-            return ErrorJson($"Unknown key name: {keyName}. Valid keys: Enter, Tab, Escape, Backspace, Delete, Space, ArrowLeft, ArrowRight, ArrowUp, ArrowDown, Home, End, PageUp, PageDown, F1-F12, A-Z, 0-9", null);
+            return ErrorJson($"Unknown key name: {keyName}. Valid keys: Enter, Tab, Escape, Backspace, Delete, Space, ArrowLeft, ArrowRight, ArrowUp, ArrowDown, Home, End, PageUp, PageDown, F1-F12, A-Z, 0-9, or any Cascade.UI.Key name (Comma, Backtick, NumPad1, …)", null);
         }
 
+        // modifiers: a JSON array (["Ctrl","Shift"]) or, from the CLI, one string ("Ctrl+Shift" / "Ctrl,Shift").
         ModifierKeys modifiers = ModifierKeys.None;
-        if (parameters.ContainsKey("modifiers"))
+        var modsNode = parameters.ContainsKey("modifiers") ? parameters["modifiers"] : null;
+        IEnumerable<string> modNames = modsNode switch
         {
-            var modsArray = parameters["modifiers"]?.AsArray();
-            if (modsArray is not null)
+            JsonArray array => array.Select(m => m?.GetValue<string>() ?? ""),
+            JsonValue value when value.TryGetValue(out string? joined) => joined.Split(['+', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+            _ => [],
+        };
+        foreach (string modStr in modNames)
+        {
+            ModifierKeys flag = modStr.ToUpperInvariant() switch
             {
-                foreach (var mod in modsArray)
-                {
-                    string? modStr = mod?.GetValue<string>();
-                    if (modStr is not null)
-                    {
-                        modifiers |= modStr.ToUpperInvariant() switch
-                        {
-                            "CTRL" => ModifierKeys.Ctrl,
-                            "SHIFT" => ModifierKeys.Shift,
-                            "ALT" => ModifierKeys.Alt,
-                            _ => ModifierKeys.None,
-                        };
-                    }
-                }
+                "CTRL" or "CONTROL" => ModifierKeys.Ctrl,
+                "SHIFT" => ModifierKeys.Shift,
+                "ALT" => ModifierKeys.Alt,
+                "WIN" or "META" or "CMD" => ModifierKeys.Meta,
+                _ => ModifierKeys.None,
+            };
+            if (flag == ModifierKeys.None)
+            {
+                return ErrorJson($"Unknown modifier: {modStr}. Valid: Ctrl, Shift, Alt, Win", null);
             }
+            modifiers |= flag;
         }
 
-        // For letter keys without modifiers, also send the character
+        // The character the key types (US layout), sent after the key-down as Win32 does. Shift
+        // changes it (Shift+1 types '!'); Ctrl/Alt/Win chords type nothing printable.
         char? character = null;
-        if (parsedKey >= Key.A && parsedKey <= Key.Z && modifiers == ModifierKeys.None)
+        bool shift = modifiers == ModifierKeys.Shift;
+        bool plain = modifiers == ModifierKeys.None;
+        if (parsedKey >= Key.A && parsedKey <= Key.Z && (plain || shift))
         {
-            character = (char)('a' + (parsedKey - Key.A));
+            character = (char)((shift ? 'A' : 'a') + (parsedKey - Key.A));
         }
-        else if (parsedKey >= Key.D0 && parsedKey <= Key.D9 && modifiers == ModifierKeys.None)
+        else if (parsedKey >= Key.D0 && parsedKey <= Key.D9 && (plain || shift))
         {
-            character = (char)('0' + (parsedKey - Key.D0));
+            int digit = parsedKey - Key.D0;
+            character = shift ? ")!@#$%^&*("[digit] : (char)('0' + digit);
         }
         else if (parsedKey == Key.Space)
         {
@@ -1471,7 +1478,8 @@ internal static class McpTools
             "0" => Key.D0, "1" => Key.D1, "2" => Key.D2, "3" => Key.D3,
             "4" => Key.D4, "5" => Key.D5, "6" => Key.D6, "7" => Key.D7,
             "8" => Key.D8, "9" => Key.D9,
-            _ => Key.None,
+            // Any other Key name (Comma, Backtick, NumPad1, Quote, …).
+            _ => Enum.TryParse(name, ignoreCase: true, out Key parsed) ? parsed : Key.None,
         };
     }
 #endif
@@ -1687,6 +1695,10 @@ internal static class McpTools
         sb.Append(deviceFullHeight);
         sb.Append(",\\\"captured_frame\\\":");
         sb.Append(capturedFrame);
+        // A hidden window (tray apps) still has its last frame: say so, so the image is not read
+        // as what the user currently sees.
+        sb.Append(",\\\"window_visible\\\":");
+        sb.Append(BoolStr(App.Window.IsVisible));
         if (afterFrame > 0)
         {
             sb.Append(",\\\"after_frame_timed_out\\\":");

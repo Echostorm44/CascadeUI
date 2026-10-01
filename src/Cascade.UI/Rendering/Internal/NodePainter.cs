@@ -190,11 +190,6 @@ internal sealed class NodePainter
     // appear on top of all sibling content (e.g. dropdown popups).
     private List<Action>? deferredOverlays;
 
-    // Set once per frame in Paint(): true when any popup/overlay is open anywhere in
-    // the tree, so ScrollViews fall back to direct paint and don't occlude a popup that
-    // spills over them from another pane. See Paint() and PaintScrollView.
-    private bool frameHasOpenPopup;
-
     // Set to true during painting when any Spinner is encountered.
     // Checked by FrameOrchestrator to keep the frame loop running.
     internal static bool HasActiveSpinners { get; private set; }
@@ -305,23 +300,11 @@ internal sealed class NodePainter
         ChartAnimationTracker.BeginFrame();
         TickPerTypeFrame();
 
-        // Whether any popup/overlay is open anywhere in the tree this frame. A popup
-        // is a deferred overlay drawn last as shapes+glyphs, but a ScrollView's cached
-        // layer is composited as an image, which the image pass draws OVER those shapes
-        // — so a popup that overlaps a *different* pane's cached ScrollView (e.g. a grid
-        // date/select popup spilling over the metadata panel) is occluded. Computed once
-        // here (order-independent) so every ScrollView can fall back to direct paint
-        // while a popup is open, keeping the popup on top. The CommandPalette overlay is
-        // full-screen geometry drawn after the tree, so it hits the same occlusion — its
-        // panel background is a cached-layer image drawn over it — and must count too.
-        frameHasOpenPopup = HasOpenPopupsInSubtree(node) || CommandPalette.IsOpen;
-
         Cascade.UI.Diagnostics.DiagnosticsHub.MarkPhase("paint.recursive");
         PaintRecursive(node);
         Cascade.UI.Diagnostics.DiagnosticsHub.MarkPhase("paint.overlays");
-        // Everything drawn from here on is a popup overlay — mark the boundary so the presenter culls
-        // main-frame images (icons) that an overlay covers, not the overlays' own images.
-        ctx.MarkOverlayStart();
+        // Overlays are painted last, so they composite over the tree: the GPU presenter draws
+        // shapes, text and images in paint order.
         PaintDeferredOverlays();
         if (CommandPalette.IsOpen)
         {
@@ -509,14 +492,9 @@ internal sealed class NodePainter
         }
 
         // Overlays paint at root-level coordinates (no parent transforms active).
-        // PushOverlay/PopOverlay ensures their text is rendered on top of the
-        // main frame text, preventing underlying controls' text from showing
-        // through popup backgrounds.
         foreach (var overlay in deferredOverlays)
         {
-            ctx.PushOverlay();
             overlay();
-            ctx.PopOverlay();
         }
 
         deferredOverlays.Clear();
@@ -1214,11 +1192,9 @@ internal sealed class NodePainter
         // invisible because PaintRecursive is skipped during layer compositing — the
         // popup is never added to deferredOverlays. Force direct paint while any
         // descendant has an open popup so the popup renders on top of the content.
-        // frameHasOpenPopup extends this to a popup open anywhere in the tree: a cached
-        // layer is composited as an image that the image pass draws over the deferred
-        // popup shapes, so a popup spilling in from another pane would be occluded —
-        // direct-painting this layer while any popup is open keeps the popup on top.
-        bool hasOpenPopups = frameHasOpenPopup || HasOpenPopupsInSubtree(sv.Content);
+        // A popup from elsewhere needs nothing: the presenter composites the layer at its
+        // paint position, so popups (painted last) stay on top of it.
+        bool hasOpenPopups = HasOpenPopupsInSubtree(sv.Content);
 
         // Spinners, continuous canvases, and chart entrance animations advance every
         // frame. Freezing them inside a cached layer makes them appear broken.
@@ -4859,14 +4835,6 @@ internal sealed class NodePainter
         ctx.DrawRect(panelBounds, new ColorValue("#252525"), radius: 12f);
         ctx.DrawRect(panelBounds, stroke: new Stroke(colors.Text.Opacity(0.1f), 1f), radius: 12f);
 
-        // Push overlay so panel text renders on top and underlying DataGrid text
-        // in the panel region is cleared (OverlayBounds drives ClearTextRegions).
-        ctx.PushOverlay();
-
-        // Expand overlay bounds to the full panel area so ClearTextRegions wipes
-        // all underlying text in the panel, even when there are no results.
-        ctx.DrawRect(panelBounds, ColorValue.Transparent);
-
         // Search input area
         float searchY = panelY;
         float searchPadding = 12f;
@@ -5008,7 +4976,6 @@ internal sealed class NodePainter
 
         }
 
-        ctx.PopOverlay();
         cpScaleScope.Dispose();
     }
 
@@ -8449,6 +8416,20 @@ internal sealed class NodePainter
         new("#5D4037"), // Brown
     ];
 
+    /// <summary>
+    /// FNV-1a over the name's UTF-16 code units. string.GetHashCode is randomized per process,
+    /// so an avatar's colour changed on every launch; this keeps it the same for the same name.
+    /// </summary>
+    internal static uint StableNameHash(string name)
+    {
+        uint hash = 2166136261;
+        foreach (char c in name)
+        {
+            hash = (hash ^ c) * 16777619;
+        }
+        return hash;
+    }
+
     private void PaintAvatar(Avatar av, Rect bounds)
     {
         float size = Math.Min(bounds.Width, bounds.Height);
@@ -8479,7 +8460,7 @@ internal sealed class NodePainter
 
         // Background color based on name hash
         int colorIndex = av.Name != null
-            ? Math.Abs(av.Name.GetHashCode(StringComparison.Ordinal)) % AvatarColors.Length
+            ? (int)(StableNameHash(av.Name) % (uint)AvatarColors.Length)
             : 0;
         var bgColor = av.Name != null
             ? AvatarColors[colorIndex]

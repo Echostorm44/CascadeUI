@@ -164,6 +164,13 @@ internal static class LayoutSolver
     {
         var data = node.LayoutData;
 
+        // AutoFocus / InitialFocus: the first layout of such a node is its mount (layout only visits
+        // the live tree); the frame focuses it once layout is done.
+        if (data.FocusData is { MountFocusApplied: false } focusData && (focusData.AutoFocus || focusData.InitialFocus is not null))
+        {
+            FocusManager.NoteMountFocus(node, focusData);
+        }
+
         if (node.IsLayoutEmpty)
         {
             data.MeasuredSize = Size.Zero;

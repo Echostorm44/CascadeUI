@@ -30,6 +30,46 @@ public static class FocusManager
         }
     }
 
+    // The first AutoFocus / InitialFocus target laid out this frame; focused after layout.
+    private static Node? pendingMountFocus;
+    private static INodeRefInternal? pendingMountFocusRef;
+
+    /// <summary>
+    /// Called by layout for a node whose focus data asks for focus on mount (AutoFocus, or a focus
+    /// trap's InitialFocus). Layout only visits nodes in the live tree, so a node from a render the
+    /// reconciler discarded never takes focus. The first request in document order wins.
+    /// </summary>
+    internal static void NoteMountFocus(Node node, FocusNodeData data)
+    {
+        data.MountFocusApplied = true;
+        if (pendingMountFocus is not null || pendingMountFocusRef is not null)
+        {
+            return;
+        }
+        if (data.InitialFocus is { } target)
+        {
+            pendingMountFocusRef = target;
+        }
+        else
+        {
+            pendingMountFocus = node;
+        }
+    }
+
+    /// <summary>Focuses the node <see cref="NoteMountFocus"/> recorded during layout. Returns true if focus moved.</summary>
+    internal static bool ApplyMountFocus()
+    {
+        Node? target = pendingMountFocus ?? pendingMountFocusRef?.TargetNode;
+        pendingMountFocus = null;
+        pendingMountFocusRef = null;
+        if (target is null || ReferenceEquals(FocusedElement, target))
+        {
+            return false;
+        }
+        RequestFocus(target);
+        return true;
+    }
+
     /// <summary>Requests focus for the specified node.</summary>
     public static void RequestFocus(Node node)
     {
@@ -50,6 +90,7 @@ public static class FocusManager
         if (!ReferenceEquals(previous, node))
         {
             NotifyFocusChanged(node, true);
+            InputDispatcher.NotifyFocusMoved(previous, node);
         }
     }
 
@@ -496,6 +537,9 @@ internal sealed class FocusNodeData
     internal int TabIndexValue = global::Cascade.UI.TabIndex.Natural.Value;
     internal long RegistrationOrder;
     internal bool AutoFocus;
+
+    /// <summary>AutoFocus / InitialFocus already applied for this node (carried across re-renders).</summary>
+    internal bool MountFocusApplied;
     internal bool FocusTrap;
     internal bool FocusRingVisible = true;
     internal INodeRefInternal? InitialFocus;

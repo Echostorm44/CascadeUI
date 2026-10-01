@@ -2060,12 +2060,15 @@ internal sealed class InputDispatcher
                 CommitNumberInputEdit(prevNi);
             }
 
+            // Whether this very input already had focus (a click inside it keeps its selection anchor for
+            // Shift+click); asked before RequestFocus, which re-seeds the edit buffers on a move.
+            bool wasTextInputFocused = focusTarget is TextInput && ReferenceEquals(FocusManager.FocusedElement, focusTarget);
+
             FocusManager.RequestFocus(focusTarget);
 
             // Initialize text editing buffer when focusing a TextInput
             if (focusTarget is TextInput ti)
             {
-                bool wasTextInputFocused = textInputBuffer != null;
                 textInputBuffer = ti.Value.Value ?? string.Empty;
                 ActiveEditBuffer = textInputBuffer;
                 if (!wasTextInputFocused)
@@ -3287,6 +3290,15 @@ internal sealed class InputDispatcher
     /// under the pointer. Clears the transient focus state of a TagInput/MentionInput
     /// the focus is leaving, exactly as a click to a different control would.
     /// </summary>
+    /// <summary>
+    /// Focus moved (any cause: click, Tab, or an app calling FocusManager.RequestFocus): point the
+    /// shared edit buffers at the new control so it never shows or commits the previous one's text.
+    /// </summary>
+    internal static void NotifyFocusMoved(Node? previousFocus, Node? newFocus)
+    {
+        current?.SeedEditBuffersForFocus(previousFocus, newFocus);
+    }
+
     private void SeedEditBuffersForFocus(Node? previousFocus, Node? newFocus)
     {
         // Clear the control we are leaving so its popup/caret state does not linger.

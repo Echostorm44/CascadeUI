@@ -72,6 +72,8 @@ public sealed class NodeRef<T> : INodeRefInternal where T : Node
         return waitSource.Task;
     }
 
+    Node? INodeRefInternal.TargetNode => Node;
+
     void INodeRefInternal.SetMounted(Rect bounds)
     {
         Bounds = bounds;

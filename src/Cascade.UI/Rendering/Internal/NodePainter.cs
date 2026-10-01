@@ -8398,6 +8398,20 @@ internal sealed class NodePainter
         new("#5D4037"), // Brown
     ];
 
+    /// <summary>
+    /// FNV-1a over the name's UTF-16 code units. string.GetHashCode is randomized per process,
+    /// so an avatar's colour changed on every launch; this keeps it the same for the same name.
+    /// </summary>
+    internal static uint StableNameHash(string name)
+    {
+        uint hash = 2166136261;
+        foreach (char c in name)
+        {
+            hash = (hash ^ c) * 16777619;
+        }
+        return hash;
+    }
+
     private void PaintAvatar(Avatar av, Rect bounds)
     {
         float size = Math.Min(bounds.Width, bounds.Height);
@@ -8428,7 +8442,7 @@ internal sealed class NodePainter
 
         // Background color based on name hash
         int colorIndex = av.Name != null
-            ? Math.Abs(av.Name.GetHashCode(StringComparison.Ordinal)) % AvatarColors.Length
+            ? (int)(StableNameHash(av.Name) % (uint)AvatarColors.Length)
             : 0;
         var bgColor = av.Name != null
             ? AvatarColors[colorIndex]

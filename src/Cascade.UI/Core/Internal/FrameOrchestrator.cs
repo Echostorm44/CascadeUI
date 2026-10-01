@@ -177,6 +177,7 @@ internal sealed class FrameOrchestrator : IDisposable
 
         // Initial layout after first render
         PerformLayout();
+        FocusManager.ApplyMountFocus();
 
         // Request a frame so the first paint happens
         OnFrameRequested();
@@ -251,6 +252,7 @@ internal sealed class FrameOrchestrator : IDisposable
         DiagnosticsHub.BeginLayout();
         PerformLayout();
         DiagnosticsHub.EndLayout();
+        FocusManager.ApplyMountFocus();
 #if DEBUG
         float layoutTimeMs = (float)Stopwatch.GetElapsedTime(layoutStart).TotalMilliseconds;
 #endif

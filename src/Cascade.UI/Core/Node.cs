@@ -172,4 +172,7 @@ internal interface INodeRefInternal
 {
     void SetMounted(Rect bounds);
     void ClearMounted();
+
+    /// <summary>The referenced node, or null before it mounts.</summary>
+    Node? TargetNode { get; }
 }

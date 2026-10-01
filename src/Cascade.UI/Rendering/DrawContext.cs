@@ -645,7 +645,8 @@ public sealed class DrawContext
         TextAlignment alignment = TextAlignment.Start,
         TextOverflow overflow = TextOverflow.Clip,
         float maxWidth = float.PositiveInfinity,
-        int maxLines = 0)
+        int maxLines = 0,
+        bool noWrap = false)
     {
         if (backend is null || string.IsNullOrEmpty(text))
         {
@@ -666,6 +667,7 @@ public sealed class DrawContext
             Alignment = alignment,
             Overflow = overflow,
             MaxLines = maxLines,
+            NoWrap = noWrap,
         };
 
         var layout = TextLayoutEngine.Layout(text, options);

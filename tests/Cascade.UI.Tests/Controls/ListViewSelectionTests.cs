@@ -98,4 +98,14 @@ public class ListViewSelectionTests
     {
         dispatcher.HandleKeyEvent(new NativeKeyEvent { Key = key, Type = NativeKeyEventType.KeyDown, Modifiers = ModifierKeys.None });
     }
+
+    [Test]
+    public async Task Plain_DropsCardChrome_DefaultKeepsIt()
+    {
+        IListViewNode card = new ListView<string>(["a"], s => new Label(s));
+        IListViewNode plain = new ListView<string>(["a"], s => new Label(s)).Plain();
+
+        await Assert.That(card.IsPlain).IsFalse();
+        await Assert.That(plain.IsPlain).IsTrue();
+    }
 }

@@ -38,6 +38,12 @@ public readonly struct TextLayoutOptions : IEquatable<TextLayoutOptions>
     /// <summary>Line height as a multiplier of the font's natural line height.</summary>
     public float LineHeightMultiplier { get; init; }
 
+    /// <summary>
+    /// Break lines only at hard line breaks, never to fit <see cref="MaxWidth"/>. Wider lines overflow
+    /// (clipped by the caller) or, with <see cref="TextOverflow.Ellipsis"/>, are cut at a character.
+    /// </summary>
+    public bool NoWrap { get; init; }
+
     public TextLayoutOptions()
     {
         FontPath = null!; // required; initializer must set.
@@ -59,6 +65,7 @@ public readonly struct TextLayoutOptions : IEquatable<TextLayoutOptions>
             && Alignment == other.Alignment
             && Overflow == other.Overflow
             && LineHeightMultiplier == other.LineHeightMultiplier
+            && NoWrap == other.NoWrap
             && string.Equals(FontPath, other.FontPath, StringComparison.Ordinal);
     }
 
@@ -78,6 +85,7 @@ public readonly struct TextLayoutOptions : IEquatable<TextLayoutOptions>
         hc.Add((int)Alignment);
         hc.Add((int)Overflow);
         hc.Add(LineHeightMultiplier);
+        hc.Add(NoWrap);
         return hc.ToHashCode();
     }
 
@@ -211,7 +219,7 @@ public static class TextLayoutEngine
         // Break into lines
         var lines = BreakIntoLines(
             text, shaped.Glyphs, breaks, xAtOffset,
-            options.MaxWidth, lineHeight, ascent, shaped.TotalAdvance);
+            options.NoWrap ? float.PositiveInfinity : options.MaxWidth, lineHeight, ascent, shaped.TotalAdvance);
 
         // Truncate to max lines
         if (options.MaxLines > 0 && lines.Count > options.MaxLines)
@@ -227,9 +235,10 @@ public static class TextLayoutEngine
         }
 
         // Single-line width overflow: truncate with ellipsis even when line count is within limit
-        if (options.Overflow == TextOverflow.Ellipsis && lines.Count > 0 && options.MaxLines > 0)
+        // (a no-wrap layout counts: its last line can be as wide as the whole text).
+        if (options.Overflow == TextOverflow.Ellipsis && lines.Count > 0 && (options.MaxLines > 0 || options.NoWrap))
         {
-            int lastKeptIndex = Math.Min(lines.Count, options.MaxLines) - 1;
+            int lastKeptIndex = (options.MaxLines > 0 ? Math.Min(lines.Count, options.MaxLines) : lines.Count) - 1;
             if (!float.IsPositiveInfinity(options.MaxWidth) && lines[lastKeptIndex].Width > options.MaxWidth)
             {
                 TruncateWithEllipsis(lines, options, shaper, xAtOffset, lineHeight, ascent);
@@ -450,7 +459,7 @@ public static class TextLayoutEngine
         TextLayoutOptions options, HarfBuzzShaper primaryShaper)
     {
         int len = para.Length;
-        float maxWidth = options.MaxWidth;
+        float maxWidth = options.NoWrap ? float.PositiveInfinity : options.MaxWidth;
         if (float.IsPositiveInfinity(maxWidth) || maxWidth <= 0)
         {
             return new List<(int, int)> { (0, len) };
@@ -1022,11 +1031,13 @@ public static class TextLayoutEngine
 
         float lineStartX = textStart < xAtOffset.Length ? xAtOffset[textStart] : 0;
 
-        for (int i = textStart; i < textEnd && i < xAtOffset.Length; i++)
+        // xAtOffset[i] is where character i starts, i.e. the width of [textStart, i). The first i
+        // past the target means [textStart, i) is already too wide, so keep [textStart, i - 1).
+        for (int i = textStart + 1; i <= textEnd && i < xAtOffset.Length; i++)
         {
             if (xAtOffset[i] - lineStartX > targetWidth)
             {
-                truncateAt = i;
+                truncateAt = i - 1;
                 break;
             }
         }

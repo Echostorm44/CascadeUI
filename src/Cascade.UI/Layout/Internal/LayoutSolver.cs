@@ -612,6 +612,8 @@ internal static class LayoutSolver
                     ? float.PositiveInfinity
                     : constraints.MaxWidth,
                 MaxLines = lbl.MaxLineCount ?? 0,
+                Overflow = lbl.OverflowMode,
+                NoWrap = lbl.WrapMode == TextWrap.NoWrap,
             };
             var result = TextLayoutEngine.Layout(text, options);
             textSize = result.BoundingBox;

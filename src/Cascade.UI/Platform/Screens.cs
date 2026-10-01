@@ -19,6 +19,7 @@ public sealed record ScreenInfo(Rect Bounds, Rect WorkArea, float DpiScale, bool
 /// Monitors and the mouse cursor, via <see cref="App.Screens"/>. Windows only for now; on other
 /// platforms the list is empty and the cursor is at the origin.
 /// </summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822", Justification = "Instance API reached through App.Screens, like App.Hotkeys.")]
 public sealed class AppScreens
 {
     internal AppScreens()

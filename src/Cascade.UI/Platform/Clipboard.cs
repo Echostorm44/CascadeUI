@@ -10,6 +10,26 @@ public static class Clipboard
 {
     private static int monitoringRefCount;
 
+    // The window clipboard notifications are delivered to; StartMonitoring before App.Run created it
+    // used to count the request but never register the listener.
+    private static nint listenerWindow;
+    private static nint attachedWindow;
+
+    // Windows can post several WM_CLIPBOARDUPDATE for one change (measured: two for a single
+    // open/empty/set/close); they carry the same sequence number and are reported once.
+    private static uint lastNotifiedSequence;
+
+    /// <summary>Called by App once the main window exists; registers a listener requested earlier.</summary>
+    internal static void AttachWindow(nint hwnd)
+    {
+        attachedWindow = hwnd;
+        if (monitoringRefCount > 0 && listenerWindow == 0 && hwnd != 0)
+        {
+            Win32Clipboard.StartMonitoring(hwnd);
+            listenerWindow = hwnd;
+        }
+    }
+
     // ── Reading ──────────────────────────────────────────────────────
 
     /// <summary>
@@ -46,27 +66,25 @@ public static class Clipboard
     // ── Writing ─────────────────────────────────────────────────────
 
     /// <summary>
-    /// Writes multiple formats to the clipboard simultaneously.
-    /// All formats are written in a single open/close cycle so receiving
-    /// apps can choose the richest format they support.
+    /// Writes every format set on <paramref name="content"/> (Text, Html, Rtf, Image, Files) in a
+    /// single open/close, so receiving apps can choose the richest format they support. Returns
+    /// false when the clipboard could not be opened (another app holding it).
     /// </summary>
     /// <param name="content">The content to write, with one or more format properties set.</param>
-    public static Task WriteAsync(ClipboardContent content)
+    public static Task<bool> WriteAsync(ClipboardContent content)
     {
+        ArgumentNullException.ThrowIfNull(content);
         if (OperatingSystem.IsWindows())
         {
-            if (content.Html is not null)
-            {
-                Win32Clipboard.SetHtml(content.Html, content.Text);
-            }
-            else if (content.Text is not null)
-            {
-                Win32Clipboard.SetText(content.Text);
-            }
+            return Task.FromResult(Win32Clipboard.Write(content.Text, content.Html, content.Rtf, content.Image, content.Files));
         }
-        else if (OperatingSystem.IsMacOS())
+        if (OperatingSystem.IsMacOS())
         {
-            if (content.Html is not null)
+            if (content.Files is not null)
+            {
+                CocoaClipboard.SetFiles(content.Files);
+            }
+            else if (content.Html is not null)
             {
                 CocoaClipboard.SetHtml(content.Html, content.Text);
             }
@@ -74,10 +92,15 @@ public static class Clipboard
             {
                 CocoaClipboard.SetText(content.Text);
             }
+            return Task.FromResult(true);
         }
-        else if (OperatingSystem.IsLinux())
+        if (OperatingSystem.IsLinux())
         {
-            if (content.Html is not null)
+            if (content.Files is not null)
+            {
+                LinuxClipboard.SetFiles(content.Files);
+            }
+            else if (content.Html is not null)
             {
                 LinuxClipboard.SetHtml(content.Html, content.Text);
             }
@@ -85,143 +108,86 @@ public static class Clipboard
             {
                 LinuxClipboard.SetText(content.Text);
             }
+            return Task.FromResult(true);
         }
-        else
-        {
-            throw new PlatformNotSupportedException("Clipboard is only supported on Windows, macOS, and Linux.");
-        }
-
-        return Task.CompletedTask;
+        throw new PlatformNotSupportedException("Clipboard is only supported on Windows, macOS, and Linux.");
     }
 
-    /// <summary>Writes plain text to the clipboard.</summary>
+    /// <summary>Writes plain text to the clipboard. Returns false when it could not be opened.</summary>
     /// <param name="text">The text to write.</param>
-    public static Task WriteTextAsync(string text)
-    {
-        if (OperatingSystem.IsWindows())
-        {
-            Win32Clipboard.SetText(text);
-        }
-        else if (OperatingSystem.IsMacOS())
-        {
-            CocoaClipboard.SetText(text);
-        }
-        else if (OperatingSystem.IsLinux())
-        {
-            LinuxClipboard.SetText(text);
-        }
-        else
-        {
-            throw new PlatformNotSupportedException("Clipboard is only supported on Windows, macOS, and Linux.");
-        }
+    public static Task<bool> WriteTextAsync(string text) => WriteAsync(new ClipboardContent { Text = text });
 
-        return Task.CompletedTask;
-    }
-
-    /// <summary>Writes image data to the clipboard.</summary>
+    /// <summary>
+    /// Writes an image (RGBA pixels): CF_DIBV5 with alpha plus PNG on Windows. Returns false when the
+    /// clipboard could not be opened.
+    /// </summary>
     /// <param name="image">The image data to write (RGBA pixels).</param>
-    public static Task WriteImageAsync(ImageData image)
+    public static Task<bool> WriteImageAsync(ImageData image)
     {
         ArgumentNullException.ThrowIfNull(image);
-
-        if (OperatingSystem.IsWindows())
-        {
-            Win32Clipboard.SetImage(image);
-        }
-        else
+        if (!OperatingSystem.IsWindows())
         {
             throw new PlatformNotSupportedException("Image clipboard write is only supported on Windows.");
         }
-
-        return Task.CompletedTask;
+        return WriteAsync(new ClipboardContent { Image = image });
     }
 
     /// <summary>
     /// Writes file paths to the clipboard (copy-to-clipboard, paste into file manager).
     /// </summary>
     /// <param name="filePaths">Absolute paths of the files to place on the clipboard.</param>
-    public static Task WriteFilesAsync(IReadOnlyList<string> filePaths)
-    {
-        if (OperatingSystem.IsWindows())
-        {
-            Win32Clipboard.SetFiles(filePaths);
-        }
-        else if (OperatingSystem.IsMacOS())
-        {
-            CocoaClipboard.SetFiles(filePaths);
-        }
-        else if (OperatingSystem.IsLinux())
-        {
-            LinuxClipboard.SetFiles(filePaths);
-        }
-        else
-        {
-            throw new PlatformNotSupportedException("Clipboard is only supported on Windows, macOS, and Linux.");
-        }
+    public static Task<bool> WriteFilesAsync(IReadOnlyList<string> filePaths) => WriteAsync(new ClipboardContent { Files = filePaths });
 
-        return Task.CompletedTask;
+    /// <summary>
+    /// Writes every format captured in <paramref name="snapshot"/> back in one open/close.
+    /// </summary>
+    /// <param name="snapshot">The snapshot to restore to the clipboard.</param>
+    public static Task<bool> WriteSnapshotAsync(ClipboardSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        return WriteAsync(new ClipboardContent
+        {
+            Text = snapshot.Text,
+            Html = snapshot.Html,
+            Rtf = snapshot.Rtf,
+            Image = snapshot.Image,
+            Files = snapshot.Files,
+        });
+    }
+
+    // ── Raw formats (Windows) ────────────────────────────────────────
+
+    /// <summary>
+    /// Copies every format currently on the clipboard, byte for byte, in one open — the capture a
+    /// clipboard history needs to paste exactly what was copied. Formats Windows synthesizes from
+    /// another (CF_TEXT from Unicode text, CF_DIB from CF_DIBV5, CF_BITMAP) and GDI-handle formats
+    /// are skipped; enhanced metafiles are kept. <paramref name="includeFormat"/> receives each
+    /// format's name before its data is requested, so delayed-rendered formats you do not want
+    /// (e.g. Explorer's "FileContents") are never rendered. Returns null when the clipboard could
+    /// not be opened. Windows only.
+    /// </summary>
+    public static ClipboardRawSnapshot? CaptureRaw(Func<string, bool>? includeFormat = null)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException("Raw clipboard capture is only supported on Windows.");
+        }
+        return Win32Clipboard.CaptureRaw(includeFormat);
     }
 
     /// <summary>
-    /// Writes all formats from a previously captured snapshot back to the clipboard,
-    /// preserving the full fidelity of the original content.
+    /// Puts every format of <paramref name="snapshot"/> on the clipboard in one open. Returns false
+    /// when the clipboard could not be opened or a format could not be set. Windows only.
     /// </summary>
-    /// <param name="snapshot">The snapshot to restore to the clipboard.</param>
-    public static Task WriteSnapshotAsync(ClipboardSnapshot snapshot)
+    public static bool WriteRaw(ClipboardRawSnapshot snapshot)
     {
-        if (OperatingSystem.IsWindows())
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (!OperatingSystem.IsWindows())
         {
-            if (snapshot.Files is not null)
-            {
-                Win32Clipboard.SetFiles(snapshot.Files);
-            }
-            else if (snapshot.Html is not null)
-            {
-                Win32Clipboard.SetHtml(snapshot.Html, snapshot.Text);
-            }
-            else if (snapshot.Text is not null)
-            {
-                Win32Clipboard.SetText(snapshot.Text);
-            }
+            throw new PlatformNotSupportedException("Raw clipboard write is only supported on Windows.");
         }
-        else if (OperatingSystem.IsMacOS())
-        {
-            if (snapshot.Files is not null)
-            {
-                CocoaClipboard.SetFiles(snapshot.Files);
-            }
-            else if (snapshot.Html is not null)
-            {
-                CocoaClipboard.SetHtml(snapshot.Html, snapshot.Text);
-            }
-            else if (snapshot.Text is not null)
-            {
-                CocoaClipboard.SetText(snapshot.Text);
-            }
-        }
-        else if (OperatingSystem.IsLinux())
-        {
-            if (snapshot.Files is not null)
-            {
-                LinuxClipboard.SetFiles(snapshot.Files);
-            }
-            else if (snapshot.Html is not null)
-            {
-                LinuxClipboard.SetHtml(snapshot.Html, snapshot.Text);
-            }
-            else if (snapshot.Text is not null)
-            {
-                LinuxClipboard.SetText(snapshot.Text);
-            }
-        }
-        else
-        {
-            throw new PlatformNotSupportedException("Clipboard is only supported on Windows, macOS, and Linux.");
-        }
-
-        return Task.CompletedTask;
+        return Win32Clipboard.WriteRaw(snapshot);
     }
-
     // ── Monitoring ───────────────────────────────────────────────────
 
     /// <summary>
@@ -242,10 +208,11 @@ public static class Clipboard
         {
             if (System.Threading.Interlocked.Increment(ref monitoringRefCount) == 1)
             {
-                nint hwnd = App.nativeWindow?.Handle ?? 0;
+                nint hwnd = App.nativeWindow?.Handle ?? attachedWindow;
                 if (hwnd != 0)
                 {
                     Win32Clipboard.StartMonitoring(hwnd);
+                    listenerWindow = hwnd;
                 }
             }
         }
@@ -273,13 +240,10 @@ public static class Clipboard
     {
         if (OperatingSystem.IsWindows())
         {
-            if (System.Threading.Interlocked.Decrement(ref monitoringRefCount) == 0)
+            if (System.Threading.Interlocked.Decrement(ref monitoringRefCount) == 0 && listenerWindow != 0)
             {
-                nint hwnd = App.nativeWindow?.Handle ?? 0;
-                if (hwnd != 0)
-                {
-                    Win32Clipboard.StopMonitoring(hwnd);
-                }
+                Win32Clipboard.StopMonitoring(listenerWindow);
+                listenerWindow = 0;
             }
         }
         else if (OperatingSystem.IsMacOS())
@@ -312,12 +276,24 @@ public static class Clipboard
 
         ClipboardContent content;
         uint sequenceNumber = 0;
+        var source = ClipboardSource.OtherApp;
+        bool excluded = false;
+        ClipboardSourceApp? sourceApp = null;
 
         if (OperatingSystem.IsWindows())
         {
             ClipboardAvailability avail = Win32Clipboard.GetAvailableFormats();
             content = ClipboardContent.FromWin32Availability(avail);
             sequenceNumber = Win32Clipboard.GetSequenceNumber();
+            if (sequenceNumber == lastNotifiedSequence)
+            {
+                return;
+            }
+            lastNotifiedSequence = sequenceNumber;
+            source = Win32Clipboard.IsOwnChange(sequenceNumber) ? ClipboardSource.ThisApp : ClipboardSource.OtherApp;
+            excluded = Win32Clipboard.IsExcludedFromHistory();
+            uint processId = Win32Clipboard.GetSourceProcessId();
+            sourceApp = processId != 0 ? new ClipboardSourceApp(processId) : null;
         }
         else if (OperatingSystem.IsMacOS())
         {
@@ -334,7 +310,11 @@ public static class Clipboard
             return;
         }
 
-        var args = new ClipboardChangedEventArgs(content, sequenceNumber, ClipboardSource.OtherApp);
+        var args = new ClipboardChangedEventArgs(content, sequenceNumber, source)
+        {
+            IsExcludedFromHistory = excluded,
+            SourceApp = sourceApp,
+        };
         handler(args);
     }
 
@@ -395,6 +375,19 @@ public sealed class ClipboardChangedEventArgs : EventArgs
     /// or from another application.
     /// </summary>
     public ClipboardSource Source { get; init; }
+
+    /// <summary>
+    /// True when the content asks not to be recorded — a password manager setting
+    /// ExcludeClipboardContentFromMonitorProcessing, Clipboard Viewer Ignore, or
+    /// CanIncludeInClipboardHistory = 0. Clipboard histories must skip it. Windows only.
+    /// </summary>
+    public bool IsExcludedFromHistory { get; init; }
+
+    /// <summary>
+    /// The app that put the content on the clipboard (the clipboard owner, or the foreground app when
+    /// the copier set no owner). Null when unknown. Windows only.
+    /// </summary>
+    public ClipboardSourceApp? SourceApp { get; init; }
 }
 
 /// <summary>

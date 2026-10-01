@@ -38,7 +38,7 @@ public class Win32ClipboardTests
     }
 
     [Test]
-    public async Task ClipboardContent_HasRtf_AlwaysFalse()
+    public async Task ClipboardContent_HasRtf_FalseWhenRtfNotAvailable()
     {
         ClipboardAvailability avail = new() { HasText = true, HasHtml = true };
         ClipboardContent content = ClipboardContent.FromWin32Availability(avail);
@@ -101,6 +101,15 @@ public class Win32ClipboardTests
         await Assert.That(content.AvailableFormats).Contains(ClipboardFormat.Text);
         await Assert.That(content.AvailableFormats).Contains(ClipboardFormat.Html);
         await Assert.That(content.AvailableFormats).Contains(ClipboardFormat.Files);
+    }
+
+    [Test]
+    public async Task ClipboardContent_AvailableFormats_ContainsRtfWhenAvailable()
+    {
+        ClipboardAvailability avail = new() { HasText = true, HasRtf = true };
+        ClipboardContent content = ClipboardContent.FromWin32Availability(avail);
+        await Assert.That(content.HasRtf).IsTrue();
+        await Assert.That(content.AvailableFormats).Contains(ClipboardFormat.Rtf);
     }
 
     [Test]

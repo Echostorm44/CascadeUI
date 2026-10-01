@@ -62,7 +62,7 @@ internal static unsafe class Win32TaskbarProgress
         }
 
         // The UI thread may not have initialised COM yet; an already-initialised apartment is fine.
-        Win32.CoInitializeEx(0, Win32.COINIT_APARTMENTTHREADED);
+        _ = Win32.CoInitializeEx(0, Win32.COINIT_APARTMENTTHREADED); // S_FALSE / RPC_E_CHANGED_MODE are fine
         if (Win32.CoCreateInstance(ClsidTaskbarList, 0, Win32.CLSCTX_INPROC_SERVER, IidTaskbarList3, out nint instance) < 0 || instance == 0)
         {
             unavailable = true;

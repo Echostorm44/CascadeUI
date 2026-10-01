@@ -34,27 +34,37 @@ internal static unsafe class Win32FileIcon
             return null;
         }
 
-        nint bitmap = 0;
         try
         {
-            var vtable = *(void***)factory;
-            var requested = new NativeSize { Width = size, Height = size };
-            int hr = ((delegate* unmanaged[Stdcall]<void*, NativeSize, int, nint*, int>)vtable[GetImageSlot])(
-                (void*)factory, requested, SiigbfIconOnly, &bitmap);
-            if (hr < 0 || bitmap == 0)
+            nint bitmap = GetImage(factory, size);
+            if (bitmap == 0)
             {
                 return null;
             }
-            return ReadBitmap(bitmap);
-        }
-        finally
-        {
-            if (bitmap != 0)
+            try
+            {
+                return ReadBitmap(bitmap);
+            }
+            finally
             {
                 Win32.DeleteObject(bitmap);
             }
+        }
+        finally
+        {
             ((delegate* unmanaged[Stdcall]<void*, uint>)(*(void***)factory)[ReleaseSlot])((void*)factory);
         }
+    }
+
+    // IShellItemImageFactory::GetImage; the caller owns the returned HBITMAP (0 on failure).
+    private static nint GetImage(nint factory, int size)
+    {
+        nint bitmap = 0;
+        var vtable = *(void***)factory;
+        var requested = new NativeSize { Width = size, Height = size };
+        int hr = ((delegate* unmanaged[Stdcall]<void*, NativeSize, int, nint*, int>)vtable[GetImageSlot])(
+            (void*)factory, requested, SiigbfIconOnly, &bitmap);
+        return hr < 0 ? 0 : bitmap;
     }
 
     // The factory returns a 32-bpp DIB section. Its alpha is premultiplied (PARGB) when every colour

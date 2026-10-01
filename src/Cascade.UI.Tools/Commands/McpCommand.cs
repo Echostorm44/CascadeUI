@@ -72,6 +72,15 @@ internal static class McpCommand
             return UnknownSubcommand(subcommand);
         }
 
+        // Every verb, custom-parsed or not, accepts only the options its spec declares (and --app);
+        // a typo used to be dropped silently (a mistyped --out wrote the screenshot elsewhere).
+        if (FindUnknownOption(binding.Verb, rest) is { } unknown)
+        {
+            string valid = string.Join(", ", binding.Verb.Options.Select(o => o.OptionName).Append("--app"));
+            Console.Error.WriteLine($"Unknown option '{unknown}' for '{subcommand}'. Valid options: {valid}.");
+            return 1;
+        }
+
         return subcommand switch
         {
             "screenshot" => ExecuteScreenshot(rest),
@@ -427,7 +436,7 @@ internal static class McpCommand
     {
         if (args.Length == 0)
         {
-            Console.Error.WriteLine("Usage: cascade mcp type <text> | type --key <name> [--ctrl] [--shift] [--alt]");
+            Console.Error.WriteLine("Usage: cascade mcp type <text> | type --key <name> [--ctrl] [--shift] [--alt] [--win]");
             return 1;
         }
 
@@ -449,6 +458,10 @@ internal static class McpCommand
             if (HasFlag(args, "--alt"))
             {
                 modNames.Add("ALT");
+            }
+            if (HasFlag(args, "--win"))
+            {
+                modNames.Add("WIN");
             }
             if (modNames.Count > 0)
             {
@@ -569,7 +582,7 @@ internal static class McpCommand
         bool disabled = args.Contains("--disabled");
         bool focused = args.Contains("--focused");
         bool visible = args.Contains("--visible");
-        bool hasFilter = disabled || focused || visible;
+        bool hasFilter = disabled || focused || visible || GetOption(args, "--source-file") is not null;
 
         if (query is null && !hasFilter)
         {
@@ -600,6 +613,10 @@ internal static class McpCommand
         if (visible)
         {
             arguments["visible"] = true;
+        }
+        if (GetOption(args, "--source-file") is { } sourceFile)
+        {
+            arguments["source_file"] = sourceFile;
         }
 
         return CallToolAndPrint(args, "cascade_find_nodes", arguments);
@@ -741,6 +758,42 @@ internal static class McpCommand
     }
 
     // ── Helpers ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// The first option in <paramref name="args"/> that <paramref name="spec"/> does not declare
+    /// (--app is always allowed), or null. Values of declared options are skipped, negative numbers
+    /// are values, and a bare "--" ends the options.
+    /// </summary>
+    internal static string? FindUnknownOption(McpCliVerbSpec spec, string[] args)
+    {
+        for (int i = 0; i < args.Length; i++)
+        {
+            string arg = args[i];
+            if (arg == "--")
+            {
+                return null;
+            }
+            if (!arg.StartsWith('-') || double.TryParse(arg, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
+            {
+                continue;
+            }
+            if (arg == "--app")
+            {
+                i++;
+                continue;
+            }
+            CliOptionMapping? mapping = FindOptionMapping(spec.Options, arg);
+            if (mapping is null)
+            {
+                return arg;
+            }
+            if (mapping.Kind != CliValueKind.Boolean)
+            {
+                i++;
+            }
+        }
+        return null;
+    }
 
     private static CliOptionMapping? FindOptionMapping(IReadOnlyList<CliOptionMapping> options, string optionName)
     {

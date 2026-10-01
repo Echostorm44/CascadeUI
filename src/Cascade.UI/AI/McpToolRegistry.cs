@@ -467,7 +467,10 @@ internal static class McpToolRegistry
                     Options:
                     [
                         new CliOptionMapping("--key", "key", CliValueKind.String),
-                        new CliOptionMapping("--modifiers", "modifiers", CliValueKind.String),
+                        new CliOptionMapping("--ctrl", "ctrl", CliValueKind.Boolean),
+                        new CliOptionMapping("--shift", "shift", CliValueKind.Boolean),
+                        new CliOptionMapping("--alt", "alt", CliValueKind.Boolean),
+                        new CliOptionMapping("--win", "win", CliValueKind.Boolean),
                         new CliOptionMapping("--wait-frames", "wait_frames", CliValueKind.Int),
                     ]),
             ]),

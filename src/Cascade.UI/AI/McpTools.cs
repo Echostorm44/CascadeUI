@@ -1364,15 +1364,10 @@ internal static class McpTools
             return ErrorJson($"Unknown key name: {keyName}. Valid keys: Enter, Tab, Escape, Backspace, Delete, Space, ArrowLeft, ArrowRight, ArrowUp, ArrowDown, Home, End, PageUp, PageDown, F1-F12, A-Z, 0-9, or any Cascade.UI.Key name (Comma, Backtick, NumPad1, …)", null);
         }
 
-        // modifiers: a JSON array (["Ctrl","Shift"]) or, from the CLI, one string ("Ctrl+Shift" / "Ctrl,Shift").
         ModifierKeys modifiers = ModifierKeys.None;
-        var modsNode = parameters.ContainsKey("modifiers") ? parameters["modifiers"] : null;
-        IEnumerable<string> modNames = modsNode switch
-        {
-            JsonArray array => array.Select(m => m?.GetValue<string>() ?? ""),
-            JsonValue value when value.TryGetValue(out string? joined) => joined.Split(['+', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
-            _ => [],
-        };
+        IEnumerable<string> modNames = parameters.ContainsKey("modifiers") && parameters["modifiers"] is JsonArray array
+            ? array.Select(m => m?.GetValue<string>() ?? "")
+            : [];
         foreach (string modStr in modNames)
         {
             ModifierKeys flag = modStr.ToUpperInvariant() switch
@@ -1407,6 +1402,18 @@ internal static class McpTools
         else if (parsedKey == Key.Space)
         {
             character = ' ';
+        }
+        else if (modifiers is ModifierKeys.None or ModifierKeys.Shift)
+        {
+            // Keys Windows also reports as a character message (WM_CHAR), which text fields edit on.
+            character = parsedKey switch
+            {
+                Key.Backspace => '\b',
+                Key.Enter or Key.NumPadEnter => '\r',
+                Key.Tab => '\t',
+                Key.Escape => (char)27,
+                _ => null,
+            };
         }
 
         bool success = false;

@@ -241,6 +241,24 @@ internal sealed class EtchBackendProvider : IDisposable
         _etchGpuPresenter?.Resize(width, height);
     }
 
+    /// <summary>
+    /// The window is hidden: shrink the swapchain and its framebuffer copy to 1×1 so a tray app
+    /// does not hold ~35 MB of surface memory all day. Nothing is presented while hidden.
+    /// </summary>
+    public void SuspendSurface()
+    {
+        _etchGpuPresenter?.Resize(1, 1);
+    }
+
+    /// <summary>The window is visible again: restore the surface to the window size.</summary>
+    public void ResumeSurface()
+    {
+        if (_width > 0 && _height > 0)
+        {
+            _etchGpuPresenter?.Resize(_width, _height);
+        }
+    }
+
     public (ulong frameHandle, uint width, uint height) BeginFrame(uint width, uint height)
     {
         _width = width;

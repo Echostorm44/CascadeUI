@@ -233,12 +233,23 @@ public static class App
             cancelFrame:  () => frameClock.Stop());
         orchestrator.ScheduleWake = frameClock.WakeAt;
         orchestrator.CancelWake = frameClock.CancelWake;
-        window.VisibilityChanged = visible => orchestrator.SetSuspended(!visible);
 
         // Wire the GPU backend. Etch is the default renderer — a windowed app always
         // needs one, and forgetting to opt in used to open a blank, non-rendering
         // window. config.UseEtch() is therefore optional (kept for back-compat).
         var gpu = config.BackendProvider ?? new EtchBackendProvider();
+        window.VisibilityChanged = visible =>
+        {
+            if (visible)
+            {
+                gpu.ResumeSurface();
+            }
+            else
+            {
+                gpu.SuspendSurface();
+            }
+            orchestrator.SetSuspended(!visible);
+        };
         gpu.GpuPreference = config.Gpu;
         uint pixelWidth = 0;
         uint pixelHeight = 0;
@@ -399,6 +410,7 @@ public static class App
             // The window exists (hotkeys, tray and clipboard monitoring need it) but stays hidden,
             // and renders nothing until it is first shown (no WM_SHOWWINDOW arrives before then).
             orchestrator.SetSuspended(true);
+            gpu.SuspendSurface();
         }
         else if (config.StartMinimized)
         {

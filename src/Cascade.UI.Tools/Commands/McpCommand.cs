@@ -628,7 +628,16 @@ internal static class McpCommand
     /// </summary>
     private static int ExecuteGenericVerb(McpCliVerbBinding binding, string[] args)
     {
-        McpCliVerbSpec spec = binding.Verb;
+        JsonObject? arguments = ParseVerbArguments(binding.Verb, args, Console.Error);
+        return arguments is null ? 1 : CallToolAndPrint(args, binding.Entry.Name, arguments);
+    }
+
+    /// <summary>
+    /// The tool arguments for a verb's command line, or null (after writing why to
+    /// <paramref name="error"/>) for a bad value, a missing value, or an unknown option.
+    /// </summary>
+    internal static JsonObject? ParseVerbArguments(McpCliVerbSpec spec, string[] args, TextWriter error)
+    {
         JsonObject arguments = new();
 
         // Add constant arguments first
@@ -664,8 +673,8 @@ internal static class McpCommand
 
             if (!TryParseValue(arg, positional.Kind, out JsonNode? parsed))
             {
-                Console.Error.WriteLine($"Invalid value '{arg}' for {positional.ArgumentProperty}.");
-                return 1;
+                error.WriteLine($"Invalid value '{arg}' for {positional.ArgumentProperty}.");
+                return null;
             }
 
             arguments[positional.ArgumentProperty] = parsed;
@@ -680,12 +689,18 @@ internal static class McpCommand
             CliOptionMapping? mapping = FindOptionMapping(spec.Options, arg);
             if (mapping is null)
             {
-                // Unknown option — skip (may be --app, which is handled by CallToolAndPrint)
+                // --app is handled by CallToolAndPrint. Anything else is a mistake to report, not
+                // skip: a mistyped --out used to be ignored and the screenshot written elsewhere.
                 if (arg is "--app" && i + 1 < args.Length)
                 {
                     i++;
+                    continue;
                 }
-                continue;
+                string valid = string.Join(", ", spec.Options.Select(o => o.OptionName).Append("--app"));
+                error.WriteLine(arg.StartsWith('-')
+                    ? $"Unknown option '{arg}' for '{spec.Verb}'. Valid options: {valid}."
+                    : $"Unexpected argument '{arg}' for '{spec.Verb}'. Valid options: {valid}.");
+                return null;
             }
 
             if (mapping.Kind == CliValueKind.Boolean)
@@ -696,15 +711,15 @@ internal static class McpCommand
 
             if (i + 1 >= args.Length)
             {
-                Console.Error.WriteLine($"Option {mapping.OptionName} requires a value.");
-                return 1;
+                error.WriteLine($"Option {mapping.OptionName} requires a value.");
+                return null;
             }
 
             string raw = args[++i];
             if (!TryParseValue(raw, mapping.Kind, out JsonNode? parsed))
             {
-                Console.Error.WriteLine($"Invalid value '{raw}' for {mapping.OptionName}.");
-                return 1;
+                error.WriteLine($"Invalid value '{raw}' for {mapping.OptionName}.");
+                return null;
             }
 
             arguments[mapping.ArgumentProperty] = parsed;
@@ -722,7 +737,7 @@ internal static class McpCommand
             }
         }
 
-        return CallToolAndPrint(args, binding.Entry.Name, arguments);
+        return arguments;
     }
 
     // ── Helpers ──────────────────────────────────────────────────

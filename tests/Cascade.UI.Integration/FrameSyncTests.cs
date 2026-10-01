@@ -104,6 +104,7 @@ public class FrameSyncTests
 
             JsonObject metadata = ParseJson(screenshot.StdOut[screenshot.StdOut.IndexOf('{', StringComparison.Ordinal)..]);
             await Assert.That(metadata["captured_frame"]!.GetValue<long>()).IsGreaterThanOrEqualTo(presentedFrame);
+            await Assert.That(metadata["window_visible"]!.GetValue<bool>()).IsTrue();
             await Assert.That(metadata["after_frame_timed_out"]!.GetValue<bool>()).IsFalse();
 
             byte[] image = await File.ReadAllBytesAsync(imagePath);

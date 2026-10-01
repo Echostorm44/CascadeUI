@@ -824,6 +824,51 @@ public class InputDispatcherTests
     }
 
     [Test]
+    public async Task FocusedField_AdoptsValueTheAppSetsItself()
+    {
+        string search = "";
+        var first = BoundInput(() => search, v => search = v);
+        dispatcher.SetRoot(new Column(children: [first]));
+        FocusManager.RequestFocus(first);
+        TypeChar('a');
+        TypeChar('b');
+
+        // Re-render after typing: the new node carries the typed value; the buffer is unchanged.
+        var typed = BoundInput(() => search, v => search = v);
+        Replace(first, typed);
+        await Assert.That(InputDispatcher.ActiveEditBuffer).IsEqualTo("ab");
+
+        // The app clears the box (e.g. the popup reopens): the field shows, and keeps editing, "".
+        search = "";
+        var cleared = BoundInput(() => search, v => search = v);
+        Replace(typed, cleared);
+        await Assert.That(InputDispatcher.ActiveEditBuffer).IsEqualTo("");
+        TypeChar('c');
+        await Assert.That(search).IsEqualTo("c");
+    }
+
+    [Test]
+    public async Task FocusedField_WithIgnoringBinding_KeepsTypedText()
+    {
+        var first = new TextInput(new Bindable<string>("", _ => { }));
+        dispatcher.SetRoot(new Column(children: [first]));
+        FocusManager.RequestFocus(first);
+        TypeChar('x');
+
+        var next = new TextInput(new Bindable<string>("", _ => { }));
+        Replace(first, next);
+
+        await Assert.That(InputDispatcher.ActiveEditBuffer).IsEqualTo("x");
+    }
+
+    // What the reconciler does when a re-render replaces a node.
+    private static void Replace(Node from, Node to)
+    {
+        FocusManager.NotifyNodeReplaced(from, to);
+        InputDispatcher.NotifyNodeReplaced(from, to);
+    }
+
+    [Test]
     public async Task Tab_IntoField_ShowsThatFieldsOwnValue()
     {
         // The focused field paints ActiveEditBuffer; after tabbing in it must

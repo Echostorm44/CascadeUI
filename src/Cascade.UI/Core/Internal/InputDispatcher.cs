@@ -508,6 +508,23 @@ internal sealed class InputDispatcher
         {
             self.openDateRangePicker = newDrp;
         }
+
+        // Controlled input: when the app itself changes the value bound to the focused TextInput
+        // (clearing a search box, say), the edit buffer adopts it; otherwise the field would keep
+        // showing, and later commit, the stale text. Only a change between renders counts, so a
+        // binding that ignores edits does not wipe what the user is typing.
+        if (oldNode is TextInput oldInput && newNode is TextInput newInput
+            && self.textInputBuffer is { } buffer
+            && ReferenceEquals(FocusManager.FocusedElement, newInput)
+            && newInput.Value.Value is { } value
+            && value != buffer
+            && value != oldInput.Value.Value)
+        {
+            self.textInputBuffer = value;
+            ActiveEditBuffer = value;
+            TextInputCaretIndex = value.Length;
+            TextInputSelectionAnchor = value.Length;
+        }
     }
 
     // ── Mouse events ──────────────────────────────────────────────────
@@ -2907,6 +2924,13 @@ internal sealed class InputDispatcher
             if (focusedNode is PropertyGrid && PropertyGridEditingRow >= 0)
             {
                 CancelPropertyGridEdit();
+                RequestRepaint?.Invoke();
+                return;
+            }
+
+            // An app's own Escape binding (close a panel, hide a launcher) wins over the default.
+            if (DispatchKeyBinding(evt))
+            {
                 RequestRepaint?.Invoke();
                 return;
             }

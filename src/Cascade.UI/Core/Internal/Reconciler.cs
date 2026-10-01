@@ -153,6 +153,12 @@ internal sealed class Reconciler
         if (from is IListViewNode oldLv && to is IListViewNode newLv)
         {
             newLv.OffsetY = oldLv.OffsetY;
+            newLv.LastScrolledIntoView = oldLv.LastScrolledIntoView;
+        }
+
+        if (from is HotkeyPicker oldPicker && to is HotkeyPicker newPicker)
+        {
+            newPicker.IsRecording = oldPicker.IsRecording;
         }
 
         // Preserve an uncontrolled Expander's open/closed state across re-renders so a

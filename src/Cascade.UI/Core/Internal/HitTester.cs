@@ -217,7 +217,7 @@ internal static class HitTester
         return node is Button or LinkButton or IconButton or
                TextInput or TextArea or PasswordInput or PinInput or
                MentionInput or TagInput or
-               Checkbox or Toggle or Slider or RangeSlider or Rating or
+               Checkbox or Toggle or Slider or RangeSlider or Rating or HotkeyPicker or
                IRadioButton or
                SplitView or
                Expander or
@@ -384,6 +384,53 @@ internal static class HitTester
 
         var single = GetSingleChild(root);
         return single != null ? FindScrollableListViewAt(single, x, y) : null;
+    }
+
+    /// <summary>Finds a selectable ListView whose bounds contain the point (click-to-select).</summary>
+    internal static IListViewNode? FindSelectableListViewAt(Node root, float x, float y)
+    {
+        var point = new Point(x, y);
+
+        if (root is Component comp && comp.RenderedTree is { } rendered)
+        {
+            return FindSelectableListViewAt(rendered, x, y);
+        }
+
+        if (root is IListViewNode lv && lv.IsSelectable && lv.ReorderBounds.Contains(point))
+        {
+            return lv;
+        }
+
+        var children = GetChildren(root);
+        if (children != null)
+        {
+            for (int i = children.Count - 1; i >= 0; i--)
+            {
+                var hit = FindSelectableListViewAt(children[i], x, y);
+                if (hit != null)
+                {
+                    return hit;
+                }
+            }
+        }
+
+        if (root is ScrollView sv && sv.Content != null)
+        {
+            var hit = FindSelectableListViewAt(sv.Content, x, y);
+            if (hit != null)
+            {
+                return hit;
+            }
+        }
+
+        if (root is SplitView split)
+        {
+            return FindSelectableListViewAt(split.First, x, y)
+                ?? FindSelectableListViewAt(split.Second, x, y);
+        }
+
+        var single = GetSingleChild(root);
+        return single != null ? FindSelectableListViewAt(single, x, y) : null;
     }
 
     /// <summary>

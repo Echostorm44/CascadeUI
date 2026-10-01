@@ -363,13 +363,16 @@ public readonly record struct TabIndex
 }
 
 /// <summary>
-/// A binding between a keyboard shortcut and an action handler.
+/// A binding between a keyboard shortcut and an action handler. <paramref name="AllowRepeat"/>:
+/// whether holding the keys fires it repeatedly (auto-repeat). A key-down that fires a binding
+/// does not also type its character into a focused text field.
 /// </summary>
-public record KeyBinding(Hotkey Hotkey, Action Handler, bool When = true);
+public record KeyBinding(Hotkey Hotkey, Action Handler, bool When = true, bool AllowRepeat = true);
 
 /// <summary>
 /// A layout-transparent wrapper that captures keyboard shortcuts. Shortcuts fire
-/// when focus is anywhere within the wrapped content.
+/// when focus is anywhere within the wrapped content — the innermost matching handler wins —
+/// or, when nothing has focus, from any handler in document order.
 /// </summary>
 public sealed class KeyHandler : Node
 {
@@ -384,6 +387,15 @@ public sealed class KeyHandler : Node
 
     /// <summary>The keyboard shortcut bindings active within this scope.</summary>
     public IReadOnlyList<KeyBinding> Bindings { get; }
+
+    /// <summary>
+    /// Raw key-down in this scope, before <see cref="Bindings"/>. Return true to consume the key
+    /// (its character is then not typed into a focused text field).
+    /// </summary>
+    public Func<KeyEvent, bool>? KeyDown { get; init; }
+
+    /// <summary>Key-up in this scope. Every handler in scope sees it.</summary>
+    public Action<KeyEvent>? KeyUp { get; init; }
 }
 
 /// <summary>

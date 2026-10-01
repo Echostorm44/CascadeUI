@@ -227,5 +227,25 @@ internal static partial class Win32
     internal static partial int CoInitializeEx(nint pvReserved, uint dwCoInit);
 
     internal const uint COINIT_APARTMENTTHREADED = 0x2;
+
+    // ── Shell item icons ────────────────────────────────────────────
+
+    [LibraryImport("shell32", EntryPoint = "SHCreateItemFromParsingName", StringMarshalling = StringMarshalling.Utf16)]
+    internal static partial int SHCreateItemFromParsingName(string pszPath, nint pbc, in Guid riid, out nint ppv);
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct BITMAP
+    {
+        public int bmType;
+        public int bmWidth;
+        public int bmHeight;
+        public int bmWidthBytes;
+        public ushort bmPlanes;
+        public ushort bmBitsPixel;
+        public nint bmBits;
+    }
+
+    [LibraryImport("gdi32", EntryPoint = "GetObjectW")]
+    internal static partial int GetObjectW(nint h, int c, out BITMAP pv);
 }
 #pragma warning restore CA5392

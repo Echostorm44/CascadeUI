@@ -55,6 +55,22 @@ public sealed class ImageSource : IDisposable
         return new ImageSource(rgba, width, height);
     }
 
+    /// <summary>
+    /// The shell icon for a file, folder or executable at <paramref name="size"/> pixels square:
+    /// an .exe's own icon, a document's associated app icon. Null when there is none (or off
+    /// Windows). Each call asks the shell, so cache the result per path.
+    /// </summary>
+    public static ImageSource? FromFileIcon(string path, int size = 32)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        ArgumentOutOfRangeException.ThrowIfLessThan(size, 1);
+        if (!OperatingSystem.IsWindows() || Win32FileIcon.Extract(path, size) is not { } icon)
+        {
+            return null;
+        }
+        return new ImageSource(icon.Rgba, icon.Width, icon.Height);
+    }
+
     /// <summary>Creates an image from raw RGBA8 pixel data.</summary>
     public static ImageSource FromBytes(ReadOnlyMemory<byte> pixels, int width, int height)
     {

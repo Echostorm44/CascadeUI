@@ -371,6 +371,23 @@ internal static class ApiIndexGenerator
                     fluent.Add(FormatExtensionSignature(method));
                 }
             }
+            // Object-initializer API: public settable / init-only properties (e.g. HotkeyPicker's Label).
+            var settable = new List<string>();
+            foreach (var member in type.GetMembers())
+            {
+                if (member is IPropertySymbol property &&
+                    property.DeclaredAccessibility == Accessibility.Public &&
+                    !property.IsStatic &&
+                    property.SetMethod is { DeclaredAccessibility: Accessibility.Public })
+                {
+                    settable.Add(property.Name + " " + property.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat));
+                }
+            }
+            if (settable.Count > 0)
+            {
+                sb.Append("- Properties: ");
+                sb.AppendLine(string.Join(", ", settable.Select(s => $"`{s}`")));
+            }
             if (fluent.Count > 0)
             {
                 sb.Append("- Fluent: ");

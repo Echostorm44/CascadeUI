@@ -12,14 +12,6 @@
     <ApplicationManifest>$(MSBuildThisFileDirectory)Cascade.UI.app.manifest</ApplicationManifest>
   </PropertyGroup>
 
-  <!--
-    The API index in obj/CascadeApi.generated.md is copied out of the source generator's output,
-    which only reaches disk when generated files are emitted. Without this the index section was
-    always the "available via MCP" placeholder. A project that sets the property keeps its value.
-  -->
-  <PropertyGroup>
-    <EmitCompilerGeneratedFiles Condition="'$(EmitCompilerGeneratedFiles)' == ''">true</EmitCompilerGeneratedFiles>
-  </PropertyGroup>
 
   <!--
     NUGET-001: deliver the bundled Inter fonts to a package consumer's output (Fonts/, where

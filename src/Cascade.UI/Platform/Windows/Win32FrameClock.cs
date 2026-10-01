@@ -32,6 +32,13 @@ internal sealed unsafe partial class Win32FrameClock : IDisposable
     private volatile bool disposed;
     private int framePending;
 
+    // A one-shot frame due at this Stopwatch timestamp while idle (0: none), e.g. the next caret
+    // toggle. Delivered as WM_FRAME with wParam = TimedWakeParam.
+    private long wakeAt;
+
+    /// <summary>WM_FRAME wParam marking a frame requested by <see cref="WakeAt"/>.</summary>
+    internal const nuint TimedWakeParam = 1;
+
     // Owned by the clock thread.
     private nint vblankMonitor;
     private void* vblankOutput;
@@ -54,6 +61,23 @@ internal sealed unsafe partial class Win32FrameClock : IDisposable
         }
         running = true;
         wakeEvent.Set();
+    }
+
+    /// <summary>
+    /// While idle, deliver one frame at <paramref name="timestamp"/> (Stopwatch ticks) — a caret
+    /// toggle, say — without running the per-vblank loop until then. A later <see cref="Start"/> takes
+    /// over; a later call replaces the time.
+    /// </summary>
+    internal void WakeAt(long timestamp)
+    {
+        Volatile.Write(ref wakeAt, timestamp);
+        wakeEvent.Set();
+    }
+
+    /// <summary>Drops a pending <see cref="WakeAt"/>.</summary>
+    internal void CancelWake()
+    {
+        Volatile.Write(ref wakeAt, 0);
     }
 
     /// <summary>Stops delivering frames after the current one.</summary>
@@ -96,8 +120,25 @@ internal sealed unsafe partial class Win32FrameClock : IDisposable
             {
                 if (!running)
                 {
-                    wakeEvent.WaitOne();
                     firstFrame = true;
+                    long due = Volatile.Read(ref wakeAt);
+                    if (due == 0)
+                    {
+                        wakeEvent.WaitOne();
+                        continue;
+                    }
+                    long now = Stopwatch.GetTimestamp();
+                    if (due > now)
+                    {
+                        // Sleep until the wake is due; Start(), WakeAt() or Dispose() cut it short.
+                        wakeEvent.WaitOne(Math.Max(1, (int)Math.Ceiling(Stopwatch.GetElapsedTime(now, due).TotalMilliseconds)));
+                        continue;
+                    }
+                    if (Interlocked.CompareExchange(ref wakeAt, 0, due) == due
+                        && !disposed && Interlocked.CompareExchange(ref framePending, 1, 0) == 0)
+                    {
+                        Win32.PostMessageW(window, Win32.WM_FRAME, TimedWakeParam, 0);
+                    }
                     continue;
                 }
 

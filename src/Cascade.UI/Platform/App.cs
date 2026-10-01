@@ -231,6 +231,9 @@ public static class App
         var orchestrator = new FrameOrchestrator(
             requestFrame: () => frameClock.Start(),
             cancelFrame:  () => frameClock.Stop());
+        orchestrator.ScheduleWake = frameClock.WakeAt;
+        orchestrator.CancelWake = frameClock.CancelWake;
+        window.VisibilityChanged = visible => orchestrator.SetSuspended(!visible);
 
         // Wire the GPU backend. Etch is the default renderer — a windowed app always
         // needs one, and forgetting to opt in used to open a blank, non-rendering
@@ -329,7 +332,11 @@ public static class App
             {
                 try
                 {
-                    if (orchestrator.IsFrameRequested)
+                    if (wParam == Win32FrameClock.TimedWakeParam)
+                    {
+                        orchestrator.TickFromWake();
+                    }
+                    else if (orchestrator.IsFrameRequested)
                     {
                         orchestrator.Tick();
                     }
@@ -389,7 +396,9 @@ public static class App
         bool startHidden = !Window.ShowOnStartup || (config.StartMinimized && Window.HideOnMinimize);
         if (startHidden)
         {
-            // The window exists (hotkeys, tray and clipboard monitoring need it) but stays hidden.
+            // The window exists (hotkeys, tray and clipboard monitoring need it) but stays hidden,
+            // and renders nothing until it is first shown (no WM_SHOWWINDOW arrives before then).
+            orchestrator.SetSuspended(true);
         }
         else if (config.StartMinimized)
         {

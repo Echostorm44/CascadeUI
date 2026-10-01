@@ -42,9 +42,8 @@ internal static class DrawPassNames
 /// provider when <see cref="DrawProvenance.CaptureEnabled"/> is set.
 /// Struct on purpose: thousands are rebuilt per presented frame.
 /// </summary>
-/// <param name="Pass">GPU pass that drew it: "geometry" or "image". The image
-/// pass executes after the geometry pass, so image records paint over shape
-/// records regardless of op order.</param>
+/// <param name="Pass">Which pipeline drew it: "geometry" or "image". Shapes,
+/// images and glyphs are drawn in paint order (see <paramref name="PaintOrder"/>).</param>
 /// <param name="Kind">Op kind: rect, rect_gradient, circle, line, arc, path,
 /// path_gradient, sector, image.</param>
 /// <param name="Fill">Fill color, or null for stroke-only ops.</param>
@@ -55,6 +54,8 @@ internal static class DrawPassNames
 /// relative paint order within a pass.</param>
 /// <param name="LayerHandle">Layer texture handle the op was captured into,
 /// or 0 for the main frame. Layer bounds already include the scroll offset.</param>
+/// <param name="PaintOrder">Position in the frame's paint order (see
+/// <see cref="DrawPaintOrder"/>); records that overlap draw in ascending order.</param>
 internal readonly record struct ShapeDrawRecord(
     string Pass,
     string Kind,
@@ -66,7 +67,8 @@ internal readonly record struct ShapeDrawRecord(
     ColorValue? Stroke,
     string? NodeId,
     int OpIndex,
-    ulong LayerHandle);
+    ulong LayerHandle,
+    long PaintOrder);
 
 /// <summary>
 /// One glyph quad from the last presented frame, exactly as uploaded to the
@@ -75,9 +77,11 @@ internal readonly record struct ShapeDrawRecord(
 /// </summary>
 /// <param name="AtlasU">Atlas texel rect of the glyph bitmap (texels, not
 /// normalized UVs) — pair with the atlas capture tool to inspect the bitmap.</param>
-/// <param name="Category">Which glyph batch drew it: "main", "layer", or
-/// "overlay". Batches render in that order, color glyphs after monochrome.</param>
+/// <param name="Category">Where the run was painted: "main" (the frame's own
+/// command stream) or "layer" (a retained ScrollView layer).</param>
 /// <param name="NodeId">DevTools node id of the emitting node, or null.</param>
+/// <param name="PaintOrder">Position in the frame's paint order (see
+/// <see cref="DrawPaintOrder"/>).</param>
 internal readonly record struct GlyphDrawRecord(
     float X,
     float Y,
@@ -98,7 +102,31 @@ internal readonly record struct GlyphDrawRecord(
     bool HasClip,
     bool IsColorGlyph,
     string Category,
-    string? NodeId);
+    string? NodeId,
+    long PaintOrder);
+
+/// <summary>
+/// Sort keys that put shape, image and glyph records in the order the GPU presenter draws them:
+/// the frame's command stream, with each retained layer's own stream spliced in at the
+/// <c>DrawLayerTexture</c> op that composites it. A glyph run painted when its stream held
+/// <c>c</c> commands draws after command <c>c − 1</c> and before command <c>c</c>.
+/// </summary>
+internal static class DrawPaintOrder
+{
+    /// <summary>Main-stream command <paramref name="index"/>.</summary>
+    internal static long MainCommand(int index) => Compose(2L * index + 1, 0);
+
+    /// <summary>Main-stream glyph run painted when the stream held <paramref name="commandIndex"/> commands.</summary>
+    internal static long MainGlyphRun(int commandIndex) => Compose(2L * commandIndex, 0);
+
+    /// <summary>Command <paramref name="layerIndex"/> of a layer composited at main command <paramref name="mainIndex"/>.</summary>
+    internal static long LayerCommand(int mainIndex, int layerIndex) => Compose(2L * mainIndex + 1, 2L * layerIndex + 2);
+
+    /// <summary>Glyph run of a layer composited at main command <paramref name="mainIndex"/>.</summary>
+    internal static long LayerGlyphRun(int mainIndex, int commandIndex) => Compose(2L * mainIndex + 1, 2L * commandIndex + 1);
+
+    private static long Compose(long main, long layer) => (main << 32) | layer;
+}
 
 /// <summary>
 /// Immutable snapshot of every draw in the last presented frame. The lists

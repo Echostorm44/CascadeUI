@@ -44,7 +44,39 @@ internal sealed class SpecimenView : Component
 
     protected override Node Render()
     {
+        if (Environment.GetEnvironmentVariable("CASCADE_GOLDEN_SCENE") == "zorder-layer")
+        {
+            return PaintOrderLayerScene();
+        }
         return CanvasFactory.Canvas(Size.Fill, DrawSheet);
+    }
+
+    // Paint order across a retained layer (PaintOrderTests): a ScrollView — whose content is
+    // composited from a retained layer — with an opaque panel stacked over its right part. The
+    // test runs this at CASCADE_FORCE_DPI=96 so logical units are device pixels. Keep in sync with
+    // PaintOrderTests.OpaquePanelOverScrollView_HidesItsContent.
+    private static Node PaintOrderLayerScene()
+    {
+        var rows = new Node[8];
+        for (int i = 0; i < rows.Length; i++)
+        {
+            rows[i] = new Row(spacing: 8, crossAxisAlignment: CrossAxisAlignment.Center, children:
+            [
+                new Image(Cornflower).Size(40, 40),
+                new Label("MMMMMMMMMMMM").FontSize(32).Color(new ColorValue("#000000")),
+                new Image(Orange).Size(40, 40),
+            ]).Height(52);
+        }
+
+        return new Stack(
+            new ScrollView(new Column(children: rows))
+                .Size(PageSpec.SheetWidth, PageSpec.SheetHeight)
+                .Background(new ColorValue("#FFFFFF")),
+            new Spacer()
+                .Size(300, 400)
+                .Background(new ColorValue("#FF0000"))
+                .TranslateX(320)
+                .TranslateY(20));
     }
 
     // Shadow parity sheet (ShadowParityTests): black shadows on white, compared pixel-by-pixel
@@ -60,6 +92,35 @@ internal sealed class SpecimenView : Component
         {
             ctx.DrawBlurredRoundedRect(new Rect(40, 250, 260, 150), black, radius: 12f, blurSigma: 10f);
         }
+    }
+
+    // Paint-order sheet (PaintOrderTests): text, images and shapes must composite in the order
+    // they were painted, whatever their kind. Keep the rects in sync with PaintOrderTests.
+    private static void DrawPaintOrderSheet(DrawContext ctx, string fontPath)
+    {
+        var black = new ColorValue("#000000");
+        var white = new ColorValue("#FFFFFF");
+        ctx.DrawRect(new Rect(0, 0, PageSpec.SheetWidth, PageSpec.SheetHeight), white);
+
+        // A: text, then an opaque rect over its right part.
+        ctx.DrawText("MMMMMMMM", 20, 20, 40, black, fontPath);
+        ctx.DrawRect(new Rect(160, 10, 200, 80), new ColorValue("#FF0000"));
+
+        // B: an image, then an opaque rect over its right part.
+        ctx.DrawImage(Cornflower, new Rect(20, 110, 160, 80));
+        ctx.DrawRect(new Rect(100, 110, 160, 80), new ColorValue("#008000"));
+
+        // C: a rect, then text over it.
+        ctx.DrawRect(new Rect(20, 210, 300, 80), new ColorValue("#0000FF"));
+        ctx.DrawText("MMMMMM", 30, 220, 40, white, fontPath);
+
+        // D: text, then an image over its right part.
+        ctx.DrawText("MMMMMMMM", 20, 320, 40, black, fontPath);
+        ctx.DrawImage(Orange, new Rect(160, 310, 200, 80));
+
+        // E: an image, then text over it.
+        ctx.DrawImage(Charcoal, new Rect(380, 210, 240, 80));
+        ctx.DrawText("MMMMM", 390, 220, 40, white, fontPath);
     }
 
     private void DrawSheet(DrawContext ctx, Size size)
@@ -104,6 +165,12 @@ internal sealed class SpecimenView : Component
         if (Environment.GetEnvironmentVariable("CASCADE_GOLDEN_SCENE") == "shadow")
         {
             DrawShadowSheet(ctx);
+            return;
+        }
+
+        if (Environment.GetEnvironmentVariable("CASCADE_GOLDEN_SCENE") == "zorder")
+        {
+            DrawPaintOrderSheet(ctx, page.FontPath);
             return;
         }
 

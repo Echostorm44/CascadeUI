@@ -1069,36 +1069,6 @@ public sealed class DrawContext
         return new ScopeGuard(backend, frame, ScopeGuard.Kind.Layer);
     }
 
-    // ── Overlay capture (for popups that must render on top) ─────────
-
-    /// <summary>
-    /// Begins capturing subsequent text and glyph commands into an overlay
-    /// buffer that will be rendered on top of the main frame text.
-    /// Geometry commands continue to go to the main frame.
-    /// </summary>
-    public void PushOverlay()
-    {
-        backend?.PushOverlay(frame);
-    }
-
-    /// <summary>
-    /// Ends overlay capture.
-    /// </summary>
-    public void PopOverlay()
-    {
-        backend?.PopOverlay(frame);
-    }
-
-    /// <summary>
-    /// Marks the point at which deferred-overlay (popup) painting begins, so the presenter can cull
-    /// main-frame images that an overlay covers (preventing e.g. a list row's icon from bleeding
-    /// through an open dropdown). Call once, immediately before painting the deferred overlays.
-    /// </summary>
-    public void MarkOverlayStart()
-    {
-        backend?.MarkOverlayStart();
-    }
-
     // ── Layer texture compositing (Flutter-style retained layers) ────
 
     /// <summary>

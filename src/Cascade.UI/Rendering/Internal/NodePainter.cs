@@ -319,9 +319,8 @@ internal sealed class NodePainter
         Cascade.UI.Diagnostics.DiagnosticsHub.MarkPhase("paint.recursive");
         PaintRecursive(node);
         Cascade.UI.Diagnostics.DiagnosticsHub.MarkPhase("paint.overlays");
-        // Everything drawn from here on is a popup overlay — mark the boundary so the presenter culls
-        // main-frame images (icons) that an overlay covers, not the overlays' own images.
-        ctx.MarkOverlayStart();
+        // Overlays are painted last, so they composite over the tree: the GPU presenter draws
+        // shapes, text and images in paint order.
         PaintDeferredOverlays();
         if (CommandPalette.IsOpen)
         {
@@ -509,14 +508,9 @@ internal sealed class NodePainter
         }
 
         // Overlays paint at root-level coordinates (no parent transforms active).
-        // PushOverlay/PopOverlay ensures their text is rendered on top of the
-        // main frame text, preventing underlying controls' text from showing
-        // through popup backgrounds.
         foreach (var overlay in deferredOverlays)
         {
-            ctx.PushOverlay();
             overlay();
-            ctx.PopOverlay();
         }
 
         deferredOverlays.Clear();
@@ -4835,14 +4829,6 @@ internal sealed class NodePainter
         ctx.DrawRect(panelBounds, new ColorValue("#252525"), radius: 12f);
         ctx.DrawRect(panelBounds, stroke: new Stroke(colors.Text.Opacity(0.1f), 1f), radius: 12f);
 
-        // Push overlay so panel text renders on top and underlying DataGrid text
-        // in the panel region is cleared (OverlayBounds drives ClearTextRegions).
-        ctx.PushOverlay();
-
-        // Expand overlay bounds to the full panel area so ClearTextRegions wipes
-        // all underlying text in the panel, even when there are no results.
-        ctx.DrawRect(panelBounds, ColorValue.Transparent);
-
         // Search input area
         float searchY = panelY;
         float searchPadding = 12f;
@@ -4990,7 +4976,6 @@ internal sealed class NodePainter
 
         }
 
-        ctx.PopOverlay();
         cpScaleScope.Dispose();
     }
 

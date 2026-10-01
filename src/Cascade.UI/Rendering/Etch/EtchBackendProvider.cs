@@ -31,7 +31,15 @@ internal readonly struct LayerRenderInfo
     /// this transform then the scroll delta to composite them. Empty when the layer
     /// draws no images.
     /// </summary>
-    public readonly IReadOnlyList<(EtchBackend.SceneOp Op, Matrix3x2 Transform, Cascade.UI.Rect? Clip)> ImageCommands;
+    public readonly IReadOnlyList<LayerImageOp> ImageCommands;
+
+    /// <summary>
+    /// Paint-order map for <see cref="Scene"/>: entry <c>k</c> is the number of scene commands
+    /// emitted before the layer's captured command <c>k</c>, with one extra entry for the end of
+    /// the stream (see <see cref="EtchBackendProvider.SceneMarks"/>). Null when it could not be built, in which case
+    /// the presenter draws the layer's text and images over all of its shapes.
+    /// </summary>
+    public readonly IReadOnlyList<int>? SceneMarks;
 
     /// <summary>
     /// Screen-space viewport clip the layer is composited into (the ScrollView
@@ -43,7 +51,8 @@ internal readonly struct LayerRenderInfo
 
     public LayerRenderInfo(ulong handle, SceneBuffer scene, float x, float y, float opacity,
         IReadOnlyList<EtchBackend.GlyphOp> glyphCommands,
-        IReadOnlyList<(EtchBackend.SceneOp Op, Matrix3x2 Transform, Cascade.UI.Rect? Clip)> imageCommands,
+        IReadOnlyList<LayerImageOp> imageCommands,
+        IReadOnlyList<int>? sceneMarks,
         Cascade.UI.Rect? viewportClip)
     {
         LayerHandle = handle;
@@ -53,9 +62,34 @@ internal readonly struct LayerRenderInfo
         Opacity = opacity;
         GlyphCommands = glyphCommands;
         ImageCommands = imageCommands;
+        SceneMarks = sceneMarks;
         ViewportClip = viewportClip;
     }
 }
+
+/// <summary>
+/// One image drawn inside a retained layer, copied out of the layer's captured
+/// <see cref="EtchBackend.SceneOp"/> when the layer is (re)built. It must be a copy: SceneOps
+/// come from the backend's per-frame arena and are recycled on the next frame, while the layer
+/// keeps compositing these on frames that do not recapture it (scrolling).
+/// </summary>
+/// <param name="ImageHandle">Backend image handle.</param>
+/// <param name="X">Destination rect, layer-local units.</param>
+/// <param name="Y">Destination rect, layer-local units.</param>
+/// <param name="W">Destination rect, layer-local units.</param>
+/// <param name="H">Destination rect, layer-local units.</param>
+/// <param name="Transform">Local→device transform in force where the image was captured.</param>
+/// <param name="Clip">Device-space intersection of the clips around the image, or null.</param>
+/// <param name="CommandIndex">Index of the image's op in the layer's captured command stream (paint order).</param>
+internal readonly record struct LayerImageOp(
+    ulong ImageHandle,
+    float X,
+    float Y,
+    float W,
+    float H,
+    Matrix3x2 Transform,
+    Cascade.UI.Rect? Clip,
+    int CommandIndex);
 
 internal sealed class EtchBackendProvider : IDisposable
 {
@@ -100,10 +134,26 @@ internal sealed class EtchBackendProvider : IDisposable
     // LayerCaptures has been cleared by Reset().
     private readonly Dictionary<ulong, (SceneBuffer Scene, ulong Hash,
         List<EtchBackend.GlyphOp> GlyphCommands,
-        List<(EtchBackend.SceneOp Op, Matrix3x2 Transform, Cascade.UI.Rect? Clip)> ImageCommands)> _cachedLayerScenes = new();
+        List<LayerImageOp> ImageCommands,
+        int[]? SceneMarks)> _cachedLayerScenes = new();
 
     // Active layers for the current frame — passed to EtchGpuPresenter for compositing
     private readonly List<LayerRenderInfo> _activeLayers = new();
+
+    // Paint-order map for _cachedSceneBuffer, rebuilt with it. See SceneMarks.
+    private readonly List<int> _sceneMarks = new();
+    private bool _sceneMarksValid;
+
+    /// <summary>
+    /// Paint-order map for the scene <see cref="BuildSceneBuffer"/> last built: entry <c>k</c> is the
+    /// number of commands the scene held before backend command <c>k</c> was appended, plus one
+    /// final entry for the end of the stream. Glyphs and images never become scene geometry, so
+    /// this is what lets the GPU presenter draw a glyph run (<see cref="EtchBackend.GlyphOp.CommandIndex"/>)
+    /// or an image between the shapes painted before and after it. Null if the count kept while
+    /// building disagreed with the finished scene — the presenter then falls back to drawing text
+    /// and images over all shapes rather than interleaving them wrongly.
+    /// </summary>
+    internal IReadOnlyList<int>? SceneMarks => _sceneMarksValid ? _sceneMarks : null;
 
     public EtchBackendProvider()
     {
@@ -583,6 +633,7 @@ internal sealed class EtchBackendProvider : IDisposable
                                     MinY = minY,
                                     MaxX = maxX,
                                     MaxY = maxY,
+                                    PaintOrder = DrawPaintOrder.LayerCommand(i, record.OpIndex),
                                 });
                             }
                         }
@@ -608,9 +659,11 @@ internal sealed class EtchBackendProvider : IDisposable
                         float maxY = Math.Min(bounds.MaxY, clip.MaxY);
                         if (minX <= maxX && minY <= maxY)
                         {
+                            // Layer-local records get their real paint order when spliced.
                             target.Add(new ShapeDrawRecord(
                                 pass, kind, minX, minY, maxX, maxY,
-                                cmd.Fill, cmd.StrokeColor, cmd.DebugNodeId, i, layerHandle));
+                                cmd.Fill, cmd.StrokeColor, cmd.DebugNodeId, i, layerHandle,
+                                spliceLayers ? DrawPaintOrder.MainCommand(i) : 0));
                         }
                     }
                     break;
@@ -744,7 +797,7 @@ internal sealed class EtchBackendProvider : IDisposable
 
         if (!_forceCpuFallback && _etchGpuPresenter != null && canRenderGpu)
         {
-            _etchGpuPresenter.PresentScene(gpuScene, _backend, _activeLayers, captureDraws ? pendingGlyphs : null);
+            _etchGpuPresenter.PresentScene(gpuScene, _backend, SceneMarks, _activeLayers, captureDraws ? pendingGlyphs : null);
             if (captureDraws)
             {
                 PublishDrawSnapshot(captureBaseline);
@@ -998,7 +1051,10 @@ internal sealed class EtchBackendProvider : IDisposable
         _cpuCaptureHeight = h;
     }
 
-    private SceneBuffer BuildSceneBuffer(ColorValue baseColor, float scale = 1.0f)
+    /// <summary>The retained layers composited by the scene <see cref="BuildSceneBuffer"/> last returned.</summary>
+    internal IReadOnlyList<LayerRenderInfo> ActiveLayers => _activeLayers;
+
+    internal SceneBuffer BuildSceneBuffer(ColorValue baseColor, float scale = 1.0f)
     {
         ulong hash = _backend.CommandSequenceHash;
         hash ^= (ulong)EtchBackend.ToArgb(baseColor);
@@ -1055,18 +1111,18 @@ internal sealed class EtchBackendProvider : IDisposable
                 if (DrawProvenance.CaptureEnabled)
                 {
                     _cachedLayerScenes[handle] = (cached.Scene, cached.Hash,
-                        capture.GlyphCommands.ToList(), cached.ImageCommands);
+                        capture.GlyphCommands.ToList(), cached.ImageCommands, cached.SceneMarks);
                 }
                 continue;
             }
 
             // Build new SceneBuffer for this layer
-            var layerScene = BuildLayerSceneBuffer(capture, scale);
+            var (layerScene, layerMarks) = BuildLayerSceneBuffer(capture, scale);
             var layerInitial = scale == 1.0f
                 ? capture.InitialTransform
                 : Matrix3x2.CreateScale(scale, scale) * capture.InitialTransform;
             _cachedLayerScenes[handle] = (layerScene, layerHash,
-                capture.GlyphCommands.ToList(), ExtractImageCommands(capture.Commands, layerInitial));
+                capture.GlyphCommands.ToList(), ExtractImageCommands(capture.Commands, layerInitial), layerMarks);
         }
 
         // Size the builder from the previous frame (plus headroom) so a steady-state frame never
@@ -1096,15 +1152,18 @@ internal sealed class EtchBackendProvider : IDisposable
             : new System.Numerics.Matrix3x2(scale, 0, 0, scale, 0, 0);
         int identityTransformId = sb.AddTransform(EGeometry.Affine.Identity);
         _appendState.Reset(baseMatrix, initialTransformId, identityTransformId);
+        _appendState.SceneCommands = 2; // BeginFrame, SetTransform
 
         // Fill background with base color
         int bgPaintId = sb.AddPaint(Paint.Solid(EtchBackend.ToArgb(baseColor)));
         sb.FillRect(new EGeometry.Rect(0, 0, _width, _height), bgPaintId, identityTransformId);
+        _appendState.SceneCommands++;
 
-
-
+        _sceneMarks.Clear();
         foreach (var cmd in _backend.Commands)
         {
+            _sceneMarks.Add(_appendState.SceneCommands);
+
             // The live frame composites retained layers; everything else flows through
             // the shared op→scene dispatch (RENDER-001).
             if (cmd.Kind == EtchBackend.OpKind.DrawLayerTexture)
@@ -1115,21 +1174,25 @@ internal sealed class EtchBackendProvider : IDisposable
                     Cascade.UI.Rect? viewportClip = cmd.HasClipBounds ? cmd.ClipBounds : null;
                     _activeLayers.Add(new LayerRenderInfo(
                         handle, layerInfo.Scene, cmd.X, cmd.Y, cmd.Opacity,
-                        layerInfo.GlyphCommands, layerInfo.ImageCommands, viewportClip));
+                        layerInfo.GlyphCommands, layerInfo.ImageCommands, layerInfo.SceneMarks, viewportClip));
                 }
                 continue;
             }
             AppendSceneOp(ref sb, cmd, _appendState, "BuildSceneBuffer");
         }
+        _sceneMarks.Add(_appendState.SceneCommands);
 
         while (_appendState.ClipStack.Count > 0)
         {
             sb.PopClip();
             _appendState.ClipStack.Pop();
+            _appendState.SceneCommands++;
         }
         sb.EndFrame();
+        _appendState.SceneCommands++;
         var sceneBuffer = sb.End();
         _lastSceneCapacity = sceneBuffer.Capacity;
+        _sceneMarksValid = SceneCountMatches(sceneBuffer, _appendState.SceneCommands, "BuildSceneBuffer");
 
         if (DebugLog.IsEnabled(DebugLogCategory.Transform))
         {
@@ -1188,6 +1251,10 @@ internal sealed class EtchBackendProvider : IDisposable
             hash *= prime;
             hash ^= (ulong)glyph.GlyphIds.Length;
             hash *= prime;
+            // Where the run sits among the layer's shapes: the same ops with the text painted at
+            // a different point must not reuse a cached layer that draws it elsewhere in order.
+            hash ^= (ulong)glyph.CommandIndex;
+            hash *= prime;
             foreach (var id in glyph.GlyphIds)
             {
                 hash ^= (ulong)id;
@@ -1228,10 +1295,10 @@ internal sealed class EtchBackendProvider : IDisposable
     /// contributes nothing rather than clipping to the wrong shape — the main (non-layer) image
     /// path makes the same trade.
     /// </remarks>
-    private static List<(EtchBackend.SceneOp Op, Matrix3x2 Transform, Cascade.UI.Rect? Clip)> ExtractImageCommands(
+    private static List<LayerImageOp> ExtractImageCommands(
         List<EtchBackend.SceneOp> commands, Matrix3x2 initialTransform)
     {
-        var images = new List<(EtchBackend.SceneOp, Matrix3x2, Cascade.UI.Rect?)>();
+        var images = new List<LayerImageOp>();
         var current = initialTransform;
         var stack = new Stack<Matrix3x2>();
 
@@ -1240,8 +1307,9 @@ internal sealed class EtchBackendProvider : IDisposable
         Cascade.UI.Rect? clip = null;
         var clipStack = new Stack<Cascade.UI.Rect?>();
 
-        foreach (var op in commands)
+        for (int index = 0; index < commands.Count; index++)
         {
+            var op = commands[index];
             switch (op.Kind)
             {
                 case EtchBackend.OpKind.PushTransform:
@@ -1274,7 +1342,8 @@ internal sealed class EtchBackendProvider : IDisposable
                     break;
 
                 case EtchBackend.OpKind.DrawImage:
-                    images.Add((op, current, clip));
+                    // Copy the fields out: the op itself is recycled by the backend's frame arena.
+                    images.Add(new LayerImageOp(op.ImageHandle, op.X, op.Y, op.W, op.H, current, clip, index));
                     break;
             }
         }
@@ -1327,6 +1396,13 @@ internal sealed class EtchBackendProvider : IDisposable
         public int CurrentTransformId;
         public int IdentityTransformId;
 
+        /// <summary>
+        /// Commands written to the scene so far. <see cref="SceneBuilder"/> does not expose its
+        /// count, so every call that writes one bumps this; the builders check it against the
+        /// finished scene (<see cref="SceneCountMatches"/>) before trusting the marks built from it.
+        /// </summary>
+        public int SceneCommands;
+
         public void Reset(System.Numerics.Matrix3x2 baseMatrix, int baseTransformId, int identityTransformId)
         {
             TransformStack.Clear();
@@ -1335,7 +1411,35 @@ internal sealed class EtchBackendProvider : IDisposable
             TransformStack.Push(baseMatrix);
             CurrentTransformId = baseTransformId;
             IdentityTransformId = identityTransformId;
+            SceneCommands = 0;
         }
+    }
+
+    /// <summary>
+    /// True when the command count kept in <see cref="SceneAppendState.SceneCommands"/> matches
+    /// the finished scene, i.e. the paint-order marks taken from it are exact. A mismatch means a
+    /// scene-writing call in <see cref="AppendSceneOp"/> was added without counting it: Debug
+    /// asserts, Release logs once per occurrence (throttled) and the presenter falls back to
+    /// drawing text and images over all shapes rather than interleaving them at wrong points.
+    /// </summary>
+    private bool SceneCountMatches(SceneBuffer scene, int counted, string context)
+    {
+        int actual = scene.Commands.Length;
+        if (actual == counted)
+        {
+            return true;
+        }
+
+        System.Diagnostics.Debug.Assert(false,
+            $"{context}: counted {counted} scene commands but the scene holds {actual} — a SceneBuilder call in AppendSceneOp is not counted.");
+        unhandledOpCount++;
+        if (unhandledOpCount <= MaxUnhandledOpLogEntries)
+        {
+            var path = System.IO.Path.Combine(System.AppContext.BaseDirectory, "etch-backend-error.log");
+            System.IO.File.AppendAllText(path,
+                $"[{DateTime.Now:O}] {context}: counted {counted} scene commands, scene holds {actual} — paint-order marks disabled for this scene\n");
+        }
+        return false;
     }
 
     /// <summary>
@@ -1359,6 +1463,7 @@ internal sealed class EtchBackendProvider : IDisposable
                     uint argb = EtchBackend.ToArgb(cmd.Fill.Value);
                     var path = EtchBackend.BuildRoundedRectPath(cmd.X, cmd.Y, cmd.W, cmd.H, Math.Min(cmd.Radius, Math.Min(cmd.W, cmd.H) * 0.5f));
                     sb.DrawShadow(sb.AddPath(path), sb.AddPaint(Paint.Solid(argb)), identityTransformId, default, cmd.StrokeWidth, argb);
+                    st.SceneCommands++;
                 }
                 break;
 
@@ -1376,10 +1481,12 @@ internal sealed class EtchBackendProvider : IDisposable
                     {
                         var path = EtchBackend.BuildRoundedRectPath(cmd.X, cmd.Y, cmd.W, cmd.H, r);
                         sb.FillPath(sb.AddPath(path), paintId, identityTransformId, FillRule.NonZero);
+                        st.SceneCommands++;
                     }
                     else
                     {
                         sb.FillRect(new EGeometry.Rect(cmd.X, cmd.Y, cmd.X + cmd.W, cmd.Y + cmd.H), paintId, identityTransformId);
+                        st.SceneCommands++;
                     }
                 }
                 if (cmd.StrokeColor.HasValue && cmd.StrokeWidth > 0)
@@ -1387,6 +1494,7 @@ internal sealed class EtchBackendProvider : IDisposable
                     var path = EtchBackend.BuildRoundedRectPath(cmd.X, cmd.Y, cmd.W, cmd.H, Math.Min(cmd.Radius, Math.Min(cmd.W, cmd.H) * 0.5f));
                     int paintId = sb.AddPaint(Paint.Solid(EtchBackend.ToArgb(cmd.StrokeColor.Value)));
                     sb.StrokePath(sb.AddPath(path), paintId, identityTransformId, cmd.StrokeWidth, default);
+                    st.SceneCommands++;
                 }
                 break;
 
@@ -1401,10 +1509,12 @@ internal sealed class EtchBackendProvider : IDisposable
                     {
                         var path = EtchBackend.BuildRoundedRectPath(cmd.X, cmd.Y, cmd.W, cmd.H, r);
                         sb.FillPath(sb.AddPath(path), paintId, identityTransformId, FillRule.NonZero);
+                        st.SceneCommands++;
                     }
                     else
                     {
                         sb.FillRect(new EGeometry.Rect(cmd.X, cmd.Y, cmd.X + cmd.W, cmd.Y + cmd.H), paintId, identityTransformId);
+                        st.SceneCommands++;
                     }
                 }
                 break;
@@ -1420,10 +1530,12 @@ internal sealed class EtchBackendProvider : IDisposable
                 if (cmd.Fill.HasValue && cmd.Fill.Value.A > 0)
                 {
                     sb.FillPath(pathId, sb.AddPaint(Paint.Solid(EtchBackend.ToArgb(cmd.Fill.Value))), identityTransformId, FillRule.NonZero);
+                    st.SceneCommands++;
                 }
                 if (cmd.StrokeColor.HasValue && cmd.StrokeWidth > 0)
                 {
                     sb.StrokePath(pathId, sb.AddPaint(Paint.Solid(EtchBackend.ToArgb(cmd.StrokeColor.Value))), identityTransformId, cmd.StrokeWidth, default);
+                    st.SceneCommands++;
                 }
                 break;
             }
@@ -1441,10 +1553,12 @@ internal sealed class EtchBackendProvider : IDisposable
                     uint id = (uint)sb.AddGradientStops(EtchBackend.ConvertGradientStops(cmd.GradientStops));
                     var paint = cmd.GradientKind == 0 ? Paint.LinearGradient(id) : Paint.RadialGradient(id);
                     sb.FillPath(pathId, sb.AddPaint(paint), identityTransformId, FillRule.NonZero);
+                    st.SceneCommands++;
                 }
                 if (cmd.StrokeColor.HasValue && cmd.StrokeWidth > 0)
                 {
                     sb.StrokePath(pathId, sb.AddPaint(Paint.Solid(EtchBackend.ToArgb(cmd.StrokeColor.Value))), identityTransformId, cmd.StrokeWidth, default);
+                    st.SceneCommands++;
                 }
                 break;
             }
@@ -1456,10 +1570,12 @@ internal sealed class EtchBackendProvider : IDisposable
                 if (cmd.Fill.HasValue && cmd.Fill.Value.A > 0)
                 {
                     sb.FillPath(pathId, sb.AddPaint(Paint.Solid(EtchBackend.ToArgb(cmd.Fill.Value))), identityTransformId, FillRule.NonZero);
+                    st.SceneCommands++;
                 }
                 if (cmd.StrokeColor.HasValue && cmd.StrokeWidth > 0)
                 {
                     sb.StrokePath(pathId, sb.AddPaint(Paint.Solid(EtchBackend.ToArgb(cmd.StrokeColor.Value))), identityTransformId, cmd.StrokeWidth, default);
+                    st.SceneCommands++;
                 }
                 break;
             }
@@ -1470,6 +1586,7 @@ internal sealed class EtchBackendProvider : IDisposable
                     int paintId = sb.AddPaint(Paint.Solid(EtchBackend.ToArgb(cmd.Fill.Value)));
                     sb.FillSector(cmd.X, cmd.Y, cmd.Radius, cmd.InnerRadius,
                         cmd.StartRad, cmd.SweepRad, paintId, identityTransformId);
+                    st.SceneCommands++;
                 }
                 break;
 
@@ -1478,6 +1595,7 @@ internal sealed class EtchBackendProvider : IDisposable
                 {
                     var path = EtchBackend.BuildArcPath(cmd.X, cmd.Y, cmd.Radius, cmd.StartRad, cmd.SweepRad);
                     sb.StrokePath(sb.AddPath(path), sb.AddPaint(Paint.Solid(EtchBackend.ToArgb(cmd.StrokeColor.Value))), identityTransformId, cmd.StrokeWidth, default);
+                    st.SceneCommands++;
                 }
                 break;
 
@@ -1486,6 +1604,7 @@ internal sealed class EtchBackendProvider : IDisposable
                 {
                     var path = EtchBackend.BuildLinePath(cmd.X, cmd.Y, cmd.W, cmd.H);
                     sb.StrokePath(sb.AddPath(path), sb.AddPaint(Paint.Solid(EtchBackend.ToArgb(cmd.StrokeColor.Value))), identityTransformId, cmd.StrokeWidth, default);
+                    st.SceneCommands++;
                 }
                 break;
 
@@ -1497,6 +1616,7 @@ internal sealed class EtchBackendProvider : IDisposable
                     uint argb = (uint)(((byte)(cmd.Opacity * 255) << 24) | 0xFFFFFF);
                     int paintId = sb.AddPaint(Paint.Solid(argb));
                     sb.DrawImage((int)cmd.ImageHandle, paintId, identityTransformId);
+                    st.SceneCommands++;
                 }
                 break;
             }
@@ -1506,6 +1626,7 @@ internal sealed class EtchBackendProvider : IDisposable
                 st.TransformStack.Push(st.CurrentMatrix);
                 st.CurrentTransformId = sb.AddTransform(EtchBackend.ToAffine(st.CurrentMatrix));
                 sb.SetTransform(st.CurrentTransformId);
+                st.SceneCommands++;
                 break;
 
             case EtchBackend.OpKind.PopTransform:
@@ -1518,6 +1639,7 @@ internal sealed class EtchBackendProvider : IDisposable
                     st.CurrentMatrix = st.TransformStack.Peek();
                     st.CurrentTransformId = sb.AddTransform(EtchBackend.ToAffine(st.CurrentMatrix));
                     sb.SetTransform(st.CurrentTransformId);
+                    st.SceneCommands++;
                 }
                 break;
 
@@ -1525,6 +1647,7 @@ internal sealed class EtchBackendProvider : IDisposable
             {
                 var path = EtchBackend.BuildRectPath(cmd.X, cmd.Y, cmd.W, cmd.H);
                 sb.PushClip(sb.AddPath(path), FillRule.NonZero);
+                st.SceneCommands++;
                 st.ClipStack.Push(0);
                 break;
             }
@@ -1533,6 +1656,7 @@ internal sealed class EtchBackendProvider : IDisposable
             {
                 var path = EtchBackend.BuildRoundedRectPath(cmd.X, cmd.Y, cmd.W, cmd.H, Math.Min(cmd.Radius, Math.Min(cmd.W, cmd.H) * 0.5f));
                 sb.PushClip(sb.AddPath(path), FillRule.NonZero);
+                st.SceneCommands++;
                 st.ClipStack.Push(0);
                 break;
             }
@@ -1543,6 +1667,7 @@ internal sealed class EtchBackendProvider : IDisposable
                 if (path.HasValue)
                 {
                     sb.PushClip(sb.AddPath(path.Value), FillRule.NonZero);
+                    st.SceneCommands++;
                     st.ClipStack.Push(0);
                 }
                 break;
@@ -1552,6 +1677,7 @@ internal sealed class EtchBackendProvider : IDisposable
                 if (st.ClipStack.Count > 0)
                 {
                     sb.PopClip();
+                    st.SceneCommands++;
                     st.ClipStack.Pop();
                 }
                 break;
@@ -1574,7 +1700,11 @@ internal sealed class EtchBackendProvider : IDisposable
 
     private static int WithHeadroom(int count) => count + (count >> 2) + 16;
 
-    private SceneBuffer BuildLayerSceneBuffer(EtchBackend.LayerCapture capture, float scale)
+    /// <summary>
+    /// Builds a retained layer's scene, and its paint-order marks (see <see cref="SceneMarks"/>;
+    /// null if the count kept while building did not match the scene).
+    /// </summary>
+    private (SceneBuffer Scene, int[]? Marks) BuildLayerSceneBuffer(EtchBackend.LayerCapture capture, float scale)
     {
         if (DebugLog.IsEnabled(DebugLogCategory.Layer))
         {
@@ -1600,18 +1730,25 @@ internal sealed class EtchBackendProvider : IDisposable
         // the fail-loud default rather than dropping its content silently.
         int identityTransformId = sb.AddTransform(EGeometry.Affine.Identity);
         _appendState.Reset(layerBaseMatrix, initialTransformId, identityTransformId);
+        _appendState.SceneCommands = 2; // BeginFrame, SetTransform
 
-        foreach (var cmd in capture.Commands)
+        // Built once per recapture and cached with the scene, not per frame.
+        var marks = new int[capture.Commands.Count + 1];
+        for (int i = 0; i < capture.Commands.Count; i++)
         {
-            AppendSceneOp(ref sb, cmd, _appendState, "BuildLayerSceneBuffer");
+            marks[i] = _appendState.SceneCommands;
+            AppendSceneOp(ref sb, capture.Commands[i], _appendState, "BuildLayerSceneBuffer");
         }
+        marks[capture.Commands.Count] = _appendState.SceneCommands;
 
         while (_appendState.ClipStack.Count > 0)
         {
             sb.PopClip();
             _appendState.ClipStack.Pop();
+            _appendState.SceneCommands++;
         }
         sb.EndFrame();
+        _appendState.SceneCommands++;
 
         if (DebugLog.IsEnabled(DebugLogCategory.Transform))
         {
@@ -1634,7 +1771,8 @@ internal sealed class EtchBackendProvider : IDisposable
             }
         }
 
-        return sb.End();
+        var scene = sb.End();
+        return (scene, SceneCountMatches(scene, _appendState.SceneCommands, "BuildLayerSceneBuffer") ? marks : null);
     }
 
     public void EndFrame(ulong frameHandle)

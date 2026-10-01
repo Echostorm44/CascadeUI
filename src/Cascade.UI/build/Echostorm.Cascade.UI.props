@@ -1,0 +1,14 @@
+<!-- Echostorm.Cascade.UI.props — imported by NuGet before the consumer's project body. -->
+<Project>
+  <!--
+    The API index in obj/CascadeApi.generated.md is copied out of the source generator's output,
+    which only reaches disk when generated files are emitted. This default must be set here, not in
+    the .targets: Roslyn's Microsoft.Managed.Core.targets (imported before package .targets) sets
+    EmitCompilerGeneratedFiles=false when it is still empty and derives CompilerGeneratedFilesOutputPath
+    from it, so a later default never applies (measured: the index stayed the placeholder). A project
+    that sets the property in its body still wins.
+  -->
+  <PropertyGroup>
+    <EmitCompilerGeneratedFiles Condition="'$(EmitCompilerGeneratedFiles)' == ''">true</EmitCompilerGeneratedFiles>
+  </PropertyGroup>
+</Project>

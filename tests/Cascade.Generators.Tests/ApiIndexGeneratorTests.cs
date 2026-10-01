@@ -289,6 +289,8 @@ namespace Cascade.UI
         public Label(string text) { }
         public Label FontSize(double size) => this;
         public string Describe() => """";
+        public string? Caption { get; init; }
+        public string Fixed { get; } = """";
     }
 
     public sealed class Card : Component { protected override Node Render() => this; }
@@ -324,6 +326,9 @@ namespace Cascade.UI
         await TUnit.Assertions.Assert.That(Has(generated, "### Label")).IsTrue();
         await TUnit.Assertions.Assert.That(Has(generated, "Label(string text)")).IsTrue();
         await TUnit.Assertions.Assert.That(Has(generated, ".FontSize(double size)")).IsTrue();
+        // Init-only properties are API (object initializers); get-only ones are not.
+        await TUnit.Assertions.Assert.That(Has(generated, "`Caption string?`")).IsTrue();
+        await TUnit.Assertions.Assert.That(Has(generated, "Fixed")).IsFalse();
         // Control-specific extensions are listed with the control, not in the generic table.
         await TUnit.Assertions.Assert.That(Has(generated, "`.Bold()`")).IsTrue();
         await TUnit.Assertions.Assert.That(Has(generated, "| Bold |")).IsFalse();

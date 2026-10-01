@@ -1491,10 +1491,12 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
             _fallbackBindGroup.Dispose();
         }
 
+        // SceneCpuRenderer output is sRGB-encoded: an sRGB view decodes it on sample, so the sRGB
+        // target re-encodes it once (a unorm view encoded it twice, washing colours out).
         _fallbackTexture = _device.CreateTexture(new TextureDescriptor
         {
             Size = new Extent3D { Width = width, Height = height, DepthOrArrayLayers = 1 },
-            Format = TextureFormat.Rgba8Unorm,
+            Format = TextureFormat.Rgba8UnormSrgb,
             Usage = (ulong)(TextureUsage.TextureBinding | TextureUsage.CopyDst),
             Dimension = TextureDimension.D2,
             MipLevelCount = 1,
@@ -3191,10 +3193,11 @@ int overlayCulled = 0;
             return;
         }
 
+        // Image pixels are sRGB-encoded (like every 8-bit image file); see the fallback texture.
         var texture = _device.CreateTexture(new TextureDescriptor
         {
             Size = new Extent3D { Width = (uint)img.Width, Height = (uint)img.Height, DepthOrArrayLayers = 1 },
-            Format = TextureFormat.Rgba8Unorm,
+            Format = TextureFormat.Rgba8UnormSrgb,
             Usage = (ulong)(TextureUsage.TextureBinding | TextureUsage.CopyDst),
             Dimension = TextureDimension.D2,
             MipLevelCount = 1,

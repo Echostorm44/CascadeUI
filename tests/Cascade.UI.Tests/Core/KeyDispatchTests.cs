@@ -38,6 +38,34 @@ public class KeyDispatchTests
     }
 
     [Test]
+    public async Task EscapeBinding_WinsOverClearingFocus()
+    {
+        int fired = 0;
+        var input = new TextInput(new Bindable<string>("", _ => { }));
+        var root = new KeyHandler(new Column(children: [input]),
+            new KeyBinding(new Hotkey(ModifierKeys.None, Key.Escape), () => fired++));
+        dispatcher.SetRoot(root);
+        FocusManager.RequestFocus(input);
+
+        KeyDown(Key.Escape, ModifierKeys.None);
+
+        await Assert.That(fired).IsEqualTo(1);
+        await Assert.That(FocusManager.FocusedElement).IsSameReferenceAs(input);
+    }
+
+    [Test]
+    public async Task UnboundEscape_StillClearsFocus()
+    {
+        var input = new TextInput(new Bindable<string>("", _ => { }));
+        dispatcher.SetRoot(new Column(children: [input]));
+        FocusManager.RequestFocus(input);
+
+        KeyDown(Key.Escape, ModifierKeys.None);
+
+        await Assert.That(FocusManager.FocusedElement).IsNull();
+    }
+
+    [Test]
     public async Task InnermostHandlerAroundFocus_Wins()
     {
         var calls = new List<string>();

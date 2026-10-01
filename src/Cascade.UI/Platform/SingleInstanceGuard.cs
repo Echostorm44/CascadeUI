@@ -107,6 +107,14 @@ internal sealed class SingleInstanceGuard : IDisposable
             // The primary may be mid-startup; give it a brief window to appear.
             client.Connect(2000);
 
+            // This launch came from the user (Explorer, a shortcut, a terminal), so this process
+            // may take the foreground and the primary, which only hears a pipe message, may not.
+            // Hand that right over so the primary's window can come to the front.
+            if (OperatingSystem.IsWindows())
+            {
+                _ = Win32.AllowSetForegroundWindow(Win32.ASFW_ANY);
+            }
+
             string payload = string.Join(ArgDelimiter, args);
             byte[] bytes = Encoding.UTF8.GetBytes(payload);
             client.Write(bytes, 0, bytes.Length);

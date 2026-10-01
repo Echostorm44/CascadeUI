@@ -21,6 +21,9 @@ internal sealed class FrameOrchestrator : IDisposable
 
     private ComponentHost? rootHost;
     private bool frameRequested;
+
+    // Window hidden or minimized: nothing is presented. Requests made meanwhile are served on resume.
+    private bool suspended;
     private long lastTickTimestamp;
     private float windowWidth;
     private float windowHeight;
@@ -112,6 +115,52 @@ internal sealed class FrameOrchestrator : IDisposable
     internal ComponentHost? RootHost => rootHost;
     internal bool IsFrameRequested => frameRequested;
 
+    /// <summary>True while the window is hidden or minimized and frames are not produced.</summary>
+    internal bool IsSuspended => suspended;
+
+    /// <summary>
+    /// Wakes the frame loop once at a Stopwatch timestamp while idle (set by platforms that can, e.g.
+    /// Win32FrameClock.WakeAt). Without it a blinking caret keeps the loop running every vblank.
+    /// </summary>
+    internal Action<long>? ScheduleWake { get; set; }
+
+    /// <summary>Drops a pending <see cref="ScheduleWake"/>.</summary>
+    internal Action? CancelWake { get; set; }
+
+    /// <summary>
+    /// Window hidden/minimized (true) or shown again (false). While suspended no frame is produced —
+    /// a tray app hidden all day renders nothing; on resume one frame brings it up to date.
+    /// </summary>
+    internal void SetSuspended(bool value)
+    {
+        if (suspended == value)
+        {
+            return;
+        }
+        suspended = value;
+        if (value)
+        {
+            frameRequested = false;
+            cancelFrame();
+            CancelWake?.Invoke();
+        }
+        else
+        {
+            OnFrameRequested();
+        }
+    }
+
+    /// <summary>A frame delivered by <see cref="ScheduleWake"/>: run it like a requested one.</summary>
+    internal void TickFromWake()
+    {
+        if (suspended || disposed)
+        {
+            return;
+        }
+        frameRequested = true;
+        Tick();
+    }
+
     /// <summary>
     /// Snapshot of every flag the frame loop consults to decide whether to
     /// continue ticking. Used by <c>cascade_diagnostics</c> so an agent can
@@ -194,6 +243,13 @@ internal sealed class FrameOrchestrator : IDisposable
             return;
         }
 
+        if (suspended)
+        {
+            frameRequested = false;
+            cancelFrame();
+            return;
+        }
+
         long now = Stopwatch.GetTimestamp();
         float deltaTime = lastTickTimestamp == 0
             ? 0.016f
@@ -259,6 +315,8 @@ internal sealed class FrameOrchestrator : IDisposable
 
         // 4. Update input dispatcher's root for hit testing
         inputDispatcher.SetRoot(rootHost.RenderedTree);
+
+        NodePainter.NextCaretToggle = 0;
 
         // 5. Paint the laid-out tree
 #if DEBUG
@@ -328,13 +386,14 @@ internal sealed class FrameOrchestrator : IDisposable
         DiagnosticsHub.EndPaint();
         DiagnosticsHub.EndFrame();
 
-        // 6. If nothing else needs a frame, stop the timer to save CPU/battery.
-        // Keep ticking while a TextInput caret is blinking or a Spinner is
-        // visible so their animations stay smooth.
+        // 6. If nothing else needs a frame, stop the timer to save CPU/battery. A blinking caret
+        // only needs a frame at its next toggle: where the platform can wake us then, sleep until
+        // it; otherwise keep ticking. Spinners etc. keep the loop running.
+        bool caretBlinking = InputDispatcher.IsCaretActive && NodePainter.NextCaretToggle != 0;
         if (!animationScheduler.HasActiveAnimations
             && !SharedScheduler.Instance.HasActiveAnimations
             && renderScheduler.DirtyCount == 0
-            && !InputDispatcher.IsCaretActive
+            && (!InputDispatcher.IsCaretActive || ScheduleWake is not null)
             && !NodePainter.HasActiveSpinners
             && !NodePainter.HasActiveChartAnimations
             && !NodePainter.HasActiveToasts
@@ -343,6 +402,10 @@ internal sealed class FrameOrchestrator : IDisposable
         {
             frameRequested = false;
             cancelFrame();
+            if (caretBlinking)
+            {
+                ScheduleWake!(NodePainter.NextCaretToggle);
+            }
         }
     }
 
@@ -433,7 +496,7 @@ internal sealed class FrameOrchestrator : IDisposable
 
     private void OnFrameRequested()
     {
-        if (!frameRequested && !disposed)
+        if (!frameRequested && !disposed && !suspended)
         {
             frameRequested = true;
             requestFrame();

@@ -59,6 +59,12 @@ internal sealed class Win32Window : IDisposable
     internal Action? Destroyed;
     internal Action<uint>? DpiChanged;
     internal Action<int, int>? SizeChanged;
+
+    /// <summary>
+    /// The window became visible (true) or hidden/minimized (false): shown, hidden, minimized or
+    /// restored. Rendering stops while it is not visible.
+    /// </summary>
+    internal Action<bool>? VisibilityChanged;
     internal Action<string[]>? FilesDropped;
 
     internal nint Handle => handle;
@@ -1006,6 +1012,13 @@ internal sealed class Win32Window : IDisposable
                 return 0;
             }
 
+            case Win32.WM_SHOWWINDOW:
+            {
+                // Sent before the window is shown or hidden; wParam is the new state.
+                VisibilityChanged?.Invoke(wParam != 0 && !Win32.IsIconic(handle));
+                break;
+            }
+
             case Win32.WM_SIZE:
             {
                 int width = Win32.LoWord(lParam);
@@ -1015,6 +1028,7 @@ internal sealed class Win32Window : IDisposable
                 {
                     SizeChanged?.Invoke(width, height);
                 }
+                VisibilityChanged?.Invoke(wParam != (nuint)Win32.SIZE_MINIMIZED && Win32.IsWindowVisible(handle));
                 MessageReceived?.Invoke(msg, wParam, lParam);
                 return 0;
             }

@@ -1914,6 +1914,44 @@ internal sealed class NodePainter
 
     // ── TextInput ──────────────────────────────────────────────────────
 
+    /// <summary>
+    /// When the earliest caret painted this frame next changes (Stopwatch timestamp; 0 = none).
+    /// The frame loop sleeps until then instead of repainting every vblank for a blinking caret.
+    /// </summary>
+    internal static long NextCaretToggle { get; set; }
+
+    /// <summary>
+    /// Caret opacity: solid for one blink interval after input, then a hard on/off blink of half an
+    /// interval each, like the native Windows caret. A smooth fade needed a frame every vblank;
+    /// this needs one per toggle. Records the next toggle in <see cref="NextCaretToggle"/>.
+    /// </summary>
+    internal static float CaretBlink(double intervalMs, long resetTimestamp)
+    {
+        long now = Stopwatch.GetTimestamp();
+        double elapsed = Stopwatch.GetElapsedTime(resetTimestamp, now).TotalMilliseconds;
+        double half = intervalMs / 2.0;
+        float opacity;
+        double nextChangeMs;
+        if (elapsed < intervalMs)
+        {
+            opacity = 1f;
+            nextChangeMs = intervalMs;
+        }
+        else
+        {
+            long step = (long)((elapsed - intervalMs) / half);
+            opacity = (step & 1) == 0 ? 0f : 1f;
+            nextChangeMs = intervalMs + ((step + 1) * half);
+        }
+
+        long toggle = resetTimestamp + (long)(nextChangeMs * Stopwatch.Frequency / 1000.0);
+        if (NextCaretToggle == 0 || toggle < NextCaretToggle)
+        {
+            NextCaretToggle = toggle;
+        }
+        return opacity;
+    }
+
     private void PaintTextInput(TextInput ti, Rect bounds)
     {
         var t = theme.TextInput;
@@ -2059,25 +2097,11 @@ internal sealed class NodePainter
                 maxWidth: float.PositiveInfinity, maxLines: 1);
         }
 
-        // Caret when focused — smooth sinusoidal fade blink
+        // Caret when focused — a hard blink (see CaretBlink)
         if (focused && !disabled)
         {
             var caret = theme.Caret;
-            double blinkMs = caret.BlinkInterval.TotalMilliseconds;
-            double elapsed = Stopwatch.GetElapsedTime(InputDispatcher.CaretResetTimestamp).TotalMilliseconds;
-
-            // Caret is fully visible for the first blink cycle after a keystroke,
-            // then fades in/out sinusoidally for a smooth, Apple-like pulse.
-            float caretOpacity;
-            if (elapsed < blinkMs)
-            {
-                caretOpacity = 1f;
-            }
-            else
-            {
-                double phase = (elapsed % blinkMs) / blinkMs * Math.PI * 2.0;
-                caretOpacity = (float)(0.5 + 0.5 * Math.Cos(phase));
-            }
+            float caretOpacity = CaretBlink(caret.BlinkInterval.TotalMilliseconds, InputDispatcher.CaretResetTimestamp);
 
             if (caretOpacity > 0.01f)
             {
@@ -4864,14 +4888,8 @@ internal sealed class NodePainter
         ctx.DrawText("⌘", panelX + searchPadding, iconY,
             bodySize, colors.Text.Opacity(0.4f));
 
-        // Cursor with smooth sinusoidal blink (~1s period)
-        float caretOpacity = 1f;
-        if (!cpReducedMotion)
-        {
-            double caretMs = Environment.TickCount64;
-            caretOpacity = 0.5f + 0.5f * MathF.Cos((float)(caretMs * 2.0 * MathF.PI / 1000.0));
-            ControlStateAnimator.SignalActiveTransition();
-        }
+        // Blinking cursor (solid under reduced motion).
+        float caretOpacity = cpReducedMotion ? 1f : CaretBlink(theme.Caret.BlinkInterval.TotalMilliseconds, InputDispatcher.CaretResetTimestamp);
         if (!string.IsNullOrEmpty(cp.SearchText))
         {
             var cursorTextSize = ctx.MeasureTextAdvance(cp.SearchText, bodySize);
@@ -11091,18 +11109,12 @@ internal sealed class NodePainter
                         ctx.DrawText(editText, textX, textY, cellFontSize, editTextColor);
                     }
 
-                    // Smooth sinusoidal caret blink
+                    // Blinking caret (solid under reduced motion)
                     string beforeCursor = editText[..tdn.EditCursorPos];
                     float cursorX = textX + ctx.MeasureText(beforeCursor, cellFontSize).Width;
                     float cursorTop = editRect.Y + 4f;
                     float cursorBot = editRect.Bottom - 4f;
-                    float caretOpacity = 1f;
-                    if (!tabReducedMotion)
-                    {
-                        double caretElapsed = Stopwatch.GetElapsedTime(0, Stopwatch.GetTimestamp()).TotalSeconds;
-                        caretOpacity = 0.5f + 0.5f * (float)Math.Cos(caretElapsed * 4.0);
-                        ControlStateAnimator.SignalActiveTransition();
-                    }
+                    float caretOpacity = tabReducedMotion ? 1f : CaretBlink(theme.Caret.BlinkInterval.TotalMilliseconds, InputDispatcher.CaretResetTimestamp);
                     ctx.DrawLine(
                         new Point(cursorX, cursorTop),
                         new Point(cursorX, cursorBot),
@@ -12136,18 +12148,7 @@ internal sealed class NodePainter
             else if (isActiveCell)
             {
                 // Smooth caret blink in active cell
-                const double blinkMs = 530.0;
-                double elapsed = Stopwatch.GetElapsedTime(InputDispatcher.CaretResetTimestamp).TotalMilliseconds;
-                float caretOpacity;
-                if (elapsed < blinkMs)
-                {
-                    caretOpacity = 1f;
-                }
-                else
-                {
-                    double phase = (elapsed % blinkMs) / blinkMs * Math.PI * 2.0;
-                    caretOpacity = (float)(0.5 + 0.5 * Math.Cos(phase));
-                }
+                float caretOpacity = CaretBlink(theme.Caret.BlinkInterval.TotalMilliseconds, InputDispatcher.CaretResetTimestamp);
 
                 if (caretOpacity > 0.01f)
                 {
@@ -15233,19 +15234,7 @@ internal sealed class NodePainter
         if (focused && !disabled)
         {
             var caret = theme.Caret;
-            double blinkMs = caret.BlinkInterval.TotalMilliseconds;
-            double elapsed = Stopwatch.GetElapsedTime(InputDispatcher.CaretResetTimestamp).TotalMilliseconds;
-
-            float caretOpacity;
-            if (elapsed < blinkMs)
-            {
-                caretOpacity = 1f;
-            }
-            else
-            {
-                double phase = (elapsed % blinkMs) / blinkMs * Math.PI * 2.0;
-                caretOpacity = (float)(0.5 + 0.5 * Math.Cos(phase));
-            }
+            float caretOpacity = CaretBlink(caret.BlinkInterval.TotalMilliseconds, InputDispatcher.CaretResetTimestamp);
 
             if (caretOpacity > 0.01f)
             {
@@ -15658,19 +15647,7 @@ internal sealed class NodePainter
         if (focused && !disabled)
         {
             var caret = theme.Caret;
-            double blinkMs = caret.BlinkInterval.TotalMilliseconds;
-            double elapsed = Stopwatch.GetElapsedTime(InputDispatcher.CaretResetTimestamp).TotalMilliseconds;
-
-            float caretOpacity;
-            if (elapsed < blinkMs)
-            {
-                caretOpacity = 1f;
-            }
-            else
-            {
-                double phase = (elapsed % blinkMs) / blinkMs * Math.PI * 2.0;
-                caretOpacity = (float)(0.5 + 0.5 * Math.Cos(phase));
-            }
+            float caretOpacity = CaretBlink(caret.BlinkInterval.TotalMilliseconds, InputDispatcher.CaretResetTimestamp);
 
             if (caretOpacity > 0.01f)
             {

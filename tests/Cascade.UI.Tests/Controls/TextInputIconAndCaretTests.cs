@@ -34,7 +34,7 @@ public class TextInputIconAndCaretTests
         float iconSize = TextInputMetrics.IconSize(withIcon, theme);
 
         await Assert.That(TextInputMetrics.ContentLeft(plain, theme)).IsEqualTo(theme.TextInput.PaddingH);
-        await Assert.That(iconSize).IsGreaterThan(0f);
+        await Assert.That(iconSize).IsEqualTo(16f); // the size the icon declares
         await Assert.That(TextInputMetrics.ContentLeft(withIcon, theme)).IsEqualTo(theme.TextInput.PaddingH + iconSize + TextInputMetrics.IconGap);
     }
 

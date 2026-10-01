@@ -72,10 +72,10 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
     private readonly Dictionary<int, Texture> _imageTextures = new();
     private readonly Dictionary<int, TextureView> _imageTextureViews = new();
     private readonly Dictionary<int, BindGroup> _imageBindGroups = new();
+    // Every image quad of a frame, quad i at vertices [6i, 6i+6) (see UploadImageQuads); grown on demand.
     private GpuBuffer _imageVertexBuffer;
-    // Per-frame ring of image quad slots in _imageVertexBuffer (one slot per DrawImage).
-    private const int MaxImageQuadsPerFrame = 4096;
-    private int _imageQuadSlot;
+    private const int InitialImageQuadCapacity = 4096;
+    private int _imageQuadCapacity = InitialImageQuadCapacity;
 
     // Performance instrumentation
     private readonly Stopwatch _phaseTimer = new();
@@ -84,7 +84,6 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
     private double _totalBuildMs;
     private double _totalUploadMs;
     private double _totalRenderMs;
-    private double _totalImageMs;
 
     // Screenshot capture. _captureBuffer is written row-by-row on the present
     // thread (PerformCapture) and read on the MCP/CLI thread (CaptureFrame);
@@ -101,7 +100,8 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
     // Layer instance cache — avoid rebuilding instances for unchanged layers.
     // Stores the scene reference alongside instances so that layer recapture
     // (which produces a new SceneBuffer) invalidates the cache correctly.
-    private readonly Dictionary<ulong, (SceneBuffer Scene, List<ShapeInstance> Instances)> _layerInstanceCache = new();
+    // InstanceAt maps the layer's captured command index to its shape-instance index (paint order).
+    private readonly Dictionary<ulong, (SceneBuffer Scene, List<ShapeInstance> Instances, List<int> InstanceAt)> _layerInstanceCache = new();
 
     // Strip-coverage pipeline (Etch GPU-007)
     private readonly GpuCompositor _compositor;
@@ -133,9 +133,9 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
     private TextureView _bgCopyView;
     private uint _bgCopyWidth, _bgCopyHeight;
 
-    // Frosted-glass backdrop blur — a dedicated pass (after the framebuffer copy)
-    // that fills rounded rects with a Gaussian blur of _bgCopyTexture, tinted.
-    // Skipped entirely when there are no DrawBackdropBlur ops (zero normal-path cost).
+    // Frosted-glass backdrop blur — a batch (after a framebuffer copy) that fills
+    // rounded rects with a Gaussian blur of _bgCopyTexture, tinted. Costs nothing
+    // when there are no DrawBackdropBlur ops.
     private readonly ShaderModule _blurShader;
     private readonly RenderPipeline _blurPipeline;
     private readonly PipelineLayout _blurPipelineLayout;
@@ -144,15 +144,6 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
     private readonly Sampler _blurSampler;
     private GpuBuffer _blurInstanceBuffer;
     private int _blurInstanceCapacity;
-    private readonly List<BlurInstance> _blurInstances = new();
-    private List<GlyphInstance> _cachedGlyphInstances = new();
-    private readonly Dictionary<ulong, List<GlyphInstance>> _cachedLayerGlyphInstances = new();
-
-    // Cached glyph commands to rebuild instances after atlas evictions
-    private readonly List<EtchBackend.GlyphOp> _cachedMainGlyphCommands = new();
-    private readonly Dictionary<ulong, List<EtchBackend.GlyphOp>> _cachedLayerGlyphCommands = new();
-    private readonly List<EtchBackend.GlyphOp> _cachedOverlayGlyphCommands = new();
-    private List<GlyphInstance> _cachedOverlayGlyphInstances = new();
 
     // Color glyph atlas for COLR/CPAL emoji (RGBA8Unorm)
     private readonly GlyphAtlas _colorGlyphAtlas;
@@ -164,14 +155,11 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
     private BindGroup _colorGlyphAtlasBindGroup;
     private GpuBuffer _colorGlyphInstanceBuffer;
     private int _colorGlyphInstanceCapacity;
-    private List<GlyphInstance> _cachedColorGlyphInstances = new();
-    private readonly Dictionary<ulong, List<GlyphInstance>> _cachedLayerColorGlyphInstances = new();
-    private List<GlyphInstance> _cachedOverlayColorGlyphInstances = new();
+    private BindGroup _colorGlyphInstanceBindGroup;
 
     // Shape instance cache
     private SceneBuffer? _lastScene;
-    private List<ShapeInstance> _cachedInstances = new();
-    private readonly List<ShapeInstance> _combinedInstanceBuffer = new();
+    private readonly List<ShapeInstance> _cachedInstances = new();
 
     private const string GeometryWgsl = """
         struct SurfaceSize {
@@ -1212,7 +1200,7 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
         _imageVertexBuffer = _device.CreateBuffer(new BufferDescriptor
         {
             Usage = (ulong)(BufferUsage.Vertex | BufferUsage.CopyDst),
-            Size = (ulong)(MaxImageQuadsPerFrame * 6 * 4 * sizeof(float)),
+            Size = (ulong)(_imageQuadCapacity * ImageQuadFloats * sizeof(float)),
         });
 
         _compositor = new GpuCompositor(_device);
@@ -1577,11 +1565,15 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
     }
 
     /// <summary>
-    /// Renders the scene buffer directly to the swapchain, then composites
-    /// CPU-rasterized text on top. Optional layer compositing for Flutter-style
-    /// retained scroll layers — each layer is rendered with its own offset.
+    /// Renders the frame to the swapchain in paint order. Shapes come from the scene buffer,
+    /// glyph runs and images from the backend's command stream, and retained ScrollView layers are
+    /// spliced in where their <c>DrawLayerTexture</c> op was painted (with their scroll offset baked
+    /// into positions). <paramref name="sceneMarks"/> (see <see cref="EtchBackendProvider.SceneMarks"/>)
+    /// is what lets text and images sit between the shapes painted before and after them; see
+    /// <see cref="PaintOrderBatcher"/> for how the frame is batched so that costs little.
     /// </summary>
-    public void PresentScene(SceneBuffer scene, EtchBackend backend, List<LayerRenderInfo>? layers = null, List<GlyphDrawRecord>? glyphRecords = null)
+    public void PresentScene(SceneBuffer scene, EtchBackend backend, IReadOnlyList<int>? sceneMarks,
+        List<LayerRenderInfo>? layers = null, List<GlyphDrawRecord>? glyphRecords = null)
     {
         if (_disposed)
         {
@@ -1591,50 +1583,17 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
         // Per-frame dissolve threshold set by the painter (dissolve transition).
         FrameDissolve = backend.FrameDissolve;
 
-        // Invalidate layer instance cache entries for layers no longer present
-        if (layers != null && layers.Count > 0)
+        // Drop cached layer instances for layers no longer present.
+        _activeLayerHandles.Clear();
+        if (layers != null)
         {
-            var activeHandles = new HashSet<ulong>();
             foreach (var layer in layers)
             {
-                activeHandles.Add(layer.LayerHandle);
-            }
-
-            var keysToRemove = new List<ulong>();
-            foreach (var key in _layerInstanceCache.Keys)
-            {
-                if (!activeHandles.Contains(key))
-                {
-                    keysToRemove.Add(key);
-                }
-            }
-
-            foreach (var key in keysToRemove)
-            {
-                _layerInstanceCache.Remove(key);
-            }
-
-            keysToRemove.Clear();
-            foreach (var key in _layerStripCoverageCache.Keys)
-            {
-                if (!activeHandles.Contains(key))
-                {
-                    keysToRemove.Add(key);
-                }
-            }
-            foreach (var key in keysToRemove)
-            {
-                _layerStripCoverageCache.Remove(key);
+                _activeLayerHandles.Add(layer.LayerHandle);
             }
         }
-        else if (_layerInstanceCache.Count > 0)
-        {
-            _layerInstanceCache.Clear();
-        }
-        if (layers == null || layers.Count == 0)
-        {
-            _layerStripCoverageCache.Clear();
-        }
+        PruneLayerCache(_layerInstanceCache);
+        PruneLayerCache(_layerStripCoverageCache);
 
         var frameSw = System.Diagnostics.Stopwatch.StartNew();
 
@@ -1656,249 +1615,47 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
         }
 
         _phaseTimer.Restart();
-        List<ShapeInstance> instances;
-        if (ReferenceEquals(scene, _lastScene))
-        {
-            instances = _cachedInstances;
-        }
-        else
+        if (!ReferenceEquals(scene, _lastScene))
         {
             _lastScene = scene;
-            BuildInstances(scene, _cachedInstances, skipArbitraryPaths: _enableStripCoverage);
-            instances = _cachedInstances;
+            BuildInstances(scene, _cachedInstances, sceneMarks, _mainInstanceAt, skipArbitraryPaths: _enableStripCoverage);
         }
-        _phaseTimer.Stop();
-        double buildMs = _phaseTimer.Elapsed.TotalMilliseconds;
 
-        _phaseTimer.Restart();
-        // Pre-build and cache all layer instances so we know the maximum buffer size needed.
-        int totalInstanceCount = instances.Count;
-        var layerOffsets = new Dictionary<ulong, int>();
-        if (layers != null && layers.Count > 0)
+        if (layers != null)
         {
             foreach (var layer in layers)
             {
                 bool needsRebuild = !_layerInstanceCache.TryGetValue(layer.LayerHandle, out var cached)
                     || !ReferenceEquals(cached.Scene, layer.Scene);
-
-                if (needsRebuild)
+                if (!needsRebuild)
                 {
-                    // Layers don't have strip-coverage — always use AABB fallback for arbitrary paths
-                    var rebuiltInstances = cached.Instances ?? new List<ShapeInstance>();
-                    BuildInstances(layer.Scene, rebuiltInstances, skipArbitraryPaths: false);
-                    cached = (layer.Scene, rebuiltInstances);
-                    _layerInstanceCache[layer.LayerHandle] = cached;
+                    continue;
                 }
 
-                var layerInstances = cached.Instances;
-
-                if (DebugLog.IsEnabled(DebugLogCategory.Instance) && layerInstances.Count > 0)
-                {
-                    float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
-                    foreach (var inst in layerInstances)
-                    {
-                        if (inst.MinX < minX) { minX = inst.MinX; }
-                        if (inst.MinY < minY) { minY = inst.MinY; }
-                        if (inst.MaxX > maxX) { maxX = inst.MaxX; }
-                        if (inst.MaxY > maxY) { maxY = inst.MaxY; }
-                    }
-                    DebugLog.Write(DebugLogCategory.Instance,
-                        $"[{DateTime.Now:O}] Layer {layer.LayerHandle}: {layerInstances.Count} instances, bounds ({minX:F1},{minY:F1})-({maxX:F1},{maxY:F1}), offset ({layer.OffsetX:F1},{layer.OffsetY:F1})");
-                }
-                layerOffsets[layer.LayerHandle] = totalInstanceCount;
-                totalInstanceCount += layerInstances.Count;
+                // Layers don't have strip-coverage — always use AABB fallback for arbitrary paths
+                var rebuiltInstances = cached.Instances ?? new List<ShapeInstance>();
+                var rebuiltInstanceAt = cached.InstanceAt ?? new List<int>();
+                BuildInstances(layer.Scene, rebuiltInstances, layer.SceneMarks, rebuiltInstanceAt, skipArbitraryPaths: false);
+                _layerInstanceCache[layer.LayerHandle] = (layer.Scene, rebuiltInstances, rebuiltInstanceAt);
+                LogLayerInstances(layer, rebuiltInstances);
             }
         }
-
-        // Combine all instances into a single buffer upload to avoid
-        // queue-write ordering issues that overwrite main-frame data
-        // before the GPU executes the main-frame render pass.
-        var combinedInstances = _combinedInstanceBuffer;
-        combinedInstances.Clear();
-        combinedInstances.AddRange(instances);
-        if (layers != null)
-        {
-            foreach (var layer in layers)
-            {
-                if (_layerInstanceCache.TryGetValue(layer.LayerHandle, out var cached))
-                {
-                    var layerInstances = cached.Instances;
-
-                    // The cached instances are baked at ABSOLUTE positions: BuildInstances
-                    // replays the layer scene through its InitialTransform, which already
-                    // includes the ScrollView's on-screen origin. layer.Offset is the
-                    // composite point run through that same transform, so it ALSO carries
-                    // the origin — adding it whole double-counts the ScrollView's position
-                    // (a header-offset nav list paints one header below its hit-test rect).
-                    // The viewport clip origin equals that baked-in origin, so the residual
-                    // shift to apply is just the scroll delta: offset − clipOrigin. This
-                    // matches CompositeLayersCpu (the CPU path that was always correct).
-                    var (layerOffX, layerOffY) = LayerScrollDelta(layer);
-
-                    // Apply scroll offset directly to instance bounds since uniform
-                    // buffer updates mid-frame are unreliable in wgpu-native.
-                    foreach (ref readonly var inst in CollectionsMarshal.AsSpan(layerInstances))
-                    {
-                        // Shift every positional field by the scroll delta. Using
-                        // Translated (not a hand-written field copy) guarantees colours,
-                        // ShapeType, Radius, StrokeWidth, Expand — and any field added
-                        // later — carry through; the dropped-Expand blocky-corner bug
-                        // came from a hand copy that forgot a field. RENDER-001.
-                        var moved = inst.Translated(layerOffX, layerOffY);
-
-                        // WP-3517: clip only the rasterization extent (quad bounds) to the
-                        // layer's viewport so scrolled-away content does not bleed outside
-                        // the ScrollView. The SDF/gradient params (P0/P1/Center) stay at
-                        // their absolute positions, so the shape is clipped, not distorted.
-                        if (layer.ViewportClip is Cascade.UI.Rect vc)
-                        {
-                            float minX = Math.Max(moved.MinX, vc.X);
-                            float minY = Math.Max(moved.MinY, vc.Y);
-                            float maxX = Math.Min(moved.MaxX, vc.X + vc.Width);
-                            float maxY = Math.Min(moved.MaxY, vc.Y + vc.Height);
-                            if (maxX <= minX || maxY <= minY)
-                            {
-                                continue;
-                            }
-                            moved = moved with { MinX = minX, MinY = minY, MaxX = maxX, MaxY = maxY };
-                        }
-
-                        combinedInstances.Add(moved);
-                    }
-                }
-            }
-        }
-        EnsureGeometryBufferCapacity(combinedInstances.Count);
-        UploadInstances(combinedInstances);
-        UploadSurfaceSize(_currentWidth, _currentHeight, 0, 0);
         _phaseTimer.Stop();
-        double uploadMs = _phaseTimer.Elapsed.TotalMilliseconds;
-
-        using var encoder = _device.CreateCommandEncoder();
+        double buildMs = _phaseTimer.Elapsed.TotalMilliseconds;
 
         _phaseTimer.Restart();
-        SceneBuffer stripScene = null!;
-        double stripBuildMs = 0;
+        SceneBuffer? stripScene = null;
         // Strip-coverage is the primary bottleneck during scroll.
         // Disable it until the architecture supports transform-independent caching.
         if (_enableStripCoverage)
         {
             int stripHash = ComputeStripCoverageHash(scene);
-            if (stripHash == _stripCoverageHash && _stripCoverageScene is not null && _stripCoverageScene.Commands.Length > 0)
-            {
-                stripScene = _stripCoverageScene;
-            }
-            else
+            if (stripHash != _stripCoverageHash || _stripCoverageScene is null || _stripCoverageScene.Commands.Length == 0)
             {
                 _stripCoverageHash = stripHash;
                 _stripCoverageScene = BuildStripCoverageScene(scene);
-                stripScene = _stripCoverageScene;
             }
-        }
-        _phaseTimer.Stop();
-        stripBuildMs = _phaseTimer.Elapsed.TotalMilliseconds;
-
-        _phaseTimer.Restart();
-        // Geometry pass — main frame only. Queue uploads happen OUTSIDE render passes
-        // to avoid potential wgpu validation issues with buffer writes during active passes.
-        var colorAttachment = new RenderPassColorAttachment
-        {
-            View = (nint)frame.View,
-            DepthSlice = 0xFFFFFFFFu,
-            LoadOp = LoadOp.Clear,
-            StoreOp = StoreOp.Store,
-            ClearValue = new Color { R = 0, G = 0, B = 0, A = 1 },
-        };
-        var passDesc = new RenderPassDescriptor
-        {
-            ColorAttachmentCount = (UIntPtr)1,
-            ColorAttachments = (nint)(&colorAttachment),
-        };
-
-        // Draw all instances (main + layers with offset baked into bounds)
-        if (combinedInstances.Count > 0)
-        {
-            using (var pass = encoder.BeginRenderPass(passDesc))
-            {
-                pass.SetPipeline(_geomPipeline);
-                pass.SetBindGroup(0, _geomBindGroup);
-                pass.Draw(4, (uint)combinedInstances.Count, 0, 0);
-                pass.End();
-            }
-        }
-
-        // Layer compositing is now handled by baking scroll offset into instance bounds.
-        // The combined instance buffer contains all instances (main + layers with offset applied),
-        // drawn in a single geometry pass above. No separate layer render passes needed.
-
-        if (stripScene is not null && stripScene.Commands.Length > 0)
-        {
-            var stripColorAttachment = new RenderPassColorAttachment
-            {
-                View = (nint)frame.View,
-                DepthSlice = 0xFFFFFFFFu,
-                LoadOp = LoadOp.Load,
-                StoreOp = StoreOp.Store,
-            };
-            var stripPassDesc = new RenderPassDescriptor
-            {
-                ColorAttachmentCount = (UIntPtr)1,
-                ColorAttachments = (nint)(&stripColorAttachment),
-            };
-            using (var pass = encoder.BeginRenderPass(stripPassDesc))
-            {
-                _ = _compositor.RecordRenderPass(pass, stripScene, (int)_currentWidth, (int)_currentHeight);
-                pass.End();
-            }
-        }
-
-        _phaseTimer.Stop();
-        double renderMs = _phaseTimer.Elapsed.TotalMilliseconds;
-
-        // Image pass
-        _phaseTimer.Restart();
-        RenderImages(backend, encoder, frame, layers);
-        _phaseTimer.Stop();
-        double imageMs = _phaseTimer.Elapsed.TotalMilliseconds;
-
-        // Cache glyph commands when available from backend, then rebuild ALL
-        // instances from cached commands every frame. This ensures atlas UV
-        // coordinates are fresh after LRU evictions caused by layer recapture.
-        // IMPORTANT: Always clear the cache — when ScrollView switches from
-        // direct paint (e.g., during dropdowns) back to layer compositing, the
-        // main frame has no glyph commands and the cache must not retain stale
-        // commands from the direct-paint frame.
-        _cachedMainGlyphCommands.Clear();
-        if (backend.GlyphCommands.Count > 0)
-        {
-            foreach (var cmd in backend.GlyphCommands)
-            {
-                _cachedMainGlyphCommands.Add(CopyGlyphOp(cmd));
-            }
-        }
-
-        var activeLayerHandles = new HashSet<ulong>(layers?.Select(l => l.LayerHandle) ?? []);
-        var staleLayerKeys = _cachedLayerGlyphInstances.Keys.Where(k => !activeLayerHandles.Contains(k)).ToList();
-        foreach (var key in staleLayerKeys)
-        {
-            _cachedLayerGlyphInstances.Remove(key);
-            _cachedLayerGlyphCommands.Remove(key);
-        }
-
-        if (layers != null)
-        {
-            foreach (var layer in layers)
-            {
-                if (layer.GlyphCommands.Count > 0)
-                {
-                    var layerCmds = new List<EtchBackend.GlyphOp>();
-                    foreach (var cmd in layer.GlyphCommands)
-                    {
-                        layerCmds.Add(CopyGlyphOp(cmd));
-                    }
-                    _cachedLayerGlyphCommands[layer.LayerHandle] = layerCmds;
-                }
-            }
+            stripScene = _stripCoverageScene;
         }
 
         // WP-3509: if churn filled either glyph atlas last frame (or a forced
@@ -1916,90 +1673,37 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
             _colorGlyphAtlas.Reset();
         }
 
-        // Rebuild all instances from cached commands to pick up fresh atlas regions
-        _cachedGlyphInstances.Clear();
-        _cachedColorGlyphInstances.Clear();
-        foreach (var layerList in _cachedLayerGlyphInstances.Values)
-        {
-            layerList.Clear();
-        }
-        foreach (var layerColorList in _cachedLayerColorGlyphInstances.Values)
-        {
-            layerColorList.Clear();
-        }
-        _cachedOverlayGlyphInstances.Clear();
-        _cachedOverlayColorGlyphInstances.Clear();
+        // Glyph instances are rebuilt from the frame's glyph ops every frame (not cached), so
+        // their atlas UVs are always fresh after LRU evictions caused by layer recapture.
+        ScheduleFrame(backend, layers, glyphRecords, stripScene);
+        UploadSchedule();
+        UploadSurfaceSize(_currentWidth, _currentHeight, 0, 0);
+        _phaseTimer.Stop();
+        double uploadMs = _phaseTimer.Elapsed.TotalMilliseconds;
 
-        float atlasDim = _glyphAtlas.Dimension;
-        var overlayBounds = backend.OverlayBounds;
+        using var encoder = _device.CreateCommandEncoder();
 
-        // Diagnostic: count glyphs with clip bounds
-        int totalGlyphs = 0, clippedGlyphs = 0, culledGlyphs = 0;
-        foreach (var cmd in _cachedMainGlyphCommands)
-        {
-            totalGlyphs += cmd.GlyphIds.Length;
-            if (cmd.ClipBounds.Width > 0 && cmd.ClipBounds.Height > 0) { clippedGlyphs++; }
-            BuildGlyphInstances(cmd, backend, atlasDim, _cachedGlyphInstances, _cachedColorGlyphInstances, 0, 0, overlayBounds, ref culledGlyphs, glyphRecords, "main");
-        }
+        _phaseTimer.Restart();
+        int copies = EncodeSchedule(encoder, frame, stripScene);
+        _phaseTimer.Stop();
+        double renderMs = _phaseTimer.Elapsed.TotalMilliseconds;
 
-        if (layers != null)
-        {
-            foreach (var layer in layers)
-            {
-                if (_cachedLayerGlyphCommands.TryGetValue(layer.LayerHandle, out var layerCmds))
-                {
-                    // Same scroll-delta correction as the shape instances: layer glyphs are
-                    // baked at absolute coords, so the residual shift is offset − clipOrigin,
-                    // not the full offset (which would double-count the ScrollView's position).
-                    var (glyphOffX, glyphOffY) = LayerScrollDelta(layer);
-                    var layerGlyphs = new List<GlyphInstance>();
-                    foreach (var cmd in layerCmds)
-                    {
-                        totalGlyphs += cmd.GlyphIds.Length;
-if (cmd.ClipBounds.Width > 0 && cmd.ClipBounds.Height > 0) { clippedGlyphs++; }
-                        var layerColorGlyphs = new List<GlyphInstance>();
-                        BuildGlyphInstances(cmd, backend, atlasDim, layerGlyphs, layerColorGlyphs, glyphOffX, glyphOffY, overlayBounds, ref culledGlyphs, glyphRecords, "layer", layer.ViewportClip);
-                        if (layerColorGlyphs.Count > 0)
-                        {
-                            _cachedLayerColorGlyphInstances[layer.LayerHandle] = layerColorGlyphs;
-                        }
-                    }
-                    _cachedLayerGlyphInstances[layer.LayerHandle] = layerGlyphs;
-                }
-            }
-        }
-
-        // Cache and build overlay glyph commands (popups, dropdowns)
-        if (backend.OverlayGlyphCommands.Count > 0)
-        {
-            _cachedOverlayGlyphCommands.Clear();
-            foreach (var cmd in backend.OverlayGlyphCommands)
-            {
-                _cachedOverlayGlyphCommands.Add(CopyGlyphOp(cmd));
-            }
-int overlayCulled = 0;
-                foreach (var cmd in _cachedOverlayGlyphCommands)
-                {
-                    BuildGlyphInstances(cmd, backend, atlasDim, _cachedOverlayGlyphInstances, _cachedOverlayColorGlyphInstances, 0, 0, null, ref overlayCulled, glyphRecords, "overlay");
-            }
-        }
-
-        bool hasGlyphs = _cachedGlyphInstances.Count > 0 || _cachedLayerGlyphInstances.Values.Any(l => l.Count > 0) || _cachedOverlayGlyphInstances.Count > 0;
-        bool hasColorGlyphs = _cachedColorGlyphInstances.Count > 0 || _cachedLayerColorGlyphInstances.Values.Any(l => l.Count > 0) || _cachedOverlayColorGlyphInstances.Count > 0;
-
-        // Frosted-glass backdrop blur — after all geometry/images are on the frame,
-        // before glyphs, so panels blur the content behind them and text lands on top.
-        RenderBackdropBlur(encoder, frame, backend);
-
-        if ((hasGlyphs || hasColorGlyphs) && !SkipGlyphPass)
-        {
-            RenderGlyphs(encoder, frame);
-        }
-
-        if (DebugLog.IsEnabled(DebugLogCategory.Clip) && (clippedGlyphs > 0 || culledGlyphs > 0))
+        if (DebugLog.IsEnabled(DebugLogCategory.Clip) && _culledGlyphs > 0)
         {
             DebugLog.Write(DebugLogCategory.Clip,
-                $"[{DateTime.Now:O}] clip-commands={clippedGlyphs}/{totalGlyphs} glyphs in clipped ops, culled={culledGlyphs}");
+                $"[{DateTime.Now:O}] culled={_culledGlyphs} glyphs outside their clip");
+        }
+        if (DebugLog.IsEnabled(DebugLogCategory.Frame) && _batcher.Count != _lastLoggedBatchCount)
+        {
+            _lastLoggedBatchCount = _batcher.Count;
+            var batchList = new StringBuilder();
+            foreach (var b in _batcher.Batches)
+            {
+                batchList.Append(System.Globalization.CultureInfo.InvariantCulture,
+                    $" {b.Kind}×{b.Count}@({b.MinX:F0},{b.MinY:F0})-({b.MaxX:F0},{b.MaxY:F0})");
+            }
+            DebugLog.Write(DebugLogCategory.Frame,
+                $"[{DateTime.Now:O}] paint order: {_batcher.Count} batches, {copies} framebuffer copies, shapes={_frameShapes.Count} glyphs={_frameGlyphs.Count} colorGlyphs={_frameColorGlyphs.Count} images={_frameImages.Count} blurs={_frameBlurs.Count}:{batchList}");
         }
 
         using var cb = encoder.Finish();
@@ -2038,15 +1742,876 @@ int overlayCulled = 0;
         if (_frameCount == 0 && DebugLog.IsEnabled(DebugLogCategory.Frame))
         {
             DebugLog.Write(DebugLogCategory.Frame,
-                $"[{DateTime.Now:O}] Frame 0: total={totalMs:F2}ms poll={pollSw.ElapsedMilliseconds}ms acquire={acquireSw.ElapsedMilliseconds}ms build={buildMs:F2}ms upload={uploadMs:F2}ms render={renderMs:F2}ms image={imageMs:F2}ms submit={submitSw.ElapsedMilliseconds}ms present={presentSw.ElapsedMilliseconds}ms instances={combinedInstances.Count}");
+                $"[{DateTime.Now:O}] Frame 0: total={totalMs:F2}ms poll={pollSw.ElapsedMilliseconds}ms acquire={acquireSw.ElapsedMilliseconds}ms build={buildMs:F2}ms schedule+upload={uploadMs:F2}ms encode={renderMs:F2}ms submit={submitSw.ElapsedMilliseconds}ms present={presentSw.ElapsedMilliseconds}ms shapes={_frameShapes.Count} batches={_batcher.Count}");
         }
 
         _totalFrameMs += totalMs;
         _totalBuildMs += buildMs;
         _totalUploadMs += uploadMs;
         _totalRenderMs += renderMs;
-        _totalImageMs += imageMs;
         _frameCount++;
+    }
+
+    private void PruneLayerCache<TValue>(Dictionary<ulong, TValue> cache)
+    {
+        if (cache.Count == 0)
+        {
+            return;
+        }
+
+        _staleLayerHandles.Clear();
+        foreach (var key in cache.Keys)
+        {
+            if (!_activeLayerHandles.Contains(key))
+            {
+                _staleLayerHandles.Add(key);
+            }
+        }
+        foreach (var key in _staleLayerHandles)
+        {
+            cache.Remove(key);
+        }
+    }
+
+    private static void LogLayerInstances(in LayerRenderInfo layer, List<ShapeInstance> layerInstances)
+    {
+        if (!DebugLog.IsEnabled(DebugLogCategory.Instance) || layerInstances.Count == 0)
+        {
+            return;
+        }
+
+        float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
+        foreach (var inst in layerInstances)
+        {
+            if (inst.MinX < minX) { minX = inst.MinX; }
+            if (inst.MinY < minY) { minY = inst.MinY; }
+            if (inst.MaxX > maxX) { maxX = inst.MaxX; }
+            if (inst.MaxY > maxY) { maxY = inst.MaxY; }
+        }
+        DebugLog.Write(DebugLogCategory.Instance,
+            $"[{DateTime.Now:O}] Layer {layer.LayerHandle}: {layerInstances.Count} instances, bounds ({minX:F1},{minY:F1})-({maxX:F1},{maxY:F1}), offset ({layer.OffsetX:F1},{layer.OffsetY:F1})");
+    }
+
+    // ── Paint-order scheduling (see PaintOrderBatcher) ─────────────────────────
+
+    /// <summary>One image quad: device rect plus the UV sub-rect that survives clipping.</summary>
+    private struct ImageQuad
+    {
+        public int Handle;
+        public float L, T, R, B;
+        public float U0, V0, U1, V1;
+    }
+
+    private readonly PaintOrderBatcher _batcher = new();
+    private int _lastLoggedBatchCount = -1;
+    private int _culledGlyphs;
+
+    // Paint-order lists, the batch-ordered copies made only when batching reordered them, and the
+    // ranges that map one onto the other. All reused across frames.
+    private readonly List<ShapeInstance> _frameShapes = new();
+    private readonly List<ShapeInstance> _orderedShapes = new();
+    private readonly List<DrawItem> _shapeItems = new();
+    private readonly List<GlyphInstance> _frameGlyphs = new();
+    private readonly List<GlyphInstance> _orderedGlyphs = new();
+    private readonly List<DrawItem> _glyphItems = new();
+    private readonly List<GlyphInstance> _frameColorGlyphs = new();
+    private readonly List<GlyphInstance> _orderedColorGlyphs = new();
+    private readonly List<DrawItem> _colorGlyphItems = new();
+    private readonly List<ImageQuad> _frameImages = new();
+    private readonly List<ImageQuad> _orderedImages = new();
+    private readonly List<DrawItem> _imageItems = new();
+    private readonly List<BlurInstance> _frameBlurs = new();
+    private readonly List<BlurInstance> _orderedBlurs = new();
+    private readonly List<DrawItem> _blurItems = new();
+
+    // The image quads as uploaded (the paint-order list when no reordering was needed, else the
+    // ordered copy) — the encoder binds each quad's texture from it.
+    private List<ImageQuad> _uploadImages = null!;
+
+    // Main-stream image replay state (transform and device-space clip stacks).
+    private readonly Stack<Matrix3x2> _imageTransformStack = new();
+    private readonly Stack<(float L, float T, float R, float B, bool Constrains)> _imageClipStack = new();
+
+    // Reused per-frame bookkeeping for the layer caches.
+    private readonly HashSet<ulong> _activeLayerHandles = new();
+    private readonly List<ulong> _staleLayerHandles = new();
+
+    // Shape-instance index before each backend command of the main stream (see BuildInstances).
+    private readonly List<int> _mainInstanceAt = new();
+
+    private float[] _imageVertexScratch = new float[64 * ImageQuadFloats];
+    private const int ImageQuadFloats = 24; // 6 vertices × (x, y, u, v)
+
+    /// <summary>
+    /// Walks the frame in paint order — the main command stream with each retained layer spliced in
+    /// at its <c>DrawLayerTexture</c> op — and places every shape instance, glyph run, image and
+    /// backdrop blur into a batch (see <see cref="PaintOrderBatcher"/>).
+    /// </summary>
+    private void ScheduleFrame(EtchBackend backend, List<LayerRenderInfo>? layers,
+        List<GlyphDrawRecord>? glyphRecords, SceneBuffer? stripScene)
+    {
+        _batcher.Reset();
+        _frameShapes.Clear();
+        _shapeItems.Clear();
+        _frameGlyphs.Clear();
+        _glyphItems.Clear();
+        _frameColorGlyphs.Clear();
+        _colorGlyphItems.Clear();
+        _frameImages.Clear();
+        _imageItems.Clear();
+        _frameBlurs.Clear();
+        _blurItems.Clear();
+        _culledGlyphs = 0;
+        _imageTransformStack.Clear();
+        _imageClipStack.Clear();
+
+        var commands = backend.Commands;
+        var glyphs = backend.GlyphCommands;
+        int shapeCursor = 0;
+        int glyphCursor = 0;
+        var currentTransform = Matrix3x2.Identity;
+
+        for (int k = 0; k <= commands.Count; k++)
+        {
+            // Glyph runs painted before command k (after command k − 1).
+            while (glyphCursor < glyphs.Count && glyphs[glyphCursor].CommandIndex <= k)
+            {
+                var op = glyphs[glyphCursor++];
+                shapeCursor = EmitShapes(_cachedInstances, shapeCursor, InstanceAt(_mainInstanceAt, op.CommandIndex, _cachedInstances.Count));
+                EmitGlyphRun(op, backend, 0, 0, null, glyphRecords, "main", DrawPaintOrder.MainGlyphRun(op.CommandIndex));
+            }
+
+            if (k == commands.Count)
+            {
+                break;
+            }
+
+            var cmd = commands[k];
+            switch (cmd.Kind)
+            {
+                case EtchBackend.OpKind.PushTransform:
+                    _imageTransformStack.Push(currentTransform);
+                    currentTransform = cmd.Matrix * currentTransform;
+                    break;
+
+                case EtchBackend.OpKind.PopTransform:
+                    if (_imageTransformStack.Count > 0)
+                    {
+                        currentTransform = _imageTransformStack.Pop();
+                    }
+                    break;
+
+                // Active clip rects in DEVICE space. Images must be clamped to these (the image
+                // shader has no scissor), otherwise an image straddling a clip edge — e.g. a list
+                // row's icon at the viewport boundary — bleeds past it. Rounded clips use their
+                // AABB (square corners), which still beats no clip at all. Path clips push a
+                // non-constraining entry so PushClip/PopClip stay balanced.
+                case EtchBackend.OpKind.PushClip:
+                case EtchBackend.OpKind.PushClipRoundedRect:
+                    {
+                        var clipLocal = new EGeometry.Rect(cmd.X, cmd.Y, cmd.X + cmd.W, cmd.Y + cmd.H);
+                        var clipDev = clipLocal.Transform(EtchBackend.ToAffine(currentTransform));
+                        _imageClipStack.Push((
+                            (float)clipDev.MinX, (float)clipDev.MinY,
+                            (float)clipDev.MaxX, (float)clipDev.MaxY, true));
+                        break;
+                    }
+
+                case EtchBackend.OpKind.PushClipPath:
+                    _imageClipStack.Push((0f, 0f, 0f, 0f, false)); // shape unknown: don't constrain
+                    break;
+
+                case EtchBackend.OpKind.PopClip:
+                    if (_imageClipStack.Count > 0)
+                    {
+                        _imageClipStack.Pop();
+                    }
+                    break;
+
+                case EtchBackend.OpKind.DrawImage:
+                    shapeCursor = EmitShapes(_cachedInstances, shapeCursor, InstanceAt(_mainInstanceAt, k, _cachedInstances.Count));
+                    EmitMainImage(backend, cmd, currentTransform);
+                    break;
+
+                case EtchBackend.OpKind.DrawBackdropBlur:
+                    shapeCursor = EmitShapes(_cachedInstances, shapeCursor, InstanceAt(_mainInstanceAt, k, _cachedInstances.Count));
+                    EmitBlur(cmd);
+                    break;
+
+                case EtchBackend.OpKind.DrawLayerTexture:
+                    if (layers != null && TryFindLayer(layers, (ulong)cmd.W, out var layer))
+                    {
+                        shapeCursor = EmitShapes(_cachedInstances, shapeCursor, InstanceAt(_mainInstanceAt, k, _cachedInstances.Count));
+                        EmitLayer(backend, layer, k, glyphRecords);
+                    }
+                    break;
+            }
+        }
+
+        EmitShapes(_cachedInstances, shapeCursor, _cachedInstances.Count);
+
+        // Strip coverage (arbitrary paths; disabled — see _enableStripCoverage) renders the whole
+        // scene's complex paths in one compositor pass, so it cannot be interleaved; it is placed
+        // as one full-frame draw at the end of the frame's paint order.
+        if (stripScene is not null && stripScene.Commands.Length > 0)
+        {
+            int batch = _batcher.Place(DrawKind.Strip, 0, 0, _currentWidth, _currentHeight);
+            _batcher.AddCount(batch, 1);
+        }
+    }
+
+    private static bool TryFindLayer(List<LayerRenderInfo> layers, ulong handle, out LayerRenderInfo layer)
+    {
+        foreach (var candidate in layers)
+        {
+            if (candidate.LayerHandle == handle)
+            {
+                layer = candidate;
+                return true;
+            }
+        }
+        layer = default;
+        return false;
+    }
+
+    /// <summary>
+    /// Instances emitted before backend command <paramref name="commandIndex"/>. Without marks the
+    /// table is empty and every glyph/image falls after all shapes — the old fixed-pass order.
+    /// </summary>
+    private static int InstanceAt(List<int> instanceAt, int commandIndex, int total)
+        => commandIndex < instanceAt.Count ? instanceAt[commandIndex] : total;
+
+    /// <summary>
+    /// Composites one retained layer at its paint position: its shapes (scroll delta baked into
+    /// the cached absolute positions, clipped to the viewport), glyph runs and images, interleaved
+    /// in the layer's own paint order.
+    /// </summary>
+    private void EmitLayer(EtchBackend backend, in LayerRenderInfo layer, int mainIndex, List<GlyphDrawRecord>? glyphRecords)
+    {
+        if (!_layerInstanceCache.TryGetValue(layer.LayerHandle, out var cached))
+        {
+            return;
+        }
+
+        // The cached instances are baked at ABSOLUTE positions: BuildInstances replays the layer
+        // scene through its InitialTransform, which already includes the ScrollView's on-screen
+        // origin. The residual shift to apply is just the scroll delta (see LayerScrollDelta).
+        var (dx, dy) = LayerScrollDelta(layer);
+        var instances = cached.Instances;
+        var instanceAt = cached.InstanceAt;
+        var glyphs = layer.GlyphCommands;
+        var images = layer.ImageCommands;
+        int shapeCursor = 0;
+        int glyphCursor = 0;
+        int imageCursor = 0;
+
+        while (glyphCursor < glyphs.Count || imageCursor < images.Count)
+        {
+            // A glyph run with CommandIndex c is painted before command c, so on a tie with the
+            // image that IS command c, the run goes first.
+            bool glyphNext = imageCursor >= images.Count
+                || (glyphCursor < glyphs.Count && glyphs[glyphCursor].CommandIndex <= images[imageCursor].CommandIndex);
+            if (glyphNext)
+            {
+                var op = glyphs[glyphCursor++];
+                shapeCursor = EmitLayerShapes(instances, shapeCursor, InstanceAt(instanceAt, op.CommandIndex, instances.Count), dx, dy, layer.ViewportClip);
+                EmitGlyphRun(op, backend, dx, dy, layer.ViewportClip, glyphRecords, "layer", DrawPaintOrder.LayerGlyphRun(mainIndex, op.CommandIndex));
+            }
+            else
+            {
+                var image = images[imageCursor++];
+                shapeCursor = EmitLayerShapes(instances, shapeCursor, InstanceAt(instanceAt, image.CommandIndex, instances.Count), dx, dy, layer.ViewportClip);
+                EmitLayerImage(backend, image, dx, dy, layer.ViewportClip);
+            }
+        }
+
+        EmitLayerShapes(instances, shapeCursor, instances.Count, dx, dy, layer.ViewportClip);
+    }
+
+    /// <summary>Places main-stream shape instances [from, to) and returns <paramref name="to"/>.</summary>
+    private int EmitShapes(List<ShapeInstance> source, int from, int to)
+    {
+        if (to <= from)
+        {
+            return Math.Max(from, to);
+        }
+
+        var span = CollectionsMarshal.AsSpan(source).Slice(from, to - from);
+
+        // Nothing but shapes placed so far (e.g. a canvas frame, or the backgrounds at the start of
+        // any frame): they all join the one shape batch, so skip per-instance placement.
+        if (_batcher.OnlyShapes)
+        {
+            float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
+            foreach (ref readonly var inst in span)
+            {
+                minX = Math.Min(minX, inst.MinX - inst.Expand);
+                minY = Math.Min(minY, inst.MinY - inst.Expand);
+                maxX = Math.Max(maxX, inst.MaxX + inst.Expand);
+                maxY = Math.Max(maxY, inst.MaxY + inst.Expand);
+            }
+            int batch = _batcher.Place(DrawKind.Shape, minX, minY, maxX, maxY);
+            _batcher.Record(DrawKind.Shape, _shapeItems, batch, _frameShapes.Count, span.Length);
+            _frameShapes.AddRange(span);
+            return to;
+        }
+
+        foreach (ref readonly var inst in span)
+        {
+            EmitShape(inst);
+        }
+        return to;
+    }
+
+    /// <summary>
+    /// Places retained-layer shape instances [from, to), shifted by the scroll delta and clipped
+    /// to the layer viewport, and returns <paramref name="to"/>.
+    /// </summary>
+    private int EmitLayerShapes(List<ShapeInstance> source, int from, int to, float dx, float dy, Cascade.UI.Rect? viewportClip)
+    {
+        for (int i = from; i < to; i++)
+        {
+            // Shift every positional field by the scroll delta. Using Translated (not a
+            // hand-written field copy) guarantees colours, ShapeType, Radius, StrokeWidth, Expand —
+            // and any field added later — carry through (RENDER-001).
+            var moved = source[i].Translated(dx, dy);
+
+            // WP-3517: clip only the rasterization extent (quad bounds) to the layer's viewport so
+            // scrolled-away content does not bleed outside the ScrollView. The SDF/gradient params
+            // (P0/P1/Center) stay at their absolute positions, so the shape is clipped, not distorted.
+            if (viewportClip is Cascade.UI.Rect vc)
+            {
+                float minX = Math.Max(moved.MinX, vc.X);
+                float minY = Math.Max(moved.MinY, vc.Y);
+                float maxX = Math.Min(moved.MaxX, vc.X + vc.Width);
+                float maxY = Math.Min(moved.MaxY, vc.Y + vc.Height);
+                if (maxX <= minX || maxY <= minY)
+                {
+                    continue;
+                }
+                moved = moved with { MinX = minX, MinY = minY, MaxX = maxX, MaxY = maxY };
+            }
+
+            EmitShape(moved);
+        }
+        return Math.Max(from, to);
+    }
+
+    private void EmitShape(in ShapeInstance inst)
+    {
+        int batch = _batcher.Place(DrawKind.Shape,
+            inst.MinX - inst.Expand, inst.MinY - inst.Expand, inst.MaxX + inst.Expand, inst.MaxY + inst.Expand);
+        _batcher.Record(DrawKind.Shape, _shapeItems, batch, _frameShapes.Count, 1);
+        _frameShapes.Add(inst);
+    }
+
+    /// <summary>
+    /// Builds one glyph run's instances (mono and colour) and places each part by its bounds.
+    /// </summary>
+    private void EmitGlyphRun(EtchBackend.GlyphOp op, EtchBackend backend, float dx, float dy,
+        Cascade.UI.Rect? viewportClip, List<GlyphDrawRecord>? glyphRecords, string category, long paintOrder)
+    {
+        int monoStart = _frameGlyphs.Count;
+        int colorStart = _frameColorGlyphs.Count;
+        BuildGlyphInstances(op, backend, _glyphAtlas.Dimension, _frameGlyphs, _frameColorGlyphs, dx, dy,
+            ref _culledGlyphs, glyphRecords, category, paintOrder, viewportClip);
+
+        PlaceGlyphs(DrawKind.Glyph, _frameGlyphs, monoStart, _glyphItems);
+        PlaceGlyphs(DrawKind.ColorGlyph, _frameColorGlyphs, colorStart, _colorGlyphItems);
+    }
+
+    private void PlaceGlyphs(DrawKind kind, List<GlyphInstance> list, int start, List<DrawItem> items)
+    {
+        int count = list.Count - start;
+        if (count <= 0)
+        {
+            return;
+        }
+
+        float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
+        foreach (ref readonly var g in CollectionsMarshal.AsSpan(list).Slice(start, count))
+        {
+            float l = g.PosX, t = g.PosY, r = g.PosX + g.SizeX, b = g.PosY + g.SizeY;
+            if (g.ClipMaxX > g.ClipMinX || g.ClipMaxY > g.ClipMinY)
+            {
+                l = Math.Max(l, g.ClipMinX);
+                t = Math.Max(t, g.ClipMinY);
+                r = Math.Min(r, g.ClipMaxX);
+                b = Math.Min(b, g.ClipMaxY);
+            }
+            minX = Math.Min(minX, l);
+            minY = Math.Min(minY, t);
+            maxX = Math.Max(maxX, r);
+            maxY = Math.Max(maxY, b);
+        }
+
+        int batch = _batcher.Place(kind, minX, minY, maxX, maxY);
+        _batcher.Record(kind, items, batch, start, count);
+    }
+
+    private void EmitMainImage(EtchBackend backend, EtchBackend.SceneOp cmd, Matrix3x2 transform)
+    {
+        var img = backend.GetImage(cmd.ImageHandle);
+        if (img == null)
+        {
+            return;
+        }
+
+        // Apply current transform to local destination rect. The root DPI-scale PushTransform is
+        // part of the stream, so this is device-correct at any DPI.
+        var localRect = new EGeometry.Rect(cmd.X, cmd.Y, cmd.X + cmd.W, cmd.Y + cmd.H);
+        var deviceRect = localRect.Transform(EtchBackend.ToAffine(transform));
+        if (deviceRect.IsEmpty)
+        {
+            return;
+        }
+
+        // Clamp the quad (and its UVs) to the intersection of the active clip rects — same
+        // technique the layer path uses for the viewport.
+        float cl = float.NegativeInfinity, ct = float.NegativeInfinity;
+        float cr = float.PositiveInfinity, cb = float.PositiveInfinity;
+        foreach (var c in _imageClipStack)
+        {
+            if (!c.Constrains)
+            {
+                continue;
+            }
+
+            cl = Math.Max(cl, c.L); ct = Math.Max(ct, c.T);
+            cr = Math.Min(cr, c.R); cb = Math.Min(cb, c.B);
+        }
+
+        bool clipped = !float.IsNegativeInfinity(cl);
+        EmitImage((int)cmd.ImageHandle, img,
+            (float)deviceRect.MinX, (float)deviceRect.MinY, (float)deviceRect.MaxX, (float)deviceRect.MaxY,
+            clipped, cl, ct, cr, cb);
+    }
+
+    private void EmitLayerImage(EtchBackend backend, in LayerImageOp image, float offX, float offY, Cascade.UI.Rect? viewportClip)
+    {
+        var img = backend.GetImage(image.ImageHandle);
+        if (img == null)
+        {
+            return;
+        }
+
+        // Bake through the per-image local→device transform (the layer's initial transform — DPI
+        // scale + the ScrollView's on-screen origin — composed with any intra-layer
+        // PushTransforms), then apply the scroll delta.
+        var localRect = new EGeometry.Rect(image.X, image.Y, image.X + image.W, image.Y + image.H);
+        var deviceRect = localRect.Transform(EtchBackend.ToAffine(image.Transform));
+        if (deviceRect.IsEmpty)
+        {
+            return;
+        }
+
+        // Clamp to the viewport AND to whatever clips were in force around the image inside the
+        // layer (RENDER-009). The captured clip is in the layer's own device space, so it scrolls
+        // with the content and takes the same delta as the quad; the viewport does not, being the
+        // fixed hole the layer shows through.
+        float cl = float.NegativeInfinity, ct = float.NegativeInfinity;
+        float cr = float.PositiveInfinity, cb = float.PositiveInfinity;
+        if (image.Clip is Cascade.UI.Rect ic)
+        {
+            cl = ic.X + offX; ct = ic.Y + offY;
+            cr = ic.X + ic.Width + offX; cb = ic.Y + ic.Height + offY;
+        }
+        if (viewportClip is Cascade.UI.Rect vc)
+        {
+            cl = Math.Max(cl, vc.X); ct = Math.Max(ct, vc.Y);
+            cr = Math.Min(cr, vc.X + vc.Width); cb = Math.Min(cb, vc.Y + vc.Height);
+        }
+
+        bool clipped = !float.IsNegativeInfinity(cl) || !float.IsNegativeInfinity(ct)
+            || !float.IsPositiveInfinity(cr) || !float.IsPositiveInfinity(cb);
+        EmitImage((int)image.ImageHandle, img,
+            (float)deviceRect.MinX + offX, (float)deviceRect.MinY + offY,
+            (float)deviceRect.MaxX + offX, (float)deviceRect.MaxY + offY,
+            clipped, cl, ct, cr, cb);
+    }
+
+    /// <summary>
+    /// Places one image quad, clamping it and its UVs to the clip rect when <paramref name="clipped"/>
+    /// (there is no GPU scissor in the wgpu binding set, so clipping is emulated this way).
+    /// </summary>
+    private void EmitImage(int handle, EtchBackend.ImageEntry img, float dl, float dt, float dr, float db,
+        bool clipped, float cl, float ct, float cr, float cb)
+    {
+        float u0 = 0f, v0 = 0f, u1 = 1f, v1 = 1f;
+        if (clipped)
+        {
+            // A degenerate intersection means the enclosing clips do not overlap at all, so
+            // nothing inside them can draw. Skipping the clamp in that case would blit the image
+            // unclipped — which is how table rows below the visible area once escaped.
+            if (cr <= cl || cb <= ct)
+            {
+                return;
+            }
+
+            float nl = Math.Max(dl, cl), nt = Math.Max(dt, ct);
+            float nr = Math.Min(dr, cr), nb = Math.Min(db, cb);
+            if (nr <= nl || nb <= nt)
+            {
+                return; // fully outside the clip
+            }
+
+            float w = dr - dl, h = db - dt;
+            u0 = (nl - dl) / w; u1 = (nr - dl) / w;
+            v0 = (nt - dt) / h; v1 = (nb - dt) / h;
+            dl = nl; dt = nt; dr = nr; db = nb;
+        }
+
+        EnsureImageTexture(handle, img);
+        int batch = _batcher.Place(DrawKind.Image, dl, dt, dr, db);
+        _batcher.Record(DrawKind.Image, _imageItems, batch, _frameImages.Count, 1);
+        _frameImages.Add(new ImageQuad
+        {
+            Handle = handle,
+            L = dl, T = dt, R = dr, B = db,
+            U0 = u0, V0 = v0, U1 = u1, V1 = v1,
+        });
+    }
+
+    /// <summary>
+    /// Places one frosted-glass backdrop blur (device-space rounded rect, baked at emission). Its
+    /// bounds include the blur's sampling reach, so everything it samples is drawn before it.
+    /// </summary>
+    private void EmitBlur(EtchBackend.SceneOp cmd)
+    {
+        if (!cmd.Fill.HasValue || cmd.W <= 0f || cmd.H <= 0f)
+        {
+            return;
+        }
+
+        var (tr, tg, tb, ta) = PaintColor.ToLinear(EtchBackend.ToArgb(cmd.Fill.Value));
+        var blur = new BlurInstance
+        {
+            MinX = cmd.X, MinY = cmd.Y,
+            MaxX = cmd.X + cmd.W, MaxY = cmd.Y + cmd.H,
+            TintR = tr, TintG = tg, TintB = tb, TintA = ta,
+            Radius = cmd.Radius, Sigma = cmd.StrokeWidth,
+        };
+
+        // The shader taps ±3 steps of σ/2 around each pixel (σ clamped to ≥ 0.5), plus one texel
+        // of bilinear filtering.
+        float reach = 1.5f * Math.Max(cmd.StrokeWidth, 0.5f) + 2f;
+        int batch = _batcher.Place(DrawKind.Blur, blur.MinX - reach, blur.MinY - reach, blur.MaxX + reach, blur.MaxY + reach);
+        _batcher.Record(DrawKind.Blur, _blurItems, batch, _frameBlurs.Count, 1);
+        _frameBlurs.Add(blur);
+    }
+
+    /// <summary>
+    /// Assigns each batch its range in its kind's upload buffer, orders every kind by batch, and
+    /// uploads shapes, glyphs, image quads and blur instances — one buffer write per kind.
+    /// </summary>
+    private void UploadSchedule()
+    {
+        _batcher.AssignStarts();
+
+        var shapes = _batcher.Order(DrawKind.Shape, _frameShapes, _shapeItems, _orderedShapes);
+        EnsureGeometryBufferCapacity(shapes.Count);
+        UploadInstances(shapes);
+
+        var glyphs = _batcher.Order(DrawKind.Glyph, _frameGlyphs, _glyphItems, _orderedGlyphs);
+        if (glyphs.Count > 0)
+        {
+            int requiredBytes = glyphs.Count * sizeof(GlyphInstance);
+            if (_glyphInstanceCapacity < requiredBytes)
+            {
+                _glyphInstanceCapacity = Math.Max(requiredBytes, _glyphInstanceCapacity * 2);
+                if (!_glyphInstanceBuffer.IsInvalid)
+                {
+                    _glyphInstanceBuffer.Dispose();
+                }
+                _glyphInstanceBuffer = _device.CreateBuffer(new BufferDescriptor
+                {
+                    Usage = (ulong)(BufferUsage.Storage | BufferUsage.CopyDst),
+                    Size = (ulong)_glyphInstanceCapacity,
+                });
+                UpdateGlyphInstanceBindGroup();
+            }
+            _device.Queue.WriteBuffer(_glyphInstanceBuffer, 0, MemoryMarshal.AsBytes(CollectionsMarshal.AsSpan(glyphs)));
+        }
+
+        var colorGlyphs = _batcher.Order(DrawKind.ColorGlyph, _frameColorGlyphs, _colorGlyphItems, _orderedColorGlyphs);
+        if (colorGlyphs.Count > 0)
+        {
+            int requiredBytes = colorGlyphs.Count * sizeof(GlyphInstance);
+            if (_colorGlyphInstanceCapacity < requiredBytes)
+            {
+                _colorGlyphInstanceCapacity = Math.Max(requiredBytes, _colorGlyphInstanceCapacity * 2);
+                if (!_colorGlyphInstanceBuffer.IsInvalid)
+                {
+                    _colorGlyphInstanceBuffer.Dispose();
+                }
+                _colorGlyphInstanceBuffer = _device.CreateBuffer(new BufferDescriptor
+                {
+                    Usage = (ulong)(BufferUsage.Storage | BufferUsage.CopyDst),
+                    Size = (ulong)_colorGlyphInstanceCapacity,
+                });
+                UpdateColorGlyphInstanceBindGroup();
+            }
+            _device.Queue.WriteBuffer(_colorGlyphInstanceBuffer, 0, MemoryMarshal.AsBytes(CollectionsMarshal.AsSpan(colorGlyphs)));
+        }
+
+        _uploadImages = _batcher.Order(DrawKind.Image, _frameImages, _imageItems, _orderedImages);
+        if (_uploadImages.Count > 0)
+        {
+            UploadImageQuads(_uploadImages);
+        }
+
+        var blurs = _batcher.Order(DrawKind.Blur, _frameBlurs, _blurItems, _orderedBlurs);
+        if (blurs.Count > 0)
+        {
+            int byteSize = blurs.Count * sizeof(BlurInstance);
+            if (blurs.Count > _blurInstanceCapacity)
+            {
+                _blurInstanceBuffer.Dispose();
+                _blurInstanceBuffer = _device.CreateBuffer(new BufferDescriptor
+                {
+                    Usage = (ulong)(BufferUsage.Storage | BufferUsage.CopyDst),
+                    Size = (ulong)Math.Max(byteSize, 16),
+                });
+                _blurInstanceCapacity = blurs.Count;
+            }
+            _device.Queue.WriteBuffer(_blurInstanceBuffer, 0, MemoryMarshal.AsBytes(CollectionsMarshal.AsSpan(blurs)));
+        }
+    }
+
+    /// <summary>
+    /// Writes every image quad of the frame (device rect → clip space, with its UV sub-rect) into
+    /// the image vertex buffer in one write; quad <c>i</c> occupies vertices [6i, 6i+6).
+    /// </summary>
+    private void UploadImageQuads(List<ImageQuad> quads)
+    {
+        int floats = quads.Count * ImageQuadFloats;
+        if (_imageVertexScratch.Length < floats)
+        {
+            _imageVertexScratch = new float[Math.Max(floats, _imageVertexScratch.Length * 2)];
+        }
+        if (quads.Count > _imageQuadCapacity)
+        {
+            _imageVertexBuffer.Dispose();
+            _imageQuadCapacity = Math.Max(quads.Count, _imageQuadCapacity * 2);
+            _imageVertexBuffer = _device.CreateBuffer(new BufferDescriptor
+            {
+                Usage = (ulong)(BufferUsage.Vertex | BufferUsage.CopyDst),
+                Size = (ulong)(_imageQuadCapacity * ImageQuadFloats * sizeof(float)),
+            });
+        }
+
+        var verts = _imageVertexScratch.AsSpan(0, floats);
+        int o = 0;
+        foreach (ref readonly var q in CollectionsMarshal.AsSpan(quads))
+        {
+            float l = (float)(q.L / _currentWidth * 2.0 - 1.0);
+            float r = (float)(q.R / _currentWidth * 2.0 - 1.0);
+            float t = (float)(1.0 - q.T / _currentHeight * 2.0);
+            float b = (float)(1.0 - q.B / _currentHeight * 2.0);
+            // Triangle 1
+            verts[o] = l; verts[o + 1] = t; verts[o + 2] = q.U0; verts[o + 3] = q.V0;
+            verts[o + 4] = r; verts[o + 5] = t; verts[o + 6] = q.U1; verts[o + 7] = q.V0;
+            verts[o + 8] = l; verts[o + 9] = b; verts[o + 10] = q.U0; verts[o + 11] = q.V1;
+            // Triangle 2
+            verts[o + 12] = r; verts[o + 13] = t; verts[o + 14] = q.U1; verts[o + 15] = q.V0;
+            verts[o + 16] = r; verts[o + 17] = b; verts[o + 18] = q.U1; verts[o + 19] = q.V1;
+            verts[o + 20] = l; verts[o + 21] = b; verts[o + 22] = q.U0; verts[o + 23] = q.V1;
+            o += ImageQuadFloats;
+        }
+        _device.Queue.WriteBuffer(_imageVertexBuffer, 0, MemoryMarshal.AsBytes(verts));
+    }
+
+    /// <summary>
+    /// Records the scheduled batches into as few render passes as possible: one pass, broken only
+    /// where a mono-glyph or backdrop-blur batch needs a fresh copy of the framebuffer under it.
+    /// Returns the number of framebuffer copies made.
+    /// </summary>
+    private int EncodeSchedule(CommandEncoder encoder, SurfaceTexture frame, SceneBuffer? stripScene)
+    {
+        int copies = 0;
+        BindGroup blurBind0 = default;
+        BindGroup blurInstanceBind = default;
+        var pass = BeginFramePass(encoder, frame, clear: true);
+        try
+        {
+            DrawKind? bound = null;
+            foreach (ref readonly var batch in _batcher.Batches)
+            {
+                if (batch.Count == 0)
+                {
+                    continue;
+                }
+
+                // WP-3537: mono glyphs read the local background from a copy of the framebuffer
+                // for their contrast-adaptive weight; a blur samples it. Both need the copy to hold
+                // everything drawn before their batch, so end the pass, copy the batch's region
+                // and continue in a new pass.
+                if ((batch.Kind == DrawKind.Glyph && !SkipGlyphPass) || batch.Kind == DrawKind.Blur)
+                {
+                    if (CanCopyBackground())
+                    {
+                        pass.End();
+                        pass.Dispose();
+                        CopyFramebufferRegion(encoder, frame, batch.MinX, batch.MinY, batch.MaxX, batch.MaxY);
+                        copies++;
+                        pass = BeginFramePass(encoder, frame, clear: false);
+                        bound = null;
+                    }
+                    else if (batch.Kind == DrawKind.Blur)
+                    {
+                        continue; // nothing valid to blur
+                    }
+                }
+
+                switch (batch.Kind)
+                {
+                    case DrawKind.Shape:
+                        if (bound != DrawKind.Shape)
+                        {
+                            pass.SetPipeline(_geomPipeline);
+                            pass.SetBindGroup(0, _geomBindGroup);
+                        }
+                        pass.Draw(4, (uint)batch.Count, 0, (uint)batch.Start);
+                        break;
+
+                    case DrawKind.Glyph:
+                        if (SkipGlyphPass)
+                        {
+                            continue;
+                        }
+                        if (bound != DrawKind.Glyph)
+                        {
+                            pass.SetPipeline(_glyphPipeline);
+                            pass.SetBindGroup(0, _glyphAtlasBindGroup);
+                            pass.SetBindGroup(1, _glyphInstanceBindGroup);
+                        }
+                        pass.Draw(4, (uint)batch.Count, 0, (uint)batch.Start);
+                        break;
+
+                    case DrawKind.ColorGlyph:
+                        if (SkipGlyphPass)
+                        {
+                            continue;
+                        }
+                        if (bound != DrawKind.ColorGlyph)
+                        {
+                            pass.SetPipeline(_colorGlyphPipeline);
+                            pass.SetBindGroup(0, _colorGlyphAtlasBindGroup);
+                            pass.SetBindGroup(1, _colorGlyphInstanceBindGroup);
+                        }
+                        pass.Draw(4, (uint)batch.Count, 0, (uint)batch.Start);
+                        break;
+
+                    case DrawKind.Image:
+                        if (bound != DrawKind.Image)
+                        {
+                            pass.SetPipeline(_textPipeline);
+                            pass.SetVertexBuffer(0, _imageVertexBuffer, 0, (ulong)(_uploadImages.Count * ImageQuadFloats * sizeof(float)));
+                        }
+                        for (int i = batch.Start; i < batch.Start + batch.Count; i++)
+                        {
+                            pass.SetBindGroup(0, _imageBindGroups[_uploadImages[i].Handle]);
+                            pass.Draw(6, 1, (uint)(i * 6), 0);
+                        }
+                        break;
+
+                    case DrawKind.Blur:
+                        if (blurBind0.IsInvalid)
+                        {
+                            CreateBlurBindGroups(out blurBind0, out blurInstanceBind);
+                        }
+                        if (bound != DrawKind.Blur)
+                        {
+                            pass.SetPipeline(_blurPipeline);
+                            pass.SetBindGroup(0, blurBind0);
+                            pass.SetBindGroup(1, blurInstanceBind);
+                        }
+                        pass.Draw(4, (uint)batch.Count, 0, (uint)batch.Start);
+                        break;
+
+                    case DrawKind.Strip:
+                        if (stripScene is not null)
+                        {
+                            _ = _compositor.RecordRenderPass(pass, stripScene, (int)_currentWidth, (int)_currentHeight);
+                        }
+                        bound = null; // the compositor binds its own pipelines
+                        continue;
+                }
+                bound = batch.Kind;
+            }
+        }
+        finally
+        {
+            pass.End();
+            pass.Dispose();
+            if (!blurBind0.IsInvalid)
+            {
+                blurBind0.Dispose();
+            }
+            if (!blurInstanceBind.IsInvalid)
+            {
+                blurInstanceBind.Dispose();
+            }
+        }
+        return copies;
+    }
+
+    private static unsafe RenderPass BeginFramePass(CommandEncoder encoder, SurfaceTexture frame, bool clear)
+    {
+        var colorAttachment = new RenderPassColorAttachment
+        {
+            View = (nint)frame.View,
+            DepthSlice = 0xFFFFFFFFu,
+            LoadOp = clear ? LoadOp.Clear : LoadOp.Load,
+            StoreOp = StoreOp.Store,
+            ClearValue = new Color { R = 0, G = 0, B = 0, A = 1 },
+        };
+        var passDesc = new RenderPassDescriptor
+        {
+            ColorAttachmentCount = (UIntPtr)1,
+            ColorAttachments = (nint)(&colorAttachment),
+        };
+        return encoder.BeginRenderPass(passDesc);
+    }
+
+    private bool CanCopyBackground()
+        => !_bgCopyTexture.IsInvalid && _bgCopyWidth == _currentWidth && _bgCopyHeight == _currentHeight;
+
+    /// <summary>
+    /// Copies the device-pixel region (rounded out, clamped to the frame) of the framebuffer into
+    /// <see cref="_bgCopyTexture"/> at the same position.
+    /// </summary>
+    private unsafe void CopyFramebufferRegion(CommandEncoder encoder, SurfaceTexture frame,
+        float minX, float minY, float maxX, float maxY)
+    {
+        uint x0 = (uint)Math.Clamp(MathF.Floor(minX), 0f, _currentWidth);
+        uint y0 = (uint)Math.Clamp(MathF.Floor(minY), 0f, _currentHeight);
+        uint x1 = (uint)Math.Clamp(MathF.Ceiling(maxX), 0f, _currentWidth);
+        uint y1 = (uint)Math.Clamp(MathF.Ceiling(maxY), 0f, _currentHeight);
+        if (x1 <= x0 || y1 <= y0)
+        {
+            return;
+        }
+
+        var origin = new WGPUOrigin3D { X = x0, Y = y0, Z = 0 };
+        var extent = new Extent3D { Width = x1 - x0, Height = y1 - y0, DepthOrArrayLayers = 1 };
+        var copySrc = new WGPUTexelCopyTextureInfo { Aspect = (uint)TextureAspect.All, MipLevel = 0, Origin = origin, Texture = frame.Texture };
+        var copyDst = new WGPUTexelCopyTextureInfo { Aspect = (uint)TextureAspect.All, MipLevel = 0, Origin = origin, Texture = _bgCopyTexture.Handle };
+        WebGPU.CommandEncoderCopyTextureToTexture(encoder.Handle, (nint)(&copySrc), (nint)(&copyDst), (nint)(&extent));
+    }
+
+    private unsafe void CreateBlurBindGroups(out BindGroup bind0, out BindGroup instanceBind)
+    {
+        int byteSize = Math.Max(_frameBlurs.Count * sizeof(BlurInstance), 16);
+        var bind0Entries = stackalloc BindGroupEntry[3];
+        bind0Entries[0] = new BindGroupEntry { Binding = 0, Buffer = _geomUniformBuffer.Handle, Offset = 0, Size = (ulong)sizeof(SurfaceSizeData) };
+        bind0Entries[1] = new BindGroupEntry { Binding = 1, TextureView = _bgCopyView.Handle };
+        bind0Entries[2] = new BindGroupEntry { Binding = 2, Sampler = _blurSampler.Handle };
+        bind0 = _device.CreateBindGroup(new BindGroupDescriptor { Layout = _blurBind0Layout.Handle, EntryCount = (UIntPtr)3, Entries = (nint)bind0Entries });
+
+        var instEntries = stackalloc BindGroupEntry[1];
+        instEntries[0] = new BindGroupEntry { Binding = 0, Buffer = _blurInstanceBuffer.Handle, Offset = 0, Size = (ulong)byteSize };
+        instanceBind = _device.CreateBindGroup(new BindGroupDescriptor { Layout = _blurInstanceLayout.Handle, EntryCount = (UIntPtr)1, Entries = (nint)instEntries });
     }
 
     /// <summary>
@@ -2351,562 +2916,7 @@ int overlayCulled = 0;
         _stagingBuffer.Unmap();
     }
 
-    private void RenderImages(EtchBackend backend, CommandEncoder encoder, SurfaceTexture frame,
-        List<LayerRenderInfo>? layers)
-    {
-        var transformStack = new Stack<Matrix3x2>();
-        var currentTransform = Matrix3x2.Identity;
-        // Active clip rects in DEVICE space. Root-stream images must be clamped to these
-        // (the shader has no scissor), otherwise an image straddling a clip edge — e.g. a
-        // list row's icon at the viewport boundary — bleeds past it. Rounded clips use
-        // their AABB (square corners), which still beats no clip at all. Path clips push a
-        // non-constraining entry so PushClip/PopClip stay balanced.
-        var clipStack = new Stack<(float L, float T, float R, float B, bool Constrains)>();
-        _imageQuadSlot = 0;
-
-        // Main pass — images in the root command stream. The root DPI-scale
-        // PushTransform is part of this stream, so walking it here makes the
-        // destination rect device-correct at any DPI.
-        int cmdIndex = -1;
-        foreach (var cmd in backend.Commands)
-        {
-            cmdIndex++;
-            switch (cmd.Kind)
-            {
-                case EtchBackend.OpKind.PushTransform:
-                    transformStack.Push(currentTransform);
-                    currentTransform = cmd.Matrix * currentTransform;
-                    break;
-
-                case EtchBackend.OpKind.PopTransform:
-                    if (transformStack.Count > 0)
-                    {
-                        currentTransform = transformStack.Pop();
-                    }
-                    break;
-
-                case EtchBackend.OpKind.PushClip:
-                case EtchBackend.OpKind.PushClipRoundedRect:
-                    {
-                        var clipLocal = new EGeometry.Rect(cmd.X, cmd.Y, cmd.X + cmd.W, cmd.Y + cmd.H);
-                        var clipDev = clipLocal.Transform(EtchBackend.ToAffine(currentTransform));
-                        clipStack.Push((
-                            (float)clipDev.MinX, (float)clipDev.MinY,
-                            (float)clipDev.MaxX, (float)clipDev.MaxY, true));
-                        break;
-                    }
-
-                case EtchBackend.OpKind.PushClipPath:
-                    clipStack.Push((0f, 0f, 0f, 0f, false)); // shape unknown: don't constrain
-                    break;
-
-                case EtchBackend.OpKind.PopClip:
-                    if (clipStack.Count > 0)
-                    {
-                        clipStack.Pop();
-                    }
-                    break;
-
-                case EtchBackend.OpKind.DrawImage:
-                    {
-                        var img = backend.GetImage(cmd.ImageHandle);
-                        if (img == null)
-                        {
-                            break;
-                        }
-
-                        EnsureImageTexture((int)cmd.ImageHandle, img);
-
-                        // Apply current transform to local destination rect
-                        var localRect = new EGeometry.Rect(cmd.X, cmd.Y, cmd.X + cmd.W, cmd.Y + cmd.H);
-                        var deviceRect = localRect.Transform(EtchBackend.ToAffine(currentTransform));
-                        if (deviceRect.IsEmpty)
-                        {
-                            break;
-                        }
-
-                        // Occlusion: a MAIN-frame image (issued before deferred-overlay painting) that
-                        // an open popup covers must be culled, or it bleeds through the popup — the
-                        // image pass otherwise composites above the popup's shape background. Overlay
-                        // glyphs are culled the same way (OverlayBounds, device space); the overlays'
-                        // own images (index >= boundary) are exempt.
-                        if (cmdIndex < backend.OverlayCommandStart && backend.OverlayBounds.Count > 0)
-                        {
-                            bool underOverlay = false;
-                            foreach (var ob in backend.OverlayBounds)
-                            {
-                                if (deviceRect.MinX < ob.X + ob.Width && deviceRect.MaxX > ob.X &&
-                                    deviceRect.MinY < ob.Y + ob.Height && deviceRect.MaxY > ob.Y)
-                                {
-                                    underOverlay = true;
-                                    break;
-                                }
-                            }
-                            if (underOverlay)
-                            {
-                                break;
-                            }
-                        }
-
-                        float dl = (float)deviceRect.MinX, dt = (float)deviceRect.MinY;
-                        float dr = (float)deviceRect.MaxX, db = (float)deviceRect.MaxY;
-                        float u0 = 0f, v0 = 0f, u1 = 1f, v1 = 1f;
-
-                        // Clamp the quad (and its UVs) to the intersection of the active
-                        // clip rects — same technique the layer pass uses for the viewport.
-                        float cl = float.NegativeInfinity, ct = float.NegativeInfinity;
-                        float cr = float.PositiveInfinity, cb = float.PositiveInfinity;
-                        foreach (var c in clipStack)
-                        {
-                            if (!c.Constrains)
-                            {
-                                continue;
-                            }
-
-                            cl = Math.Max(cl, c.L); ct = Math.Max(ct, c.T);
-                            cr = Math.Min(cr, c.R); cb = Math.Min(cb, c.B);
-                        }
-
-                        if (cr > cl && cb > ct)
-                        {
-                            float nl = Math.Max(dl, cl), nt = Math.Max(dt, ct);
-                            float nr = Math.Min(dr, cr), nb = Math.Min(db, cb);
-                            if (nr <= nl || nb <= nt)
-                            {
-                                break; // fully outside the clip
-                            }
-
-                            float w = dr - dl, h = db - dt;
-                            u0 = (nl - dl) / w; u1 = (nr - dl) / w;
-                            v0 = (nt - dt) / h; v1 = (nb - dt) / h;
-                            dl = nl; dt = nt; dr = nr; db = nb;
-                        }
-
-                        EmitImageQuad(encoder, frame, (int)cmd.ImageHandle, dl, dt, dr, db, u0, v0, u1, v1);
-                        break;
-                    }
-            }
-        }
-
-        // Layer pass — images captured inside a retained ScrollView layer never reach
-        // backend.Commands (they live in the layer's own command list), so the main
-        // loop above never sees them. Composite each one the same way the layer's
-        // shapes are: bake it through the per-image local→device transform (the layer's
-        // initial transform — DPI scale + the ScrollView's on-screen origin — composed
-        // with any intra-layer PushTransforms), then apply the scroll delta (offset
-        // minus the clip origin, which cancels the origin baked into both), clamping the
-        // quad — and its UVs — to the viewport so icons don't bleed past the edges.
-        if (layers != null)
-        {
-            foreach (var layer in layers)
-            {
-                if (layer.ImageCommands == null || layer.ImageCommands.Count == 0)
-                {
-                    continue;
-                }
-
-                var (offX, offY) = LayerScrollDelta(layer);
-
-                foreach (var (cmd, transform, clip) in layer.ImageCommands)
-                {
-                    var img = backend.GetImage(cmd.ImageHandle);
-                    if (img == null)
-                    {
-                        continue;
-                    }
-
-                    EnsureImageTexture((int)cmd.ImageHandle, img);
-
-                    var localRect = new EGeometry.Rect(cmd.X, cmd.Y, cmd.X + cmd.W, cmd.Y + cmd.H);
-                    var deviceRect = localRect.Transform(EtchBackend.ToAffine(transform));
-                    if (deviceRect.IsEmpty)
-                    {
-                        continue;
-                    }
-
-                    float dl = (float)deviceRect.MinX + offX;
-                    float dt = (float)deviceRect.MinY + offY;
-                    float dr = (float)deviceRect.MaxX + offX;
-                    float db = (float)deviceRect.MaxY + offY;
-
-                    // Clamp to the viewport AND to whatever clips were in force around the image
-                    // inside the layer (RENDER-009). The captured clip is in the layer's own
-                    // device space, so it scrolls with the content and takes the same delta as the
-                    // quad; the viewport does not, being the fixed hole the layer shows through.
-                    float cl = float.NegativeInfinity, ct = float.NegativeInfinity;
-                    float cr = float.PositiveInfinity, cb = float.PositiveInfinity;
-
-                    if (clip is Cascade.UI.Rect ic)
-                    {
-                        cl = ic.X + offX; ct = ic.Y + offY;
-                        cr = ic.X + ic.Width + offX; cb = ic.Y + ic.Height + offY;
-                    }
-
-                    if (layer.ViewportClip is Cascade.UI.Rect vc)
-                    {
-                        cl = Math.Max(cl, vc.X); ct = Math.Max(ct, vc.Y);
-                        cr = Math.Min(cr, vc.X + vc.Width); cb = Math.Min(cb, vc.Y + vc.Height);
-                    }
-
-                    bool clipped = !float.IsNegativeInfinity(cl) || !float.IsNegativeInfinity(ct)
-                        || !float.IsPositiveInfinity(cr) || !float.IsPositiveInfinity(cb);
-
-                    float u0 = 0f, v0 = 0f, u1 = 1f, v1 = 1f;
-                    if (clipped)
-                    {
-                        // A degenerate intersection means the enclosing clips do not overlap at
-                        // all, so nothing inside them can draw. Testing "is the clip non-empty?"
-                        // before clamping instead let that case fall through and blit the image
-                        // *unclipped* — which is how table rows below the visible area still
-                        // escaped after the clip was first plumbed through.
-                        if (cr <= cl || cb <= ct)
-                        {
-                            continue;
-                        }
-
-                        float nl = Math.Max(dl, cl), nt = Math.Max(dt, ct);
-                        float nr = Math.Min(dr, cr), nb = Math.Min(db, cb);
-                        if (nr <= nl || nb <= nt)
-                        {
-                            continue; // fully outside the viewport or its enclosing clips
-                        }
-
-                        float w = dr - dl, h = db - dt;
-                        u0 = (nl - dl) / w; u1 = (nr - dl) / w;
-                        v0 = (nt - dt) / h; v1 = (nb - dt) / h;
-                        dl = nl; dt = nt; dr = nr; db = nb;
-                    }
-
-                    EmitImageQuad(encoder, frame, (int)cmd.ImageHandle, dl, dt, dr, db, u0, v0, u1, v1);
-                }
-            }
-        }
-    }
-
-    /// <summary>
-    /// Blits one image as a textured quad. The destination is given in device pixels
-    /// (mapped here to clip space) and the UV span lets the caller draw a sub-rect of
-    /// the texture — used to clamp layer icons to the ScrollView viewport without a
-    /// GPU scissor (which the current wgpu binding set does not expose). Each image
-    /// gets its own slot in the vertex ring so concurrent quads don't overwrite one
-    /// another (see buffer creation).
-    /// </summary>
-    private unsafe void EmitImageQuad(CommandEncoder encoder, SurfaceTexture frame, int imageHandle,
-        float dl, float dt, float dr, float db, float u0, float v0, float u1, float v1)
-    {
-        float l = (float)(dl / _currentWidth * 2.0 - 1.0);
-        float r = (float)(dr / _currentWidth * 2.0 - 1.0);
-        float t = (float)(1.0 - dt / _currentHeight * 2.0);
-        float b = (float)(1.0 - db / _currentHeight * 2.0);
-
-        Span<float> verts = stackalloc float[24];
-        // Triangle 1
-        verts[0] = l; verts[1] = t; verts[2] = u0; verts[3] = v0;
-        verts[4] = r; verts[5] = t; verts[6] = u1; verts[7] = v0;
-        verts[8] = l; verts[9] = b; verts[10] = u0; verts[11] = v1;
-        // Triangle 2
-        verts[12] = r; verts[13] = t; verts[14] = u1; verts[15] = v0;
-        verts[16] = r; verts[17] = b; verts[18] = u1; verts[19] = v1;
-        verts[20] = l; verts[21] = b; verts[22] = u0; verts[23] = v1;
-
-        int slot = _imageQuadSlot++ % MaxImageQuadsPerFrame;
-        ulong vbOffset = (ulong)(slot * verts.Length * sizeof(float));
-        _device.Queue.WriteBuffer(_imageVertexBuffer, vbOffset, MemoryMarshal.AsBytes(verts));
-
-        var colorAttachment = new RenderPassColorAttachment
-        {
-            View = (nint)frame.View,
-            DepthSlice = 0xFFFFFFFFu,
-            LoadOp = LoadOp.Load,
-            StoreOp = StoreOp.Store,
-        };
-        var passDesc = new RenderPassDescriptor
-        {
-            ColorAttachmentCount = (UIntPtr)1,
-            ColorAttachments = (nint)(&colorAttachment),
-        };
-
-        using var pass = encoder.BeginRenderPass(passDesc);
-        pass.SetPipeline(_textPipeline);
-        pass.SetVertexBuffer(0, _imageVertexBuffer, vbOffset, (ulong)(verts.Length * sizeof(float)));
-        pass.SetBindGroup(0, _imageBindGroups[imageHandle]);
-        pass.Draw(6);
-        pass.End();
-    }
-
-    // Frosted-glass backdrop blur pass. Reads DrawBackdropBlur ops (device-space)
-    // straight from backend.Commands, copies the painted framebuffer, and fills each
-    // rounded rect with a Gaussian blur of that copy + tint. No-op when there are none.
-    private unsafe void RenderBackdropBlur(CommandEncoder encoder, SurfaceTexture frame, EtchBackend backend)
-    {
-        _blurInstances.Clear();
-        foreach (var cmd in backend.Commands)
-        {
-            if (cmd.Kind != EtchBackend.OpKind.DrawBackdropBlur || !cmd.Fill.HasValue || cmd.W <= 0f || cmd.H <= 0f)
-            {
-                continue;
-            }
-
-            var (tr, tg, tb, ta) = PaintColor.ToLinear(EtchBackend.ToArgb(cmd.Fill.Value));
-
-            _blurInstances.Add(new BlurInstance
-            {
-                MinX = cmd.X, MinY = cmd.Y,
-                MaxX = cmd.X + cmd.W, MaxY = cmd.Y + cmd.H,
-                TintR = tr, TintG = tg, TintB = tb, TintA = ta,
-                Radius = cmd.Radius, Sigma = cmd.StrokeWidth,
-            });
-        }
-
-        if (_blurInstances.Count == 0
-            || _bgCopyTexture.IsInvalid
-            || _bgCopyWidth != _currentWidth || _bgCopyHeight != _currentHeight)
-        {
-            return;
-        }
-
-        // Copy the painted framebuffer (geometry + images) so panels sample behind them.
-        var origin = new WGPUOrigin3D { X = 0, Y = 0, Z = 0 };
-        var extent = new Extent3D { Width = _currentWidth, Height = _currentHeight, DepthOrArrayLayers = 1 };
-        var copySrc = new WGPUTexelCopyTextureInfo { Aspect = (uint)TextureAspect.All, MipLevel = 0, Origin = origin, Texture = frame.Texture };
-        var copyDst = new WGPUTexelCopyTextureInfo { Aspect = (uint)TextureAspect.All, MipLevel = 0, Origin = origin, Texture = _bgCopyTexture.Handle };
-        WebGPU.CommandEncoderCopyTextureToTexture(encoder.Handle, (nint)(&copySrc), (nint)(&copyDst), (nint)(&extent));
-
-        int count = _blurInstances.Count;
-        int byteSize = count * sizeof(BlurInstance);
-        if (count > _blurInstanceCapacity)
-        {
-            _blurInstanceBuffer.Dispose();
-            _blurInstanceBuffer = _device.CreateBuffer(new BufferDescriptor
-            {
-                Usage = (ulong)(BufferUsage.Storage | BufferUsage.CopyDst),
-                Size = (ulong)Math.Max(byteSize, 16),
-            });
-            _blurInstanceCapacity = count;
-        }
-        _device.Queue.WriteBuffer(_blurInstanceBuffer, 0, MemoryMarshal.AsBytes(CollectionsMarshal.AsSpan(_blurInstances)));
-
-        var bind0Entries = stackalloc BindGroupEntry[3];
-        bind0Entries[0] = new BindGroupEntry { Binding = 0, Buffer = _geomUniformBuffer.Handle, Offset = 0, Size = (ulong)sizeof(SurfaceSizeData) };
-        bind0Entries[1] = new BindGroupEntry { Binding = 1, TextureView = _bgCopyView.Handle };
-        bind0Entries[2] = new BindGroupEntry { Binding = 2, Sampler = _blurSampler.Handle };
-        using var bind0 = _device.CreateBindGroup(new BindGroupDescriptor { Layout = _blurBind0Layout.Handle, EntryCount = (UIntPtr)3, Entries = (nint)bind0Entries });
-
-        var instEntries = stackalloc BindGroupEntry[1];
-        instEntries[0] = new BindGroupEntry { Binding = 0, Buffer = _blurInstanceBuffer.Handle, Offset = 0, Size = (ulong)Math.Max(byteSize, 16) };
-        using var instBind = _device.CreateBindGroup(new BindGroupDescriptor { Layout = _blurInstanceLayout.Handle, EntryCount = (UIntPtr)1, Entries = (nint)instEntries });
-
-        var colorAttachment = new RenderPassColorAttachment
-        {
-            View = (nint)frame.View,
-            DepthSlice = 0xFFFFFFFFu,
-            LoadOp = LoadOp.Load,
-            StoreOp = StoreOp.Store,
-        };
-        var passDesc = new RenderPassDescriptor { ColorAttachmentCount = (UIntPtr)1, ColorAttachments = (nint)(&colorAttachment) };
-        using (var pass = encoder.BeginRenderPass(passDesc))
-        {
-            pass.SetPipeline(_blurPipeline);
-            pass.SetBindGroup(0, bind0);
-            pass.SetBindGroup(1, instBind);
-            pass.Draw(4, (uint)count);
-            pass.End();
-        }
-    }
-
-    private unsafe void RenderGlyphs(CommandEncoder encoder, SurfaceTexture frame)
-    {
-        int totalCount = _cachedGlyphInstances.Count;
-        foreach (var layerGlyphs in _cachedLayerGlyphInstances.Values)
-        {
-            totalCount += layerGlyphs.Count;
-        }
-        totalCount += _cachedOverlayGlyphInstances.Count;
-
-        int colorTotalCount = _cachedColorGlyphInstances.Count;
-        foreach (var layerColorGlyphs in _cachedLayerColorGlyphInstances.Values)
-        {
-            colorTotalCount += layerColorGlyphs.Count;
-        }
-        colorTotalCount += _cachedOverlayColorGlyphInstances.Count;
-
-        if (totalCount == 0 && colorTotalCount == 0)
-        {
-            return;
-        }
-
-        // Render monochrome glyphs
-        if (totalCount > 0)
-        {
-            int requiredBytes = totalCount * sizeof(GlyphInstance);
-            if (_glyphInstanceCapacity < requiredBytes)
-            {
-                _glyphInstanceCapacity = Math.Max(requiredBytes, _glyphInstanceCapacity * 2);
-                if (!_glyphInstanceBuffer.IsInvalid)
-                {
-                    _glyphInstanceBuffer.Dispose();
-                }
-                _glyphInstanceBuffer = _device.CreateBuffer(new BufferDescriptor
-                {
-                    Usage = (ulong)(BufferUsage.Storage | BufferUsage.CopyDst),
-                    Size = (ulong)_glyphInstanceCapacity,
-                });
-                UpdateGlyphInstanceBindGroup();
-            }
-
-            var allInstances = ArrayPool<GlyphInstance>.Shared.Rent(totalCount);
-            try
-            {
-                int offset = 0;
-                _cachedGlyphInstances.CopyTo(allInstances, offset);
-                offset += _cachedGlyphInstances.Count;
-                foreach (var layerGlyphs in _cachedLayerGlyphInstances.Values)
-                {
-                    layerGlyphs.CopyTo(allInstances, offset);
-                    offset += layerGlyphs.Count;
-                }
-                _cachedOverlayGlyphInstances.CopyTo(allInstances, offset);
-                offset += _cachedOverlayGlyphInstances.Count;
-                var instanceSpan = allInstances.AsSpan(0, totalCount);
-                var byteSpan = MemoryMarshal.AsBytes(instanceSpan);
-                _device.Queue.WriteBuffer(_glyphInstanceBuffer, 0, byteSpan);
-            }
-            finally
-            {
-                ArrayPool<GlyphInstance>.Shared.Return(allInstances);
-            }
-        }
-
-        // Render color glyphs (COLR/CPAL emoji)
-        if (colorTotalCount > 0)
-        {
-            int colorRequiredBytes = colorTotalCount * sizeof(GlyphInstance);
-            if (_colorGlyphInstanceCapacity < colorRequiredBytes)
-            {
-                _colorGlyphInstanceCapacity = Math.Max(colorRequiredBytes, _colorGlyphInstanceCapacity * 2);
-                if (!_colorGlyphInstanceBuffer.IsInvalid)
-                {
-                    _colorGlyphInstanceBuffer.Dispose();
-                }
-                _colorGlyphInstanceBuffer = _device.CreateBuffer(new BufferDescriptor
-                {
-                    Usage = (ulong)(BufferUsage.Storage | BufferUsage.CopyDst),
-                    Size = (ulong)_colorGlyphInstanceCapacity,
-                });
-            }
-
-            var allColorInstances = ArrayPool<GlyphInstance>.Shared.Rent(colorTotalCount);
-            try
-            {
-                int offset = 0;
-                _cachedColorGlyphInstances.CopyTo(allColorInstances, offset);
-                offset += _cachedColorGlyphInstances.Count;
-                foreach (var layerColorGlyphs in _cachedLayerColorGlyphInstances.Values)
-                {
-                    layerColorGlyphs.CopyTo(allColorInstances, offset);
-                    offset += layerColorGlyphs.Count;
-                }
-                _cachedOverlayColorGlyphInstances.CopyTo(allColorInstances, offset);
-                offset += _cachedOverlayColorGlyphInstances.Count;
-                var instanceSpan = allColorInstances.AsSpan(0, colorTotalCount);
-                var byteSpan = MemoryMarshal.AsBytes(instanceSpan);
-                _device.Queue.WriteBuffer(_colorGlyphInstanceBuffer, 0, byteSpan);
-            }
-            finally
-            {
-                ArrayPool<GlyphInstance>.Shared.Return(allColorInstances);
-            }
-        }
-
-        // WP-3537: snapshot the painted framebuffer (all backgrounds are drawn in the
-        // geometry pass before this) into _bgCopyTexture so the mono glyph shader can
-        // read the local background under each glyph for contrast-adaptive weight.
-        // Only needed for the mono path; emoji don't sample it.
-        if (totalCount > 0 && !_bgCopyTexture.IsInvalid
-            && _bgCopyWidth == _currentWidth && _bgCopyHeight == _currentHeight)
-        {
-            var copySrcOrigin = new WGPUOrigin3D { X = 0, Y = 0, Z = 0 };
-            var copyExtent = new Extent3D { Width = _currentWidth, Height = _currentHeight, DepthOrArrayLayers = 1 };
-            var copySrc = new WGPUTexelCopyTextureInfo
-            {
-                Aspect = (uint)TextureAspect.All,
-                MipLevel = 0,
-                Origin = copySrcOrigin,
-                Texture = frame.Texture,
-            };
-            var copyDst = new WGPUTexelCopyTextureInfo
-            {
-                Aspect = (uint)TextureAspect.All,
-                MipLevel = 0,
-                Origin = copySrcOrigin,
-                Texture = _bgCopyTexture.Handle,
-            };
-            WebGPU.CommandEncoderCopyTextureToTexture(encoder.Handle, (nint)(&copySrc), (nint)(&copyDst), (nint)(&copyExtent));
-        }
-
-        var colorAttachment = new RenderPassColorAttachment
-        {
-            View = (nint)frame.View,
-            DepthSlice = 0xFFFFFFFFu,
-            LoadOp = LoadOp.Load,
-            StoreOp = StoreOp.Store,
-        };
-        var passDesc = new RenderPassDescriptor
-        {
-            ColorAttachmentCount = (UIntPtr)1,
-            ColorAttachments = (nint)(&colorAttachment),
-        };
-        using (var pass = encoder.BeginRenderPass(passDesc))
-        {
-            if (totalCount > 0)
-            {
-                pass.SetPipeline(_glyphPipeline);
-                pass.SetBindGroup(0, _glyphAtlasBindGroup);
-                pass.SetBindGroup(1, _glyphInstanceBindGroup);
-                pass.Draw(4, (uint)totalCount);
-            }
-
-            if (colorTotalCount > 0)
-            {
-                pass.SetPipeline(_colorGlyphPipeline);
-                pass.SetBindGroup(0, _colorGlyphAtlasBindGroup);
-                var colorInstanceEntries = stackalloc BindGroupEntry[1];
-                colorInstanceEntries[0] = new BindGroupEntry { Binding = 0, Buffer = _colorGlyphInstanceBuffer.Handle, Offset = 0, Size = (ulong)_colorGlyphInstanceCapacity };
-                using var colorInstanceBindGroup = _device.CreateBindGroup(new BindGroupDescriptor
-                {
-                    Layout = _glyphInstanceLayout.Handle,
-                    EntryCount = (UIntPtr)1,
-                    Entries = (nint)colorInstanceEntries,
-                });
-                pass.SetBindGroup(1, colorInstanceBindGroup);
-                pass.Draw(4, (uint)colorTotalCount);
-            }
-            pass.End();
-        }
-    }
-
-    private static EtchBackend.GlyphOp CopyGlyphOp(EtchBackend.GlyphOp op)
-    {
-        var ids = new ushort[op.GlyphIds.Length];
-        op.GlyphIds.CopyTo(ids, 0);
-        var pos = new float[op.Positions.Length];
-        op.Positions.CopyTo(pos, 0);
-        return new EtchBackend.GlyphOp
-        {
-            GlyphIds = ids,
-            Positions = pos,
-            FontSize = op.FontSize,
-            FontHandle = op.FontHandle,
-            Color = op.Color,
-            ScaleX = op.ScaleX,
-            ScaleY = op.ScaleY,
-            ClipBounds = op.ClipBounds,
-            HasClipBounds = op.HasClipBounds,
-            DebugNodeId = op.DebugNodeId,
-        };
-    }
-
-    private void BuildGlyphInstances(EtchBackend.GlyphOp cmd, EtchBackend backend, float atlasDim, List<GlyphInstance> instances, List<GlyphInstance> colorInstances, float offsetX, float offsetY, IReadOnlyList<Cascade.UI.Rect>? excludeBounds, ref int culledGlyphs, List<GlyphDrawRecord>? records = null, string recordCategory = "main", Cascade.UI.Rect? viewportClip = null)
+    private void BuildGlyphInstances(EtchBackend.GlyphOp cmd, EtchBackend backend, float atlasDim, List<GlyphInstance> instances, List<GlyphInstance> colorInstances, float offsetX, float offsetY, ref int culledGlyphs, List<GlyphDrawRecord>? records, string recordCategory, long paintOrder, Cascade.UI.Rect? viewportClip)
     {
         // Rasterize glyphs at physical pixel size so the bitmap is 1:1 with the
         // screen.  cmd.ScaleX/Y carry the DPI scale from DrawGlyphs; using them
@@ -3016,30 +3026,6 @@ int overlayCulled = 0;
                         continue;
                     }
 
-                    if (excludeBounds != null && excludeBounds.Count > 0)
-                    {
-                        float glyphMinX = cpx;
-                        float glyphMinY = cpy;
-                        float glyphMaxX = cpx + colorRegion.W;
-                        float glyphMaxY = cpy + colorRegion.H;
-                        bool insideOverlay = false;
-                        foreach (var bounds in excludeBounds)
-                        {
-                            if (glyphMinX < bounds.X + bounds.Width &&
-                                glyphMaxX > bounds.X &&
-                                glyphMinY < bounds.Y + bounds.Height &&
-                                glyphMaxY > bounds.Y)
-                            {
-                                insideOverlay = true;
-                                break;
-                            }
-                        }
-                        if (insideOverlay)
-                        {
-                            continue;
-                        }
-                    }
-
                     colorInstances.Add(new GlyphInstance
                     {
                         PosX = cpx,
@@ -3066,7 +3052,7 @@ int overlayCulled = 0;
                         cmd.Color,
                         hasClip ? clipMinX : 0, hasClip ? clipMinY : 0,
                         hasClip ? clipMaxX : 0, hasClip ? clipMaxY : 0,
-                        hasClip, IsColorGlyph: true, recordCategory, cmd.DebugNodeId));
+                        hasClip, IsColorGlyph: true, recordCategory, cmd.DebugNodeId, paintOrder));
                     continue;
                 }
                 // Color glyph rasterization failed — fall through to monochrome
@@ -3126,36 +3112,6 @@ int overlayCulled = 0;
                 continue;
             }
 
-            // Skip glyphs that sit *within* an overlay (popup) so underlying
-            // controls' text doesn't show through dropdown backgrounds. Test the
-            // glyph's centre point, not its full quad: the overlay bounds are the
-            // union of every draw in the popup — including its soft drop shadow,
-            // which spreads outward (upward over the trigger field). A full-quad
-            // overlap test therefore culls a trigger glyph whose descender merely
-            // grazes that shadow-inflated box — e.g. the 'y' in "Select your
-            // interests" above an open dropdown. Centre-point testing keeps such
-            // edge-grazing glyphs while still culling text whose body is inside
-            // the popup panel.
-            if (excludeBounds != null && excludeBounds.Count > 0)
-            {
-                float glyphCenterX = px + region.W / 2f;
-                float glyphCenterY = py + region.H / 2f;
-                bool insideOverlay = false;
-                foreach (var bounds in excludeBounds)
-                {
-                    if (glyphCenterX >= bounds.X && glyphCenterX <= bounds.X + bounds.Width &&
-                        glyphCenterY >= bounds.Y && glyphCenterY <= bounds.Y + bounds.Height)
-                    {
-                        insideOverlay = true;
-                        break;
-                    }
-                }
-                if (insideOverlay)
-                {
-                    continue;
-                }
-            }
-
             instances.Add(new GlyphInstance
             {
                 PosX = px,
@@ -3182,7 +3138,7 @@ int overlayCulled = 0;
                 cmd.Color,
                 hasClip ? clipMinX : 0, hasClip ? clipMinY : 0,
                 hasClip ? clipMaxX : 0, hasClip ? clipMaxY : 0,
-                hasClip, IsColorGlyph: false, recordCategory, cmd.DebugNodeId));
+                hasClip, IsColorGlyph: false, recordCategory, cmd.DebugNodeId, paintOrder));
         }
     }
 
@@ -3484,9 +3440,20 @@ int overlayCulled = 0;
         return result;
     }
 
-    private static void BuildInstances(SceneBuffer scene, List<ShapeInstance> instances, bool skipArbitraryPaths = false)
+    /// <summary>
+    /// Builds the scene's shape instances. When <paramref name="sceneMarks"/> is given (scene
+    /// command index before each backend command, see <see cref="EtchBackendProvider.SceneMarks"/>),
+    /// also fills <paramref name="instanceAt"/> with the number of instances emitted before each
+    /// backend command (plus one entry for the end) — the paint-order positions glyph runs and
+    /// images are drawn at. Without marks <paramref name="instanceAt"/> is left empty.
+    /// </summary>
+    private static void BuildInstances(SceneBuffer scene, List<ShapeInstance> instances,
+        IReadOnlyList<int>? sceneMarks, List<int> instanceAt, bool skipArbitraryPaths = false)
     {
         instances.Clear();
+        instanceAt.Clear();
+        int markIndex = 0;
+        int markCount = sceneMarks?.Count ?? 0;
         Affine cur = Affine.Identity;
         var clipStack = new Stack<EGeometry.Rect>();
 
@@ -3510,6 +3477,12 @@ int overlayCulled = 0;
 
         for (int i = 0; i < scene.Commands.Length; i++)
         {
+            while (markIndex < markCount && sceneMarks![markIndex] <= i)
+            {
+                instanceAt.Add(instances.Count);
+                markIndex++;
+            }
+
             ref readonly var cmd = ref scene.Commands[i];
             switch (cmd.Op)
             {
@@ -3966,8 +3939,11 @@ int overlayCulled = 0;
             }
         }
 
-
-
+        while (markIndex < markCount)
+        {
+            instanceAt.Add(instances.Count);
+            markIndex++;
+        }
     }
 
     // Paint colours are sRGB-encoded (PaintColor); the shaders blend into the sRGB swapchain in
@@ -5073,6 +5049,24 @@ int overlayCulled = 0;
         });
     }
 
+    private unsafe void UpdateColorGlyphInstanceBindGroup()
+    {
+        if (!_colorGlyphInstanceBindGroup.IsInvalid)
+        {
+            _colorGlyphInstanceBindGroup.Dispose();
+        }
+
+        var entries = stackalloc BindGroupEntry[1];
+        entries[0] = new BindGroupEntry { Binding = 0, Buffer = _colorGlyphInstanceBuffer.Handle, Offset = 0, Size = (ulong)_colorGlyphInstanceCapacity };
+
+        _colorGlyphInstanceBindGroup = _device.CreateBindGroup(new BindGroupDescriptor
+        {
+            Layout = _glyphInstanceLayout.Handle,
+            EntryCount = (UIntPtr)1,
+            Entries = (nint)entries,
+        });
+    }
+
     private unsafe void UpdateColorGlyphAtlasBindGroup()
     {
         if (!_colorGlyphAtlasBindGroup.IsInvalid)
@@ -5146,6 +5140,10 @@ int overlayCulled = 0;
 
         _compositor.Dispose();
 
+        if (!_colorGlyphInstanceBindGroup.IsInvalid)
+        {
+            _colorGlyphInstanceBindGroup.Dispose();
+        }
         _colorGlyphInstanceBuffer.Dispose();
         _colorGlyphAtlasBindGroup.Dispose();
         _colorGlyphSampler.Dispose();

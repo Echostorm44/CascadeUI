@@ -2376,56 +2376,45 @@ internal static class McpTools
         var sb = new StringBuilder();
         sb.Append($"{{\"x\":{x:F1},\"y\":{y:F1},\"frame\":{snapshot.Frame},\"draws\":[");
 
-        // Emit in GPU execution order: geometry pass, then image pass, then
-        // glyph pass — later entries paint over earlier ones.
+        // Emit in paint order — the order the GPU draws them, so later entries paint over earlier
+        // ones. Index i < Shapes.Count is a shape/image record, else a glyph record; ties keep
+        // capture order (one op can produce several records with the same key).
+        var hits = new List<(long Order, int Index)>();
+        for (int i = 0; i < snapshot.Shapes.Count; i++)
+        {
+            var shape = snapshot.Shapes[i];
+            if (x >= shape.MinX && x < shape.MaxX && y >= shape.MinY && y < shape.MaxY)
+            {
+                hits.Add((shape.PaintOrder, i));
+            }
+        }
+        for (int i = 0; i < snapshot.Glyphs.Count; i++)
+        {
+            var glyph = snapshot.Glyphs[i];
+            if (GlyphTouchesPixel(in glyph, x, y))
+            {
+                hits.Add((glyph.PaintOrder, snapshot.Shapes.Count + i));
+            }
+        }
+        hits.Sort(static (a, b) => a.Order != b.Order ? a.Order.CompareTo(b.Order) : a.Index.CompareTo(b.Index));
+
         int count = 0;
-        foreach (var shape in snapshot.Shapes)
+        foreach (var (_, index) in hits)
         {
-            if (!string.Equals(shape.Pass, DrawPassNames.Geometry, StringComparison.Ordinal))
-            {
-                continue;
-            }
-            if (x < shape.MinX || x >= shape.MaxX || y < shape.MinY || y >= shape.MaxY)
-            {
-                continue;
-            }
             if (count > 0)
             {
                 sb.Append(',');
             }
-            AppendShapeRecordJson(sb, in shape);
-            count++;
-        }
-
-        foreach (var shape in snapshot.Shapes)
-        {
-            if (!string.Equals(shape.Pass, DrawPassNames.Image, StringComparison.Ordinal))
+            if (index < snapshot.Shapes.Count)
             {
-                continue;
+                var shape = snapshot.Shapes[index];
+                AppendShapeRecordJson(sb, in shape);
             }
-            if (x < shape.MinX || x >= shape.MaxX || y < shape.MinY || y >= shape.MaxY)
+            else
             {
-                continue;
+                var glyph = snapshot.Glyphs[index - snapshot.Shapes.Count];
+                AppendGlyphRecordJson(sb, in glyph);
             }
-            if (count > 0)
-            {
-                sb.Append(',');
-            }
-            AppendShapeRecordJson(sb, in shape);
-            count++;
-        }
-
-        foreach (var glyph in snapshot.Glyphs)
-        {
-            if (!GlyphTouchesPixel(in glyph, x, y))
-            {
-                continue;
-            }
-            if (count > 0)
-            {
-                sb.Append(',');
-            }
-            AppendGlyphRecordJson(sb, in glyph);
             count++;
         }
 

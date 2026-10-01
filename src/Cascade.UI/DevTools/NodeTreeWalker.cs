@@ -388,6 +388,18 @@ internal static class NodeTreeWalker
     private static void Press(Key key, ModifierKeys modifiers, char? character)
     {
         var dispatcher = inputDispatcher!;
+        if (key == Key.None && character is null)
+        {
+            // Key "None": press and hold the modifiers alone (as pressing Shift does, e.g. to show
+            // shortcut hints) — or, with no modifiers, release whatever is held.
+            dispatcher.HandleKeyEvent(new NativeKeyEvent
+            {
+                Type = modifiers == ModifierKeys.None ? NativeKeyEventType.KeyUp : NativeKeyEventType.KeyDown,
+                Key = Key.None,
+                Modifiers = modifiers,
+            });
+            return;
+        }
         if (key != Key.None)
         {
             dispatcher.HandleKeyEvent(new NativeKeyEvent { Type = NativeKeyEventType.KeyDown, Key = key, Modifiers = modifiers });

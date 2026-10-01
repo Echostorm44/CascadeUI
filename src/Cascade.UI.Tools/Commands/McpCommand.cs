@@ -436,7 +436,7 @@ internal static class McpCommand
     {
         if (args.Length == 0)
         {
-            Console.Error.WriteLine("Usage: cascade mcp type <text> | type --key <name> [--ctrl] [--shift] [--alt] [--win]");
+            Console.Error.WriteLine("Usage: cascade mcp type <text> | type --key <name> [--ctrl] [--shift] [--alt] [--win]   (--key None --shift holds Shift; --key None releases)");
             return 1;
         }
 

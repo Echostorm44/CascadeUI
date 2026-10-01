@@ -673,6 +673,25 @@ internal static class McpTools
             sb.Append('}');
         }
 
+        // Component errors (Render / OnMounted exceptions the framework caught). A non-zero total
+        // explains a window that stopped updating.
+        var errors = Cascade.UI.Diagnostics.ComponentErrorLog.Snapshot();
+        sb.Append($",\"component_errors\":{{\"total\":{Cascade.UI.Diagnostics.ComponentErrorLog.TotalCount},\"recent\":[");
+        for (int i = 0; i < errors.Length; i++)
+        {
+            var e = errors[i];
+            if (i > 0)
+            {
+                sb.Append(',');
+            }
+            sb.Append($"{{\"at\":\"{e.At:O}\",\"component\":\"{EscapeJson(e.Component)}\"");
+            sb.Append($",\"handled_by_boundary\":{BoolStr(e.HandledByBoundary)}");
+            sb.Append($",\"type\":\"{EscapeJson(e.Error.GetType().FullName ?? e.Error.GetType().Name)}\"");
+            sb.Append($",\"message\":\"{EscapeJson(e.Error.Message)}\"");
+            sb.Append($",\"stack\":\"{EscapeJson(e.Error.StackTrace ?? "")}\"}}");
+        }
+        sb.Append("]}");
+
         // GC stats — cumulative since process start. Agents can diff two
         // cascade_diagnostics calls to compute per-interval GC activity.
         // total_pause_ms comes from GC.GetTotalPauseDuration() (.NET 7+);

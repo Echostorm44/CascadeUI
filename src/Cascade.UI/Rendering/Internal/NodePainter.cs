@@ -190,11 +190,6 @@ internal sealed class NodePainter
     // appear on top of all sibling content (e.g. dropdown popups).
     private List<Action>? deferredOverlays;
 
-    // Set once per frame in Paint(): true when any popup/overlay is open anywhere in
-    // the tree, so ScrollViews fall back to direct paint and don't occlude a popup that
-    // spills over them from another pane. See Paint() and PaintScrollView.
-    private bool frameHasOpenPopup;
-
     // Set to true during painting when any Spinner is encountered.
     // Checked by FrameOrchestrator to keep the frame loop running.
     internal static bool HasActiveSpinners { get; private set; }
@@ -304,17 +299,6 @@ internal sealed class NodePainter
         ControlStateAnimator.BeginFrame();
         ChartAnimationTracker.BeginFrame();
         TickPerTypeFrame();
-
-        // Whether any popup/overlay is open anywhere in the tree this frame. A popup
-        // is a deferred overlay drawn last as shapes+glyphs, but a ScrollView's cached
-        // layer is composited as an image, which the image pass draws OVER those shapes
-        // — so a popup that overlaps a *different* pane's cached ScrollView (e.g. a grid
-        // date/select popup spilling over the metadata panel) is occluded. Computed once
-        // here (order-independent) so every ScrollView can fall back to direct paint
-        // while a popup is open, keeping the popup on top. The CommandPalette overlay is
-        // full-screen geometry drawn after the tree, so it hits the same occlusion — its
-        // panel background is a cached-layer image drawn over it — and must count too.
-        frameHasOpenPopup = HasOpenPopupsInSubtree(node) || CommandPalette.IsOpen;
 
         Cascade.UI.Diagnostics.DiagnosticsHub.MarkPhase("paint.recursive");
         PaintRecursive(node);
@@ -1208,11 +1192,9 @@ internal sealed class NodePainter
         // invisible because PaintRecursive is skipped during layer compositing — the
         // popup is never added to deferredOverlays. Force direct paint while any
         // descendant has an open popup so the popup renders on top of the content.
-        // frameHasOpenPopup extends this to a popup open anywhere in the tree: a cached
-        // layer is composited as an image that the image pass draws over the deferred
-        // popup shapes, so a popup spilling in from another pane would be occluded —
-        // direct-painting this layer while any popup is open keeps the popup on top.
-        bool hasOpenPopups = frameHasOpenPopup || HasOpenPopupsInSubtree(sv.Content);
+        // A popup from elsewhere needs nothing: the presenter composites the layer at its
+        // paint position, so popups (painted last) stay on top of it.
+        bool hasOpenPopups = HasOpenPopupsInSubtree(sv.Content);
 
         // Spinners, continuous canvases, and chart entrance animations advance every
         // frame. Freezing them inside a cached layer makes them appear broken.

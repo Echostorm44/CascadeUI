@@ -12740,6 +12740,9 @@ internal sealed class NodePainter
         }
 
         float effectiveFontSize = fontSize > 0 ? fontSize : theme.Typography.Scale.Body.Size;
+        // One line means one unbroken line: cut at a character (clip or ellipsis), never wrapped to
+        // the first word-break with the rest hidden ("All Types" in a narrow select showed "All").
+        noWrap |= maxLines == 1;
         float availableWidth = bounds.Width - horizontalPadding * 2;
         if (availableWidth <= 0)
         {

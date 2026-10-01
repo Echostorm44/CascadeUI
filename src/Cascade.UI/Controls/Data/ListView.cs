@@ -87,6 +87,24 @@ internal interface IListViewNode
     /// layout pass in place of an unconditional <see cref="InvalidateContent"/>.
     /// </summary>
     void SyncContent();
+
+    // ── Selection and keyboard navigation (flat lists) ──
+    /// <summary>Whether rows can be selected (a flat list with a selection mode).</summary>
+    bool IsSelectable { get; }
+    /// <summary>Index of the selected item in the flat list, or -1.</summary>
+    int SelectedIndex { get; }
+    /// <summary>Selects the item at <paramref name="index"/>: updates the binding and raises OnSelect.</summary>
+    void SelectIndex(int index);
+    /// <summary>Activates the item (Enter or double-click): raises OnActivate.</summary>
+    void ActivateIndex(int index);
+    /// <summary>The index ScrollIntoView asked for, or -1.</summary>
+    int ScrollIntoViewIndex { get; }
+    /// <summary>The last index scrolled into view — carried across re-renders by the reconciler.</summary>
+    int LastScrolledIntoView { get; set; }
+    /// <summary>The row at <paramref name="localY"/> (list-relative, logical px), or -1.</summary>
+    int RowIndexAt(float localY);
+    /// <summary>A row's top (content coordinates) and height, or null before layout.</summary>
+    (float Top, float Height)? RowExtent(int index);
 }
 
 /// <summary>
@@ -178,6 +196,10 @@ public sealed class ListView<T> : Node, IListViewNode
     internal Node endReachedLoadingNode = Node.Empty;
     internal Func<T, SwipeActionSet?>? swipeActionsFactory;
     internal Func<T, IReadOnlyList<ContextMenuItem>>? contextMenuFactory;
+    internal Action<T>? onActivateHandler;
+    internal bool selectionHighlight = true;
+    internal int scrollIntoViewIndex = -1;
+    private int lastScrolledIntoView = -1;
 
     // ── Fluent modifiers ──────────────────────────────────────────────
 
@@ -253,6 +275,37 @@ public sealed class ListView<T> : Node, IListViewNode
         return this;
     }
 
+    /// <summary>
+    /// Called when an item is activated — Enter while the list has focus, or a double-click. Use it for
+    /// the list's primary action (open, paste, run).
+    /// </summary>
+    public ListView<T> OnActivate(Action<T> onActivate)
+    {
+        onActivateHandler = onActivate;
+        return this;
+    }
+
+    /// <summary>
+    /// Whether the selected row gets the default highlight (default: on for selectable lists). Turn it
+    /// off when the row template draws its own selected state.
+    /// </summary>
+    public ListView<T> SelectionHighlight(bool enabled)
+    {
+        selectionHighlight = enabled;
+        return this;
+    }
+
+    /// <summary>
+    /// Scrolls the item at <paramref name="index"/> into view whenever the index changes — e.g. pass
+    /// the selected index when arrow keys handled elsewhere move the selection. Scrolls only on change,
+    /// so the user can still wheel the selection out of view. Flat lists only.
+    /// </summary>
+    public ListView<T> ScrollIntoView(int index)
+    {
+        scrollIntoViewIndex = index;
+        return this;
+    }
+
     /// <summary>Configures a context menu per item.</summary>
     public ListView<T> ItemContextMenu(Func<T, IReadOnlyList<ContextMenuItem>> factory)
     {
@@ -280,6 +333,109 @@ public sealed class ListView<T> : Node, IListViewNode
         }
 
         return EqualityComparer<T>.Default.Equals(Items[index], Selected.Value.Value);
+    }
+
+    bool IListViewNode.IsSelectable => SelectionMode != SelectionMode.None && Sections is null;
+
+    // The selection this node made itself (keyboard or click) until the app re-renders with the new
+    // Selected value — so a second arrow press before that re-render moves on from the new row.
+    private int pendingSelection = -1;
+
+    int IListViewNode.SelectedIndex
+    {
+        get
+        {
+            if (pendingSelection >= 0)
+            {
+                return pendingSelection;
+            }
+            if (Selected is not { } binding || binding.Value is null)
+            {
+                return -1;
+            }
+            for (int i = 0; i < Items.Count; i++)
+            {
+                if (EqualityComparer<T>.Default.Equals(Items[i], binding.Value))
+                {
+                    return i;
+                }
+            }
+            return -1;
+        }
+    }
+
+    void IListViewNode.SelectIndex(int index)
+    {
+        if (index < 0 || index >= Items.Count)
+        {
+            return;
+        }
+        T item = Items[index];
+        pendingSelection = index;
+        Selected?.OnChange?.Invoke(item);
+        OnSelect?.Invoke(item);
+    }
+
+    void IListViewNode.ActivateIndex(int index)
+    {
+        if (index >= 0 && index < Items.Count)
+        {
+            onActivateHandler?.Invoke(Items[index]);
+        }
+    }
+
+    int IListViewNode.RowIndexAt(float localY)
+    {
+        float contentY = localY + offsetY;
+        if (fixedItemHeight is { } ih && ih > 0f)
+        {
+            int row = (int)(contentY / ih);
+            return row >= 0 && row < Items.Count ? row : -1;
+        }
+        if (contentNode is Column rows && Sections is null && rows.Children.Count == Items.Count)
+        {
+            for (int i = 0; i < rows.Children.Count; i++)
+            {
+                var b = rows.Children[i].LayoutData.Bounds;
+                if (contentY >= b.Y && contentY < b.Y + b.Height)
+                {
+                    return i;
+                }
+            }
+        }
+        return -1;
+    }
+
+    (float Top, float Height)? IListViewNode.RowExtent(int index)
+    {
+        if (index < 0 || index >= Items.Count)
+        {
+            return null;
+        }
+        if (fixedItemHeight is { } ih && ih > 0f)
+        {
+            return (index * ih, ih);
+        }
+        if (contentNode is Column rows && Sections is null && index < rows.Children.Count)
+        {
+            var b = rows.Children[index].LayoutData.Bounds;
+            return (b.Y, b.Height);
+        }
+        return null;
+    }
+
+    int IListViewNode.ScrollIntoViewIndex => Sections is null ? scrollIntoViewIndex : -1;
+    int IListViewNode.LastScrolledIntoView { get => lastScrolledIntoView; set => lastScrolledIntoView = value; }
+
+    // The default selected-row highlight (see SelectionHighlight).
+    private Node Highlight(T item, Node row)
+    {
+        if (!selectionHighlight || SelectionMode == SelectionMode.None || Selected is not { } binding || binding.Value is null
+            || !EqualityComparer<T>.Default.Equals(item, binding.Value))
+        {
+            return row;
+        }
+        return row.Background(ThemeSwitcher.ActiveColors.Primary.Opacity(0.18f));
     }
 
     string IListViewNode.GetSectionKey(int sectionIndex)
@@ -557,7 +713,7 @@ public sealed class ListView<T> : Node, IListViewNode
             var rows = new Node[last - first + 1];
             for (int i = first; i <= last; i++)
             {
-                rows[i - first] = WrapSwipe(i, Render(Items[i]), ih);
+                rows[i - first] = WrapSwipe(i, Highlight(Items[i], Render(Items[i])), ih);
             }
 
             contentNode = new Column(spacing: 0, children: rows);
@@ -571,7 +727,7 @@ public sealed class ListView<T> : Node, IListViewNode
             var children = new Node[Items.Count];
             for (int i = 0; i < Items.Count; i++)
             {
-                Node row = Render(Items[i]);
+                Node row = Highlight(Items[i], Render(Items[i]));
                 children[i] = fixedItemHeight.HasValue
                     ? WrapSwipe(i, row, fixedItemHeight.Value)
                     : row;

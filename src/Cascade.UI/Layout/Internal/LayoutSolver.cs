@@ -288,6 +288,7 @@ internal static class LayoutSolver
             IRadioButton => MeasureRadioButton(node, constraints),
 
             Toggle toggle => MeasureToggle(toggle, constraints),
+            HotkeyPicker picker => MeasureHotkeyPicker(picker, constraints),
 
             TextInput textInput => MeasureTextInput(textInput, constraints),
 
@@ -938,6 +939,24 @@ internal static class LayoutSolver
             constraints.ConstrainHeight(desiredHeight));
     }
 
+    // Label on the left, a fixed-width field on the right, TextInput height.
+    internal const float HotkeyPickerFieldWidth = 180f;
+    internal const float HotkeyPickerLabelGap = 12f;
+
+    private static Size MeasureHotkeyPicker(HotkeyPicker picker, LayoutConstraints constraints)
+    {
+        const float height = 36f;
+        float width = HotkeyPickerFieldWidth;
+        if (!string.IsNullOrEmpty(picker.Label))
+        {
+            float labelWidth = DefaultFontPath != null
+                ? TextLayoutEngine.Layout(picker.Label, new TextLayoutOptions { FontPath = DefaultFontPath, FontSize = BodyFontSize }).BoundingBox.Width
+                : picker.Label.Length * BodyFontSize * AverageCharWidthRatio;
+            width += HotkeyPickerLabelGap + labelWidth;
+        }
+        return new Size(constraints.ConstrainWidth(width), constraints.ConstrainHeight(height));
+    }
+
     private static Size MeasureTextInput(TextInput textInput, LayoutConstraints constraints)
     {
         // TextInput: reasonable default width (280px), fixed height 36px.
@@ -1369,6 +1388,21 @@ internal static class LayoutSolver
             constraints.ConstrainHeight(totalHeight));
     }
 
+    // The scroll offset that brings [rowTop, rowTop + rowHeight) into a viewport of the given height,
+    // moving as little as possible.
+    internal static float ScrollToReveal(float offset, float rowTop, float rowHeight, float viewport)
+    {
+        if (rowTop < offset)
+        {
+            return rowTop;
+        }
+        if (rowTop + rowHeight > offset + viewport)
+        {
+            return rowTop + rowHeight - viewport;
+        }
+        return offset;
+    }
+
     private static Size MeasureListView(IListViewNode lvn, LayoutConstraints constraints)
     {
         bool boundedHeight = !float.IsPositiveInfinity(constraints.MaxHeight);
@@ -1390,6 +1424,12 @@ internal static class LayoutSolver
 
             lvn.ViewportHeight = viewport;
             lvn.MaxY = MathF.Max(0f, (lvn.ItemCount * ih) - viewport);
+            int reveal = lvn.ScrollIntoViewIndex;
+            if (reveal >= 0 && reveal < lvn.ItemCount && reveal != lvn.LastScrolledIntoView)
+            {
+                lvn.OffsetY = ScrollToReveal(lvn.OffsetY, reveal * ih, ih, viewport);
+                lvn.LastScrolledIntoView = reveal;
+            }
             lvn.OffsetY = Math.Clamp(lvn.OffsetY, 0f, lvn.MaxY);
 
             lvn.SyncContent();
@@ -1431,6 +1471,14 @@ internal static class LayoutSolver
             lvn.ViewportHeight = viewport;
             lvn.TotalContentHeight = contentSize.Height;
             lvn.MaxY = MathF.Max(0f, contentSize.Height - viewport);
+            int reveal = lvn.ScrollIntoViewIndex;
+            if (reveal >= 0 && reveal != lvn.LastScrolledIntoView && content is Column rows && reveal < rows.Children.Count)
+            {
+                // Row bounds are relative to the content column at this point of layout.
+                var row = rows.Children[reveal].LayoutData.Bounds;
+                lvn.OffsetY = ScrollToReveal(lvn.OffsetY, row.Y, row.Height, viewport);
+                lvn.LastScrolledIntoView = reveal;
+            }
             lvn.OffsetY = Math.Clamp(lvn.OffsetY, 0f, lvn.MaxY);
 
             PositionChild(content, 0, -lvn.OffsetY);

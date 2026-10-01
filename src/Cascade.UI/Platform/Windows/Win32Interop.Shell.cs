@@ -47,6 +47,9 @@ internal static partial class Win32
         public nint lppos;
     }
 
+    [LibraryImport("user32", EntryPoint = "GetAsyncKeyState")]
+    internal static partial short GetAsyncKeyState(int vKey);
+
     [LibraryImport("user32", EntryPoint = "GetForegroundWindow")]
     internal static partial nint GetForegroundWindow();
 

@@ -32,7 +32,9 @@ public class HotkeyTests
         var hotkey = new Hotkey(
             ModifierKeys.Ctrl | ModifierKeys.Shift | ModifierKeys.Alt | ModifierKeys.Meta,
             Key.Delete);
-        await Assert.That(hotkey.ToString()).IsEqualTo("Ctrl+Shift+Alt+Meta+Delete");
+        // The Meta key is the Windows key on Windows.
+        string meta = OperatingSystem.IsWindows() ? "Win" : "Meta";
+        await Assert.That(hotkey.ToString()).IsEqualTo($"Ctrl+Shift+Alt+{meta}+Delete");
     }
 
     [Test]

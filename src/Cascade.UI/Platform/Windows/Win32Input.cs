@@ -33,7 +33,9 @@ internal static class Win32Input
             Y = y,
             Type = eventType.Value,
             Button = button,
-            Modifiers = modifiers
+            Modifiers = modifiers,
+            // The window class has CS_DBLCLKS, so the second press of a double-click arrives as *DBLCLK.
+            ClickCount = msg is Win32.WM_LBUTTONDBLCLK or Win32.WM_RBUTTONDBLCLK or Win32.WM_MBUTTONDBLCLK ? 2 : 1,
         };
     }
 
@@ -97,7 +99,9 @@ internal static class Win32Input
             Key = key,
             Type = eventType.Value,
             Modifiers = modifiers,
-            Character = null
+            Character = null,
+            // lParam bit 30: the key was already down (auto-repeat).
+            IsRepeat = eventType.Value == NativeKeyEventType.KeyDown && (lParam & (1 << 30)) != 0,
         };
     }
 
@@ -365,6 +369,32 @@ internal static class Win32Input
     /// <summary>
     /// Reads the current modifier key state from the system.
     /// </summary>
+    /// <summary>
+    /// The modifiers physically held now (GetAsyncKeyState), independent of the message being
+    /// processed — for queries outside key events.
+    /// </summary>
+    internal static ModifierKeys GetAsyncModifierKeys()
+    {
+        ModifierKeys mods = ModifierKeys.None;
+        if ((Win32.GetAsyncKeyState(Win32.VK_CONTROL) & 0x8000) != 0)
+        {
+            mods |= ModifierKeys.Ctrl;
+        }
+        if ((Win32.GetAsyncKeyState(Win32.VK_SHIFT) & 0x8000) != 0)
+        {
+            mods |= ModifierKeys.Shift;
+        }
+        if ((Win32.GetAsyncKeyState(Win32.VK_MENU) & 0x8000) != 0)
+        {
+            mods |= ModifierKeys.Alt;
+        }
+        if ((Win32.GetAsyncKeyState(Win32.VK_LWIN) & 0x8000) != 0 || (Win32.GetAsyncKeyState(Win32.VK_RWIN) & 0x8000) != 0)
+        {
+            mods |= ModifierKeys.Meta;
+        }
+        return mods;
+    }
+
     internal static ModifierKeys GetCurrentModifierKeys()
     {
         ModifierKeys mods = ModifierKeys.None;

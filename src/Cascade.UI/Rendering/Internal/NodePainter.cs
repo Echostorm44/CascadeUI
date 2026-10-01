@@ -673,6 +673,9 @@ internal sealed class NodePainter
             case Toggle tog:
                 PaintToggle(tog, bounds);
                 break;
+            case HotkeyPicker picker:
+                PaintHotkeyPicker(picker, bounds);
+                break;
 
             case ProgressBar pb:
                 PaintProgressBar(pb, bounds);
@@ -5570,6 +5573,44 @@ internal sealed class NodePainter
                 bounds.Height);
             PaintText(labelText, labelBounds, 0, theme.Colors.Text);
         }
+    }
+
+    // ── HotkeyPicker ───────────────────────────────────────────────────
+
+    // Styled like a TextInput field: the label on the left, the field on the right showing the
+    // hotkey, or — while recording — a prompt and the modifiers being held.
+    private void PaintHotkeyPicker(HotkeyPicker picker, Rect bounds)
+    {
+        var t = theme.TextInput;
+        bool focused = ReferenceEquals(FocusManager.FocusedElement, picker) && !picker.IsDisabled;
+        if (!focused)
+        {
+            picker.IsRecording = false; // focus moved away: stop recording
+        }
+
+        var field = new Rect(bounds.X + bounds.Width - LayoutSolver.HotkeyPickerFieldWidth, bounds.Y,
+            LayoutSolver.HotkeyPickerFieldWidth, bounds.Height);
+        if (!string.IsNullOrEmpty(picker.Label))
+        {
+            var labelRect = new Rect(bounds.X, bounds.Y, bounds.Width - field.Width - LayoutSolver.HotkeyPickerLabelGap, bounds.Height);
+            PaintText(picker.Label, labelRect, 0f, picker.IsDisabled ? t.DisabledTextColor : theme.Colors.Text);
+        }
+
+        bool recording = focused && picker.IsRecording;
+        ctx.DrawRect(field, picker.IsDisabled ? t.DisabledBackground : t.Background, radius: t.Radius);
+        var border = picker.IsDisabled ? t.DisabledBorderColor : (focused ? t.FocusBorderColor : t.BorderColor);
+        ctx.DrawRect(field, stroke: new Stroke(border, focused ? t.FocusBorderWidth : t.BorderWidth), radius: t.Radius);
+        if (recording && t.FocusRingWidth > 0)
+        {
+            float ring = t.FocusBorderWidth;
+            ctx.DrawRect(new Rect(field.X - ring, field.Y - ring, field.Width + ring * 2, field.Height + ring * 2),
+                stroke: new Stroke(t.FocusRingColor, t.FocusRingWidth), radius: t.Radius + ring);
+        }
+
+        string text = picker.FieldText(focused, Keyboard.Modifiers);
+        var color = picker.IsDisabled ? t.DisabledTextColor
+            : recording || picker.Current is null ? t.PlaceholderColor : t.TextColor;
+        PaintText(text, field, t.PaddingH, color, alignment: TextAlignment.Center);
     }
 
     // ── Toggle ─────────────────────────────────────────────────────────

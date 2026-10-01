@@ -346,6 +346,12 @@ public static class App
             {
                 Clipboard.NotifyClipboardChanged();
             }
+            else if (msg == Win32.WM_ACTIVATE)
+            {
+                // Key-ups while another app has focus never reach us: re-read the modifiers on
+                // activation and report none on deactivation.
+                Keyboard.Observe(Win32.LoWord((nint)wParam) != Win32.WA_INACTIVE ? Win32Input.GetAsyncModifierKeys() : ModifierKeys.None);
+            }
             else if (msg == Win32.WM_TRAYICON)
             {
                 TrayIcon.HandleTrayMessage((uint)wParam, (uint)(lParam.ToInt64() & 0xFFFF));
@@ -1462,7 +1468,8 @@ public sealed class AppHotkeys
         if (modifiers.HasFlag(ModifierKeys.Ctrl)) { mods |= Win32.MOD_CONTROL; }
         if (modifiers.HasFlag(ModifierKeys.Shift)) { mods |= Win32.MOD_SHIFT; }
         if (modifiers.HasFlag(ModifierKeys.Meta)) { mods |= Win32.MOD_WIN; }
-        return mods;
+        // Holding the combination must not fire it repeatedly.
+        return mods | Win32.MOD_NOREPEAT;
     }
 }
 

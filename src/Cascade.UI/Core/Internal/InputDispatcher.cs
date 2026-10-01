@@ -1919,6 +1919,29 @@ internal sealed class InputDispatcher
 
         pressedNode = hitNode;
 
+        // Click selects a row of a selectable list (and focuses the list for keyboard navigation);
+        // the second press of a double-click activates it.
+        Node? clickedList = null;
+        if (rootNode != null && evt.Button == NativeMouseButton.Left
+            && HitTester.FindSelectableListViewAt(rootNode, evt.X, evt.Y) is { } selLv)
+        {
+            clickedList = selLv as Node;
+            int row = selLv.RowIndexAt(evt.Y - selLv.ReorderBounds.Y);
+            if (row >= 0)
+            {
+                selLv.SelectIndex(row);
+                if (selLv is Node listNode)
+                {
+                    FocusManager.RequestFocus(listNode);
+                }
+                if (evt.ClickCount >= 2)
+                {
+                    selLv.ActivateIndex(row);
+                }
+                RequestRepaint?.Invoke();
+            }
+        }
+
         // Arm a potential ListView drag-to-reorder. It only activates if the pointer
         // then moves past the threshold (see HandleMouseMove); a plain click still
         // falls through to the row's tap/select/button below.
@@ -1992,7 +2015,15 @@ internal sealed class InputDispatcher
 
         if (hitNode == null)
         {
-            FocusManager.ClearFocus();
+            // A click on a list's empty area (or unlaid rows) keeps the list focused.
+            if (clickedList is not null)
+            {
+                FocusManager.RequestFocus(clickedList);
+            }
+            else
+            {
+                FocusManager.ClearFocus();
+            }
             return;
         }
 
@@ -2725,11 +2756,35 @@ internal sealed class InputDispatcher
     /// <summary>
     /// Handles a keyboard event from the platform layer.
     /// </summary>
+    // A key-down consumed by a binding or accelerator swallows the character message that follows
+    // it, so Shift+1 bound to an action does not also type '!' into a focused text field.
+    private bool suppressNextCharacter;
+
     internal void HandleKeyEvent(NativeKeyEvent evt)
     {
+        bool isCharacter = evt.Character is not null && evt.Key == Key.None;
+        if (!isCharacter)
+        {
+            Keyboard.Observe(evt.Modifiers);
+        }
+
         if (evt.Type != NativeKeyEventType.KeyDown)
         {
+            DispatchKeyUp(evt);
             return;
+        }
+
+        if (isCharacter)
+        {
+            if (suppressNextCharacter)
+            {
+                suppressNextCharacter = false;
+                return;
+            }
+        }
+        else
+        {
+            suppressNextCharacter = false;
         }
 
 #if DEBUG
@@ -2778,6 +2833,15 @@ internal sealed class InputDispatcher
             {
                 return;
             }
+        }
+
+        // A focused HotkeyPicker records the combination (before Tab traversal, so Ctrl+Tab etc.
+        // can be recorded).
+        if (focusedNode is HotkeyPicker picker && picker.HandleKey(evt.Key, evt.Modifiers))
+        {
+            suppressNextCharacter = true;
+            RequestRepaint?.Invoke();
+            return;
         }
 
         // Tab key → focus traversal
@@ -2959,6 +3023,7 @@ internal sealed class InputDispatcher
         // consume the key above (text controls return early when they do).
         if (DispatchMenuBarShortcut(evt))
         {
+            suppressNextCharacter = true;
             // A menu action (e.g. Undo) may have changed the value bound to the
             // focused text control. That control renders its own edit buffer while
             // focused, so refresh the buffer from the (possibly new) bound value or
@@ -2968,8 +3033,19 @@ internal sealed class InputDispatcher
             return;
         }
 
+        // Arrow-key navigation in a focused selectable list.
+        if (focusedNode is IListViewNode focusedList && focusedList.IsSelectable && HandleListViewKeyboard(focusedList, evt))
+        {
+            suppressNextCharacter = true;
+            RequestRepaint?.Invoke();
+            return;
+        }
+
         // Dispatch to KeyHandler bindings on the focused element's ancestor chain
-        DispatchKeyBinding(evt);
+        if (DispatchKeyBinding(evt))
+        {
+            suppressNextCharacter = true;
+        }
     }
 
     /// <summary>
@@ -3143,7 +3219,7 @@ internal sealed class InputDispatcher
         if (node is Button or LinkButton or IconButton
             or TextInput or TextArea or PasswordInput or PinInput
             or MentionInput or TagInput or ColorPicker
-            or Checkbox or Toggle or Slider
+            or Checkbox or Toggle or Slider or HotkeyPicker
             || IsNumberInput(node))
         {
             return true;
@@ -3175,6 +3251,7 @@ internal sealed class InputDispatcher
             Checkbox cb => cb.IsDisabled,
             Toggle tog => tog.IsDisabled,
             Slider sl => sl.IsDisabled,
+            HotkeyPicker hp => hp.IsDisabled,
             _ => false
         };
     }
@@ -4041,31 +4118,69 @@ internal sealed class InputDispatcher
     /// <summary>
     /// Walks from the focused node upward looking for a KeyHandler with a matching binding.
     /// </summary>
-    private void DispatchKeyBinding(NativeKeyEvent evt)
+    // Up/Down/Home/End/PageUp/PageDown move the selection (scrolling it into view); Enter activates.
+    private static bool HandleListViewKeyboard(IListViewNode list, NativeKeyEvent evt)
     {
-        if (rootNode == null)
+        if (evt.Modifiers != ModifierKeys.None || list.ItemCount == 0)
         {
-            return;
+            return false;
         }
 
-        var focused = FocusManager.FocusedElement;
-        if (focused == null)
+        int current = list.SelectedIndex;
+        if (evt.Key == Key.Enter)
         {
-            // No focused element — dispatch to root-level key handlers
-            DispatchKeyBindingsInTree(rootNode, evt);
-            return;
+            if (current < 0)
+            {
+                return false;
+            }
+            list.ActivateIndex(current);
+            return true;
         }
 
-        // Search for KeyHandler ancestors by walking the full tree from root
-        // (since we don't have parent pointers, we search for the path)
-        DispatchKeyBindingsInTree(rootNode, evt);
+        int page = Math.Max(1, (int)(list.ViewportHeight / Math.Max(1f, list.RowExtent(Math.Max(current, 0))?.Height ?? list.GetItemHeight())) - 1);
+        int last = list.ItemCount - 1;
+        int target = evt.Key switch
+        {
+            Key.Down => current < 0 ? 0 : Math.Min(last, current + 1),
+            Key.Up => current < 0 ? 0 : Math.Max(0, current - 1),
+            Key.Home => 0,
+            Key.End => last,
+            Key.PageDown => Math.Min(last, Math.Max(current, 0) + page),
+            Key.PageUp => Math.Max(0, current - page),
+            _ => -1,
+        };
+        if (target < 0)
+        {
+            return false;
+        }
+
+        if (target != current)
+        {
+            list.SelectIndex(target);
+        }
+        if (list.RowExtent(target) is { } extent && list.ViewportHeight > 0f)
+        {
+            list.OffsetY = Math.Clamp(LayoutSolver.ScrollToReveal(list.OffsetY, extent.Top, extent.Height, list.ViewportHeight), 0f, list.MaxY);
+        }
+        return true;
     }
 
-    private static bool DispatchKeyBindingsInTree(Node node, NativeKeyEvent evt)
+    private bool DispatchKeyBinding(NativeKeyEvent evt)
     {
-        if (node is KeyHandler kh)
+        if (evt.Key == Key.None)
         {
-            foreach (var binding in kh.Bindings)
+            return false; // a bare modifier or a character message
+        }
+
+        var keyEvent = new KeyEvent(evt.Key, evt.Modifiers, evt.IsRepeat);
+        foreach (var handler in KeyHandlersInScope())
+        {
+            if (handler.KeyDown?.Invoke(keyEvent) == true)
+            {
+                return true;
+            }
+
+            foreach (var binding in handler.Bindings)
             {
                 if (MatchesBinding(binding, evt))
                 {
@@ -4074,76 +4189,92 @@ internal sealed class InputDispatcher
                 }
             }
         }
-
-        // Recurse into children
-        if (node is Row row)
-        {
-            foreach (var child in row.Children)
-            {
-                if (DispatchKeyBindingsInTree(child, evt))
-                {
-                    return true;
-                }
-            }
-        }
-        else if (node is Column col)
-        {
-            foreach (var child in col.Children)
-            {
-                if (DispatchKeyBindingsInTree(child, evt))
-                {
-                    return true;
-                }
-            }
-        }
-        else if (node is Stack stack)
-        {
-            foreach (var child in stack.Children)
-            {
-                if (DispatchKeyBindingsInTree(child, evt))
-                {
-                    return true;
-                }
-            }
-        }
-        else if (node is Grid grid)
-        {
-            foreach (var child in grid.Children)
-            {
-                if (DispatchKeyBindingsInTree(child, evt))
-                {
-                    return true;
-                }
-            }
-        }
-        else if (node is KeyHandler kh2)
-        {
-            if (kh2.Content != null && DispatchKeyBindingsInTree(kh2.Content, evt))
-            {
-                return true;
-            }
-        }
-        else if (node is Center center && center.Child != null)
-        {
-            if (DispatchKeyBindingsInTree(center.Child, evt))
-            {
-                return true;
-            }
-        }
-        else if (node is Card card && card.Content != null)
-        {
-            if (DispatchKeyBindingsInTree(card.Content, evt))
-            {
-                return true;
-            }
-        }
-
         return false;
+    }
+
+    private void DispatchKeyUp(NativeKeyEvent evt)
+    {
+        if (FocusManager.FocusedElement is HotkeyPicker { IsRecording: true })
+        {
+            RequestRepaint?.Invoke(); // a released modifier changes the live prompt
+        }
+
+        var keyEvent = new KeyEvent(evt.Key, evt.Modifiers, IsRepeat: false);
+        foreach (var handler in KeyHandlersInScope())
+        {
+            handler.KeyUp?.Invoke(keyEvent);
+        }
+    }
+
+    /// <summary>
+    /// The KeyHandlers a key reaches: with focus, those on the path from the root to the focused
+    /// node, innermost first (the closest scope wins); with no focus — or focus outside the
+    /// reconciled tree, e.g. in a popup — every handler in document order. The walk uses the
+    /// reconciler's child list, so handlers inside components, scroll views, split views, etc.
+    /// are found (it used to stop at a handful of container types).
+    /// </summary>
+    private List<KeyHandler> KeyHandlersInScope()
+    {
+        var handlers = new List<KeyHandler>();
+        if (rootNode is null)
+        {
+            return handlers;
+        }
+
+        var path = new List<Node>();
+        if (FocusManager.FocusedElement is { } focused && FindPath(rootNode, focused, path))
+        {
+            for (int i = path.Count - 1; i >= 0; i--)
+            {
+                if (path[i] is KeyHandler handler)
+                {
+                    handlers.Add(handler);
+                }
+            }
+        }
+        else
+        {
+            CollectKeyHandlers(rootNode, handlers);
+        }
+        return handlers;
+    }
+
+    private static bool FindPath(Node node, Node target, List<Node> path)
+    {
+        path.Add(node);
+        if (ReferenceEquals(node, target))
+        {
+            return true;
+        }
+        foreach (var child in NodeDiffer.GetChildren(node))
+        {
+            if (child is not null && FindPath(child, target, path))
+            {
+                return true;
+            }
+        }
+        path.RemoveAt(path.Count - 1);
+        return false;
+    }
+
+    private static void CollectKeyHandlers(Node node, List<KeyHandler> handlers)
+    {
+        if (node is KeyHandler handler)
+        {
+            handlers.Add(handler);
+        }
+        foreach (var child in NodeDiffer.GetChildren(node))
+        {
+            if (child is not null)
+            {
+                CollectKeyHandlers(child, handlers);
+            }
+        }
     }
 
     private static bool MatchesBinding(KeyBinding binding, NativeKeyEvent evt)
     {
-        if (!binding.When)
+        if (!binding.When || (evt.IsRepeat && !binding.AllowRepeat))
         {
             return false;
         }
@@ -4175,6 +4306,10 @@ internal sealed class InputDispatcher
                 return;
             case Toggle toggle:
                 toggle.Value.OnChange(!toggle.Value.Value);
+                return;
+            case HotkeyPicker picker when !picker.IsDisabled:
+                picker.IsRecording = true;
+                RequestRepaint?.Invoke();
                 return;
             case Rating rating when rating.BoundValue is { } rBind && !rating.IsDisabled && !rating.IsReadOnly:
                 HandleRatingClick(rating, rBind);
@@ -7850,6 +7985,7 @@ internal sealed class InputDispatcher
             PinInput or MentionInput or TagInput or ColorPicker or
             Checkbox or Toggle or Slider or
             LinkButton or IconButton ||
+            node is HotkeyPicker { IsDisabled: false } ||
             IsNumberInput(node))
         {
             return node;

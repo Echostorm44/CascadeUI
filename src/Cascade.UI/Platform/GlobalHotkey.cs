@@ -58,7 +58,7 @@ public readonly record struct Hotkey(ModifierKeys Modifiers, Key Key)
 
         if (Modifiers.HasFlag(ModifierKeys.Meta))
         {
-            parts.Add("Meta");
+            parts.Add(OperatingSystem.IsWindows() ? "Win" : "Meta");
         }
 
         if (Key != Key.None)

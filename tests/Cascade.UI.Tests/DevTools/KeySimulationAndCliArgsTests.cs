@@ -57,6 +57,28 @@ public class KeySimulationAndCliArgsTests
     }
 
     [Test]
+    public async Task BareModifier_IsHeldUntilReleased()
+    {
+        var dispatcher = new InputDispatcher();
+        dispatcher.SetRoot(new Label("x"));
+        NodeTreeWalker.SetInputDispatcher(dispatcher);
+        var states = new List<ModifierKeys>();
+        Action<ModifierKeys> track = states.Add;
+        Keyboard.ModifiersChanged += track;
+        try
+        {
+            NodeTreeWalker.SimulateKeyPress(Key.None, ModifierKeys.Shift, null);
+            NodeTreeWalker.SimulateKeyPress(Key.None, ModifierKeys.None, null);
+        }
+        finally
+        {
+            Keyboard.ModifiersChanged -= track;
+        }
+
+        await Assert.That(states).IsEquivalentTo(new[] { ModifierKeys.Shift, ModifierKeys.None });
+    }
+
+    [Test]
     [Arguments("screenshot", new[] { "--out", "x.png" }, "--out")]
     [Arguments("screenshot", new[] { "-o", "x.png", "--app", "Demo", "--scale", "2" }, null)]
     [Arguments("type", new[] { "--key", "K", "--ctrl", "--win" }, null)]

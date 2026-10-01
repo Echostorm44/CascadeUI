@@ -94,6 +94,23 @@ public class ShadowParityTests
         }
     }
 
+    [Test]
+    public async Task ImagePixels_RenderUnchanged()
+    {
+        // Image bytes are sRGB-encoded. Sampled from a unorm texture into the sRGB swapchain they were
+        // encoded a second time: cornflower blue (100,149,237) came out as (168,200,248).
+        byte[] actual = await CaptureAsync("images");
+
+        (int X, int R, int G, int B)[] swatches = [(50, 100, 149, 237), (130, 255, 165, 0), (210, 30, 30, 30)];
+        foreach ((int x, int r, int g, int b) in swatches)
+        {
+            int i = (50 * GoldenHarness.SheetWidth + x) * 4;
+            string got = $"({actual[i]},{actual[i + 1]},{actual[i + 2]})";
+            await Assert.That(Math.Abs(actual[i] - r) <= 1 && Math.Abs(actual[i + 1] - g) <= 1 && Math.Abs(actual[i + 2] - b) <= 1)
+                .IsTrue().Because($"image at x={x}: got {got}, expected ({r},{g},{b})");
+        }
+    }
+
     private static async Task<byte[]> CaptureAsync(string scene)
     {
         var (png, error) = await GoldenHarness.CapturePageAsync(

@@ -16,6 +16,23 @@ namespace Cascade.UI.GoldenTextFixture;
 /// </summary>
 internal sealed class SpecimenView : Component
 {
+    private static readonly ImageSource Cornflower = SolidImage(100, 149, 237);
+    private static readonly ImageSource Orange = SolidImage(255, 165, 0);
+    private static readonly ImageSource Charcoal = SolidImage(30, 30, 30);
+
+    private static ImageSource SolidImage(byte r, byte g, byte b)
+    {
+        byte[] rgba = new byte[8 * 8 * 4];
+        for (int i = 0; i < rgba.Length; i += 4)
+        {
+            rgba[i] = r;
+            rgba[i + 1] = g;
+            rgba[i + 2] = b;
+            rgba[i + 3] = 255;
+        }
+        return ImageSource.FromBytes(rgba, 8, 8);
+    }
+
     private readonly PageSpec page;
     private bool debugDumped;
 
@@ -70,6 +87,17 @@ internal sealed class SpecimenView : Component
             ctx.DrawRect(new Rect(20, 100, 50, 50), new ColorValue("#000000").Opacity(0.5f));
             ctx.DrawRect(new Rect(80, 100, 50, 50), new ColorValue("#000000").Opacity(0.99f));
             ctx.DrawRect(new Rect(140, 100, 50, 50), new ColorValue("#000000").Opacity(0.996f));
+            return;
+        }
+
+        // Image fidelity (ShadowParityTests.ImagePixels_RenderUnchanged): an image is drawn with the
+        // same sRGB bytes it was given.
+        if (Environment.GetEnvironmentVariable("CASCADE_GOLDEN_SCENE") == "images")
+        {
+            ctx.DrawRect(new Rect(0, 0, PageSpec.SheetWidth, PageSpec.SheetHeight), new ColorValue("#FFFFFF"));
+            ctx.DrawImage(Cornflower, new Rect(20, 20, 60, 60));
+            ctx.DrawImage(Orange, new Rect(100, 20, 60, 60));
+            ctx.DrawImage(Charcoal, new Rect(180, 20, 60, 60));
             return;
         }
 

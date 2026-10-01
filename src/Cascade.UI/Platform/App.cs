@@ -225,6 +225,7 @@ public static class App
         window.Create(title, w, h, WindowStyle.Normal);
         Window.Attach(window);
         window.TaskbarCreated = TrayIcon.ReAddAll;
+        Clipboard.AttachWindow(window.Handle);
 
         var frameClock = new Win32FrameClock(window.Handle);
         var orchestrator = new FrameOrchestrator(

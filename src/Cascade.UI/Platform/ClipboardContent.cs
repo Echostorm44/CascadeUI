@@ -11,7 +11,7 @@ public sealed class ClipboardContent
 
     private bool hasText;
     private bool hasHtml;
-    private bool hasRtf;      // Always false; reserved for future RTF support.
+    private bool hasRtf;
     private bool hasImage;
     private bool hasFiles;
 
@@ -85,6 +85,7 @@ public sealed class ClipboardContent
             List<ClipboardFormat> formats = [];
             if (hasText)  { formats.Add(ClipboardFormat.Text); }
             if (hasHtml)  { formats.Add(ClipboardFormat.Html); }
+            if (hasRtf)   { formats.Add(ClipboardFormat.Rtf); }
             if (hasImage) { formats.Add(ClipboardFormat.Image); }
             if (hasFiles) { formats.Add(ClipboardFormat.Files); }
             return formats;
@@ -164,14 +165,21 @@ public sealed class ClipboardContent
     }
 
     /// <summary>
-    /// Fetches raw data for a custom or application-specific clipboard format.
-    /// Custom raw formats are not yet supported; returns null.
+    /// Fetches the raw bytes of a format by name — a <see cref="ClipboardFormat.Custom"/> format or
+    /// a registered one such as "PNG". Null when absent. Windows only (null elsewhere); for every
+    /// format at once use <see cref="Clipboard.CaptureRaw"/>.
     /// </summary>
     /// <param name="format">The format to retrieve.</param>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822", Justification = "Instance API like the other Get*Async members.")]
     public Task<byte[]?> GetRawAsync(ClipboardFormat format)
     {
-        _ = hasText; // Raw custom-format access is not yet implemented.
-        return Task.FromResult<byte[]?>(null);
+        ArgumentNullException.ThrowIfNull(format);
+        if (!OperatingSystem.IsWindows())
+        {
+            return Task.FromResult<byte[]?>(null);
+        }
+        var snapshot = Win32Clipboard.CaptureRaw(name => string.Equals(name, format.Name, StringComparison.Ordinal));
+        return Task.FromResult(snapshot?.Find(format.Name)?.Data.ToArray());
     }
 
     /// <summary>
@@ -184,6 +192,8 @@ public sealed class ClipboardContent
     {
         string? text  = null;
         string? html  = null;
+        string? rtf   = null;
+        ImageData? image = null;
         IReadOnlyList<string>? files = null;
         List<ClipboardFormat> captured = [];
 
@@ -219,10 +229,26 @@ public sealed class ClipboardContent
                     captured.Add(ClipboardFormat.Files);
                 }
             }
-            // RTF, Image, and Raw custom formats are not yet supported.
+            else if (format.Equals(ClipboardFormat.Rtf) && hasRtf)
+            {
+                if (OperatingSystem.IsWindows()) { rtf = Win32Clipboard.GetRtf(); }
+                else if (OperatingSystem.IsMacOS()) { rtf = CocoaClipboard.GetRtf(); }
+                if (rtf is not null)
+                {
+                    captured.Add(ClipboardFormat.Rtf);
+                }
+            }
+            else if (format.Equals(ClipboardFormat.Image) && hasImage && OperatingSystem.IsWindows())
+            {
+                image = Win32Clipboard.GetImage();
+                if (image is not null)
+                {
+                    captured.Add(ClipboardFormat.Image);
+                }
+            }
         }
 
-        return Task.FromResult(ClipboardSnapshot.Create(captured, text, html, null, null, files));
+        return Task.FromResult(ClipboardSnapshot.Create(captured, text, html, rtf, image, files));
     }
 
     // ── Writable properties for constructing content to write ────────
@@ -235,6 +261,12 @@ public sealed class ClipboardContent
 
     /// <summary>RTF to write to the clipboard.</summary>
     public string? Rtf { get; init; }
+
+    /// <summary>Image to write to the clipboard (Windows).</summary>
+    public ImageData? Image { get; init; }
+
+    /// <summary>File paths to write to the clipboard.</summary>
+    public IReadOnlyList<string>? Files { get; init; }
 }
 
 /// <summary>

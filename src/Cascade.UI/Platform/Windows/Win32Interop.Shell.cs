@@ -171,6 +171,51 @@ internal static partial class Win32
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool DestroyIcon(nint hIcon);
 
+    // ── Clipboard (raw capture, ownership, source app) ──────────────
+
+    internal const uint CF_METAFILEPICT  = 3;
+    internal const uint CF_OEMTEXT       = 7;
+    internal const uint CF_PALETTE       = 9;
+    internal const uint CF_ENHMETAFILE   = 14;
+    internal const uint CF_LOCALE        = 16;
+    internal const uint CF_OWNERDISPLAY  = 0x0080;
+    internal const uint CF_DSPTEXT       = 0x0081;
+    internal const uint CF_DSPENHMETAFILE = 0x008E;
+    internal const uint CF_PRIVATEFIRST  = 0x0200;
+    internal const uint CF_GDIOBJLAST    = 0x03FF;
+
+    [LibraryImport("user32", EntryPoint = "GetClipboardFormatNameW")]
+    internal static unsafe partial int GetClipboardFormatNameW(uint format, char* lpszFormatName, int cchMaxCount);
+
+    [LibraryImport("user32", EntryPoint = "GetClipboardOwner")]
+    internal static partial nint GetClipboardOwner();
+
+    [LibraryImport("user32", EntryPoint = "GetWindowThreadProcessId")]
+    internal static partial uint GetWindowThreadProcessId(nint hWnd, out uint processId);
+
+    internal const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+
+    [LibraryImport("kernel32", EntryPoint = "OpenProcess")]
+    internal static partial nint OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint processId);
+
+    [LibraryImport("kernel32", EntryPoint = "QueryFullProcessImageNameW")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static unsafe partial bool QueryFullProcessImageNameW(nint process, uint flags, char* exeName, ref uint size);
+
+    [LibraryImport("kernel32", EntryPoint = "CloseHandle")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool CloseHandle(nint handle);
+
+    [LibraryImport("gdi32", EntryPoint = "GetEnhMetaFileBits")]
+    internal static unsafe partial uint GetEnhMetaFileBits(nint hemf, uint size, byte* data);
+
+    [LibraryImport("gdi32", EntryPoint = "SetEnhMetaFileBits")]
+    internal static unsafe partial nint SetEnhMetaFileBits(uint size, byte* data);
+
+    [LibraryImport("gdi32", EntryPoint = "DeleteEnhMetaFile")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool DeleteEnhMetaFile(nint hemf);
+
     // ── COM (taskbar progress) ──────────────────────────────────────
 
     internal const uint CLSCTX_INPROC_SERVER = 0x1;

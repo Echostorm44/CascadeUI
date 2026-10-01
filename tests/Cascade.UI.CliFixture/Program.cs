@@ -23,6 +23,14 @@ if (string.Equals(view, "parity", StringComparison.OrdinalIgnoreCase))
 {
     App.Run<CompositorParityView>(Configure);
 }
+else if (string.Equals(view, "clipboard", StringComparison.OrdinalIgnoreCase))
+{
+    App.Run<ClipboardView>(config =>
+    {
+        Configure(config);
+        ClipboardView.Configure(config);
+    });
+}
 else if (string.Equals(view, "shell", StringComparison.OrdinalIgnoreCase))
 {
     App.Run<ShellView>(config =>

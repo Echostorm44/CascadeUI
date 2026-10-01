@@ -57,30 +57,28 @@ public class KeySimulationAndCliArgsTests
     }
 
     [Test]
-    public async Task CliArgs_UnknownOption_IsAnError()
+    [Arguments("screenshot", new[] { "--out", "x.png" }, "--out")]
+    [Arguments("screenshot", new[] { "-o", "x.png", "--app", "Demo", "--scale", "2" }, null)]
+    [Arguments("type", new[] { "--key", "K", "--ctrl", "--win" }, null)]
+    [Arguments("type", new[] { "--key", "K", "--modifiers", "Ctrl" }, "--modifiers")]
+    [Arguments("scroll", new[] { "--delta-y", "-120", "--x", "10" }, null)]
+    [Arguments("find", new[] { "Save", "--by", "label", "--source-file", "MainView.cs" }, null)]
+    [Arguments("find", new[] { "Save", "--bye", "label" }, "--bye")]
+    public async Task EveryVerb_RejectsOptionsItsSpecDoesNotDeclare(string verb, string[] args, string? unknown)
     {
-        McpCliVerbBinding screenshot = McpToolRegistry.FindByVerb("screenshot")!;
-        using var error = new StringWriter();
-        using var quiet = new StringWriter();
+        McpCliVerbBinding binding = McpToolRegistry.FindByVerb(verb)!;
 
-        var bad = McpCommand.ParseVerbArguments(screenshot.Verb, ["--out", "x.png"], error);
-        var good = McpCommand.ParseVerbArguments(screenshot.Verb, ["--output", "x.png", "--app", "Demo"], quiet);
-
-        await Assert.That(bad is null).IsTrue();
-        await Assert.That(error.ToString()).Contains("Unknown option '--out'");
-        await Assert.That(good!["__output"]?.GetValue<string>()).IsEqualTo("x.png");
+        await Assert.That(McpCommand.FindUnknownOption(binding.Verb, args)).IsEqualTo(unknown);
     }
 
     [Test]
-    public async Task CliArgs_TypeVerb_TakesKeyAndModifiers()
+    public async Task GenericVerb_ParsesDeclaredOptions()
     {
-        McpCliVerbBinding type = McpToolRegistry.FindByVerb("type")!;
+        McpCliVerbBinding inspect = McpToolRegistry.FindByVerb("inspect")!;
         using var quiet = new StringWriter();
 
-        var args = McpCommand.ParseVerbArguments(type.Verb, ["--key", "K", "--modifiers", "Ctrl"], quiet)!;
+        var args = McpCommand.ParseVerbArguments(inspect.Verb, ["Button:0", "--app", "Demo"], quiet);
 
-        await Assert.That(args["key"]?.GetValue<string>()).IsEqualTo("K");
-        await Assert.That(args["modifiers"]?.GetValue<string>()).IsEqualTo("Ctrl");
-        await Assert.That(args.ContainsKey("text")).IsFalse();
+        await Assert.That(args!.ContainsKey("node_id")).IsTrue();
     }
 }

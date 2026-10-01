@@ -31,6 +31,10 @@ else if (string.Equals(view, "clipboard", StringComparison.OrdinalIgnoreCase))
         ClipboardView.Configure(config);
     });
 }
+else if (string.Equals(view, "keys", StringComparison.OrdinalIgnoreCase))
+{
+    App.Run<KeysView>(Configure);
+}
 else if (string.Equals(view, "shell", StringComparison.OrdinalIgnoreCase))
 {
     App.Run<ShellView>(config =>

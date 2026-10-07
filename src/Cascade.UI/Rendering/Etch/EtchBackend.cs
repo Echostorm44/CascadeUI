@@ -265,16 +265,19 @@ internal sealed class EtchBackend : IDisposable
 
     internal sealed class ImageEntry
     {
-        public byte[] Pixels;
-        public int Width;
-        public int Height;
-
         public ImageEntry(byte[] pixels, int width, int height)
         {
-            Pixels = pixels;
-            Width = width;
-            Height = height;
+            Image = new global::Etch.Compose.ComposeImage(pixels, width, height);
         }
+
+        /// <summary>The pixels as the composers read them (RGBA8, sRGB-encoded, straight alpha).</summary>
+        public global::Etch.Compose.ComposeImage Image { get; }
+
+        public byte[] Pixels => Image.Pixels;
+
+        public int Width => Image.Width;
+
+        public int Height => Image.Height;
     }
 
     private sealed class FontEntry

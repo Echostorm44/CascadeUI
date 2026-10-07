@@ -151,6 +151,7 @@
     <ProjectReference Include="..\..\..\Etch\src\Etch.Raster.Cpu\Etch.Raster.Cpu.csproj" />
     <ProjectReference Include="..\..\..\Etch\src\Etch.Gpu.Compositor\Etch.Gpu.Compositor.csproj" />
     <ProjectReference Include="..\..\..\Etch\src\Etch.Tiling\Etch.Tiling.csproj" />
+    <ProjectReference Include="..\..\..\Etch\src\Etch.Compose\Etch.Compose.csproj" />
   </ItemGroup>
 
   <ItemGroup>

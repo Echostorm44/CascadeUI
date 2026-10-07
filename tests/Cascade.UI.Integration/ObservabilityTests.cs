@@ -279,12 +279,14 @@ public class ToolDocsTests
     [Test]
     public async Task Docs_CheckedInReference_MatchesRegistry()
     {
-        var result = await CliTestHarness.RunCliAsync("mcp", "docs");
-        await Assert.That(result.ExitCode).IsEqualTo(0);
-
+        // Documents/ holds local development docs and is gitignored, so a fresh checkout (or a
+        // worktree) has no reference to compare against: report that rather than fail.
         string referencePath = IOPath.Combine(
             CliTestHarness.RepoRoot, "Documents", "Development", "mcp-tool-reference.md");
-        await Assert.That(File.Exists(referencePath)).IsTrue();
+        Skip.When(!File.Exists(referencePath), "Documents/ (gitignored, local docs) is not present in this checkout.");
+
+        var result = await CliTestHarness.RunCliAsync("mcp", "docs");
+        await Assert.That(result.ExitCode).IsEqualTo(0);
 
         string checkedIn = Normalize(await File.ReadAllTextAsync(referencePath));
         string generated = Normalize(result.StdOut);

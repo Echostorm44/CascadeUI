@@ -16,4 +16,14 @@
            suggests, so the warning is a false positive. -->
     <MSBuildWarningsNotAsErrors>MSB3277;ICU4N_IDE_0002</MSBuildWarningsNotAsErrors>
   </PropertyGroup>
+
+  <!-- UseEtchPackage=true (release packing; building against the published Etch) restores a
+       different dependency graph than the default Etch source references. Each mode keeps its own
+       restore and intermediate state, so switching modes can no longer leave a project referencing
+       Etch both ways (CS1704 duplicate assemblies — `cascade run watch` hit this after a package-mode
+       build). The rest of obj\ is excluded so the other mode's generated sources are never compiled. -->
+  <PropertyGroup Condition="'$(UseEtchPackage)' == 'true'">
+    <BaseIntermediateOutputPath>$(MSBuildProjectDirectory)\obj\etch-package\</BaseIntermediateOutputPath>
+    <DefaultItemExcludes>$(DefaultItemExcludes);obj\**</DefaultItemExcludes>
+  </PropertyGroup>
 </Project>

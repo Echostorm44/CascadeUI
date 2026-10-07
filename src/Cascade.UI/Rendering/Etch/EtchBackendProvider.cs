@@ -155,9 +155,27 @@ internal sealed class EtchBackendProvider : IDisposable
     /// </summary>
     internal IReadOnlyList<int>? SceneMarks => _sceneMarksValid ? _sceneMarks : null;
 
+    // The frame as recorded for the composers: the main stream plus retained layers (owned by the
+    // recorder, replayed at their scroll offsets).
+    private readonly EtchRecorder _recorder = new();
+    private readonly global::Etch.Compose.DrawRecording _mainRecording = new();
+    private readonly Dictionary<ulong, int> _layerCompositeIndex = new();
+
     public EtchBackendProvider()
     {
         _backend = new EtchBackend();
+    }
+
+    /// <summary>The recorder translating backend ops for the composers (tests inspect it).</summary>
+    internal EtchRecorder Recorder => _recorder;
+
+    /// <summary>The main recording built by the last <see cref="RecordFrame"/>.</summary>
+    internal global::Etch.Compose.DrawRecording MainRecording => _mainRecording;
+
+    /// <summary>Records the current command stream (and captured layers) for the composers.</summary>
+    internal void RecordFrame(ColorValue baseColor, bool provenance = false)
+    {
+        _recorder.RecordFrame(_backend, _mainRecording, baseColor, _width, _height, provenance);
     }
 
     public EtchBackend Backend => _backend;
@@ -627,14 +645,13 @@ internal sealed class EtchBackendProvider : IDisposable
                             float clipMaxX = cmd.HasClipBounds ? cmd.ClipBounds.X + cmd.ClipBounds.Width : float.MaxValue;
                             float clipMaxY = cmd.HasClipBounds ? cmd.ClipBounds.Y + cmd.ClipBounds.Height : float.MaxValue;
                             // RENDER-003: the records are baked at absolute coords through the
-                            // layer's InitialTransform (which carries the ScrollView's on-screen
-                            // origin), and the composite offset (cmd.X/Y) carries it too — so the
-                            // residual shift is the scroll delta offset − clipOrigin, exactly as
-                            // the GPU path applies (EtchGpuPresenter.LayerScrollDelta). Adding the
-                            // whole offset double-counted the origin and dropped layer-canvas
-                            // shapes ~origin pixels away from where they actually painted.
-                            float spliceOffX = cmd.HasClipBounds ? cmd.X - cmd.ClipBounds.X : cmd.X;
-                            float spliceOffY = cmd.HasClipBounds ? cmd.Y - cmd.ClipBounds.Y : cmd.Y;
+                            // layer's InitialTransform, and the composite offset (cmd.X/Y) is in the
+                            // same space, so the residual shift is the offset from the composite's
+                            // local origin (cmd.G0/G1) — exactly the shift the recorder replays the
+                            // layer at (EtchRecorder). Adding the whole offset double-counted the
+                            // origin and dropped layer-canvas shapes ~origin pixels away.
+                            float spliceOffX = cmd.X - cmd.G0;
+                            float spliceOffY = cmd.Y - cmd.G1;
                             foreach (var record in layerRecords)
                             {
                                 float minX = Math.Max(record.MinX + spliceOffX, clipMinX);
@@ -795,6 +812,20 @@ internal sealed class EtchBackendProvider : IDisposable
             Math.Min(a.MaxY, b.MaxY));
     }
 
+    // Main-stream command index of each retained layer's composite (draw provenance paint order).
+    private void IndexLayerComposites()
+    {
+        _layerCompositeIndex.Clear();
+        var commands = _backend.Commands;
+        for (int i = 0; i < commands.Count; i++)
+        {
+            if (commands[i].Kind == EtchBackend.OpKind.DrawLayerTexture)
+            {
+                _layerCompositeIndex[(ulong)commands[i].W] = i;
+            }
+        }
+    }
+
     private void PresentFrameCore(ulong frameHandle, ColorValue baseColor)
     {
         bool captureDraws = DrawProvenance.CaptureEnabled;
@@ -804,18 +835,26 @@ internal sealed class EtchBackendProvider : IDisposable
             pendingGlyphs.Clear();
         }
 
-        var gpuScene = BuildSceneBuffer(baseColor);
-
-        bool canRenderGpu = EtchGpuPresenter.CanRenderGpu(gpuScene);
         if (DebugLog.IsEnabled(DebugLogCategory.Present))
         {
             DebugLog.Write(DebugLogCategory.Present,
-                $"[{DateTime.Now:O}] PresentFrameCore: forceCpu={_forceCpuFallback}, presenter={_etchGpuPresenter != null}, canRenderGpu={canRenderGpu}, layers={_activeLayers.Count}");
+                $"[{DateTime.Now:O}] PresentFrameCore: forceCpu={_forceCpuFallback}, presenter={_etchGpuPresenter != null}, layers={_recorder.LayerCount}");
         }
 
-        if (!_forceCpuFallback && _etchGpuPresenter != null && canRenderGpu)
+        if (!_forceCpuFallback && _etchGpuPresenter != null)
         {
-            _etchGpuPresenter.PresentScene(gpuScene, _backend, SceneMarks, _activeLayers, captureDraws ? pendingGlyphs : null);
+            RecordFrame(baseColor, captureDraws);
+            var parameters = new global::Etch.Compose.ComposeParameters
+            {
+                TextGamma = _etchGpuPresenter.TextGamma,
+                LightWeight = _etchGpuPresenter.LightWeight,
+                Dissolve = _backend.FrameDissolve,
+            };
+            if (captureDraws)
+            {
+                IndexLayerComposites();
+            }
+            _etchGpuPresenter.PresentRecording(_mainRecording, parameters, captureDraws ? pendingGlyphs : null, captureDraws ? _layerCompositeIndex : null);
             if (captureDraws)
             {
                 PublishDrawSnapshot(captureBaseline);

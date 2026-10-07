@@ -23,7 +23,11 @@ internal sealed class McpHost : IDisposable
     /// </summary>
     internal const string GlobalRegistryId = "CascadeApps";
 
-    private readonly McpServer server;
+    // One server per connected client: an MCP session (cascade mcp serve) and CLI calls can be
+    // attached at the same time. Tool handlers marshal onto the UI thread, which serializes them.
+    private readonly List<(McpServer Server, TcpClient Client)> connections = [];
+    private readonly Lock connectionsLock = new();
+    private readonly McpServerConfig serverConfig;
     private readonly SharedInstanceRegistry registry;
     private readonly SharedInstanceRegistry globalRegistry;
     private readonly string appId;
@@ -36,7 +40,7 @@ internal sealed class McpHost : IDisposable
     public int Port { get; private set; }
 
     /// <summary>Whether the MCP server is currently running.</summary>
-    public bool IsRunning => server.IsRunning;
+    public bool IsRunning => listener is not null && !disposed;
 
     /// <summary>
     /// Creates the MCP host. Call <see cref="Start"/> to begin listening.
@@ -55,7 +59,7 @@ internal sealed class McpHost : IDisposable
         string normalizedId = appId.Replace(' ', '-');
         windowId = $"cascade-{normalizedId}-{Environment.ProcessId}";
 
-        server = new McpServer(new McpServerConfig
+        serverConfig = new McpServerConfig
         {
             AppName = appId,
             AppId = normalizedId,
@@ -73,11 +77,7 @@ internal sealed class McpHost : IDisposable
 #endif
             HasLiveInstance = true,
             HasAppSurface = true,
-        });
-
-        McpTools.RegisterAll(server);
-        McpResources.RegisterAll(server);
-        McpPrompts.RegisterAll(server);
+        };
 
         registry = new SharedInstanceRegistry(appId);
         globalRegistry = new SharedInstanceRegistry(GlobalRegistryId);
@@ -168,7 +168,15 @@ internal sealed class McpHost : IDisposable
         }
 
         disposed = true;
-        server.Stop();
+        lock (connectionsLock)
+        {
+            foreach ((McpServer server, TcpClient client) in connections)
+            {
+                server.Stop();
+                client.Dispose(); // unblocks the server's pending read
+            }
+            connections.Clear();
+        }
 
         try
         {
@@ -208,6 +216,50 @@ internal sealed class McpHost : IDisposable
         Stop();
     }
 
+    private McpServer CreateServer()
+    {
+        var server = new McpServer(serverConfig);
+        McpTools.RegisterAll(server);
+        McpResources.RegisterAll(server);
+        McpPrompts.RegisterAll(server);
+        return server;
+    }
+
+    // Serves one client until it disconnects (or the host stops), on its own thread.
+    private void ServeClient(TcpClient client)
+    {
+        McpServer server = CreateServer();
+        lock (connectionsLock)
+        {
+            if (disposed)
+            {
+                client.Dispose();
+                return;
+            }
+            connections.Add((server, client));
+        }
+
+        try
+        {
+            var stream = client.GetStream();
+            server.Start(stream, stream);
+            server.WaitForExit();
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
+        {
+            Debug.WriteLine($"[MCP] Connection ended: {ex.Message}");
+        }
+        finally
+        {
+            server.Stop();
+            client.Dispose();
+            lock (connectionsLock)
+            {
+                connections.Remove((server, client));
+            }
+        }
+    }
+
     private void ListenLoop()
     {
         while (!disposed)
@@ -225,18 +277,14 @@ internal sealed class McpHost : IDisposable
                 }
 
                 Debug.WriteLine($"[MCP] Client connected from {client.Client.RemoteEndPoint}");
-
-                var stream = client.GetStream();
-                server.Start(stream, stream);
-
-                // Wait until the server finishes (client disconnected)
-                while (server.IsRunning && !disposed)
+                TcpClient accepted = client;
+                client = null;
+                var connectionThread = new Thread(() => ServeClient(accepted))
                 {
-                    Thread.Sleep(100);
-                }
-
-                server.Stop();
-                client.Dispose();
+                    IsBackground = true,
+                    Name = "McpHost connection",
+                };
+                connectionThread.Start();
             }
             catch (SocketException) when (disposed)
             {

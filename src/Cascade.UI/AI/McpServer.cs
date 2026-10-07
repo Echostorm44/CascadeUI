@@ -218,6 +218,12 @@ internal sealed class McpServer
         messageThread.Start();
     }
 
+    /// <summary>Blocks until the message loop has ended (the client disconnected or <see cref="Stop"/>).</summary>
+    public void WaitForExit()
+    {
+        messageThread?.Join();
+    }
+
     /// <summary>
     /// Stops the server. The background thread will exit after the current read
     /// completes or when the input stream is closed.

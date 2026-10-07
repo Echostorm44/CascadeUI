@@ -121,6 +121,13 @@ internal sealed class EtchBackend : IDisposable
         MixHash(ref hash, op.Matrix.M22);
         MixHash(ref hash, op.Matrix.M31);
         MixHash(ref hash, op.Matrix.M32);
+        MixHash(ref hash, (int)op.Cap | ((int)op.Join << 8));
+        if (op.Dash is DashPattern dash)
+        {
+            MixHash(ref hash, dash.On);
+            MixHash(ref hash, dash.Off);
+            MixHash(ref hash, dash.Offset);
+        }
         MixHash(ref hash, op.Fill.HasValue ? ToArgb(op.Fill.Value) : 0u);
         MixHash(ref hash, op.StrokeColor.HasValue ? ToArgb(op.StrokeColor.Value) : 0u);
         if (op.GradientStops != null)
@@ -211,8 +218,9 @@ internal sealed class EtchBackend : IDisposable
             op.StrokeColor = stroke.ScaleAlpha(_currentOpacity);
         }
 
-        if (op.Kind == OpKind.DrawImage)
+        if (op.Kind == OpKind.DrawImage || op.Kind == OpKind.DrawLayerTexture)
         {
+            // A retained layer composited inside an opacity scope fades with it.
             op.Opacity *= _currentOpacity;
         }
 
@@ -512,7 +520,7 @@ internal sealed class EtchBackend : IDisposable
     }
 
     public void DrawPath(ulong frame, ulong pathHandle,
-        ColorValue? fill, ColorValue? strokeColor, float strokeWidth, StrokeCap cap, StrokeJoin join)
+        ColorValue? fill, ColorValue? strokeColor, float strokeWidth, StrokeCap cap, StrokeJoin join, DashPattern? dash = null)
     {
         var op = RentOp();
         op.Kind = OpKind.DrawPath;
@@ -520,6 +528,9 @@ internal sealed class EtchBackend : IDisposable
         op.Fill = fill;
         op.StrokeColor = strokeColor;
         op.StrokeWidth = strokeWidth;
+        op.Cap = cap;
+        op.Join = join;
+        op.Dash = dash;
         AddCommand(op);
     }
 
@@ -540,6 +551,8 @@ internal sealed class EtchBackend : IDisposable
         op.Fill = fill;
         op.StrokeColor = strokeColor;
         op.StrokeWidth = strokeWidth;
+        op.Cap = cap;
+        op.Join = join;
         AddCommand(op);
     }
 
@@ -570,6 +583,8 @@ internal sealed class EtchBackend : IDisposable
         op.SweepRad = sweepRad;
         op.StrokeColor = sc;
         op.StrokeWidth = sw;
+        op.Cap = cap;
+        op.Join = join;
         AddCommand(op);
     }
 
@@ -584,6 +599,8 @@ internal sealed class EtchBackend : IDisposable
         op.H = y2;
         op.StrokeColor = sc;
         op.StrokeWidth = sw;
+        op.Cap = cap;
+        op.Join = join;
         AddCommand(op);
     }
 
@@ -612,7 +629,7 @@ internal sealed class EtchBackend : IDisposable
     {
         _images.Remove(image);
     }
-    public void DrawPathGradient(ulong frame, ulong path, int gk, ReadOnlySpan<GradientStop> s, float p0, float p1, float p2, float p3, ColorValue? sc, float sw, StrokeCap c, StrokeJoin j)
+    public void DrawPathGradient(ulong frame, ulong path, int gk, ReadOnlySpan<GradientStop> s, float p0, float p1, float p2, float p3, ColorValue? sc, float sw, StrokeCap c, StrokeJoin j, DashPattern? dash = null)
     {
         var op = RentOp();
         op.Kind = OpKind.DrawPathGradient;
@@ -625,6 +642,9 @@ internal sealed class EtchBackend : IDisposable
         op.G3 = p3;
         op.StrokeColor = sc;
         op.StrokeWidth = sw;
+        op.Cap = c;
+        op.Join = j;
+        op.Dash = dash;
         AddCommand(op);
     }
     // PushLayer applies an opacity to everything drawn until the matching PopLayer,
@@ -822,6 +842,11 @@ internal sealed class EtchBackend : IDisposable
         op.Kind = OpKind.DrawLayerTexture;
         op.X = t.X;
         op.Y = t.Y;
+        // Device position of the local origin: the layer was captured relative to it, so the
+        // composite shift is (X, Y) − (G0, G1) — the scroll delta, for a ScrollView.
+        var origin = Vector2.Transform(Vector2.Zero, _currentTransform);
+        op.G0 = origin.X;
+        op.G1 = origin.Y;
         op.W = layerHandle;
         op.Opacity = opacity;
         op.ClipBounds = _currentClipBounds;
@@ -1083,6 +1108,9 @@ internal sealed class EtchBackend : IDisposable
         public GradientStop[]? GradientStops;
         public ulong ImageHandle;
         public float Opacity;
+        public StrokeCap Cap;
+        public StrokeJoin Join;
+        public DashPattern? Dash;
 
         /// <summary>
         /// DevTools node id of the node that emitted this op, or null. Only
@@ -1114,6 +1142,9 @@ internal sealed class EtchBackend : IDisposable
             GradientStops = null;
             ImageHandle = 0;
             Opacity = 0;
+            Cap = StrokeCap.Butt;
+            Join = StrokeJoin.Miter;
+            Dash = null;
             DebugNodeId = null;
             ClipBounds = default;
             HasClipBounds = false;

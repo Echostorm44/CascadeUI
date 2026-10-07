@@ -32,7 +32,8 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
     private readonly SwapChain _swapChain;
     private readonly GpuComposer _composer;
     private readonly DrawList _drawList = new();
-    private readonly EtchFrameScheduler _scheduler = new();
+    private readonly DrawListBuilder _builder = new();
+    private readonly List<PlacedGlyph> _placedGlyphs = new();
     private uint _currentWidth;
     private uint _currentHeight;
     private bool _disposed;
@@ -90,7 +91,7 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
 
     /// <summary>
     /// Per-frame pixel-dissolve threshold [0,1], copied from the backend each frame
-    /// in <see cref="PresentScene"/> and uploaded into the surface uniform. Drives
+    /// in <see cref="PresentRecording"/> and uploaded into the surface uniform. Drives
     /// the screen-space dissolve discard in the geometry/glyph fragment shaders.
     /// </summary>
     internal float FrameDissolve { get; set; }
@@ -438,56 +439,21 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
     }
 
     /// <summary>
-    /// Returns true if the scene can be rendered by this presenter.
-    /// Supports solid fills, strokes, 2-stop linear gradients, and clips.
-    /// Silently skips unsupported ops rather than rejecting the entire scene.
+    /// Renders a recorded frame to the swapchain: the recording is replayed into the frame's
+    /// <see cref="DrawList"/> (paint order, clips, masks, glyph runs) and executed by the
+    /// <see cref="GpuComposer"/>. When <paramref name="glyphRecords"/> is given, every placed glyph
+    /// is reported there (draw provenance); <paramref name="layerCompositeIndex"/> maps a retained
+    /// layer's handle to the main-stream command that composites it, for their paint order.
     /// </summary>
-    public static bool CanRenderGpu(SceneBuffer scene)
-    {
-        bool hasRenderableContent = false;
-        foreach (ref readonly var cmd in scene.Commands)
-        {
-            switch (cmd.Op)
-            {
-                case SceneOpcode.FillRect:
-                case SceneOpcode.FillPath:
-                case SceneOpcode.StrokePath:
-                case SceneOpcode.FillSector:
-                case SceneOpcode.DrawShadow:
-                case SceneOpcode.DrawImage:
-                    hasRenderableContent = true;
-                    continue;
-                case SceneOpcode.SetTransform:
-                case SceneOpcode.PushClip:
-                case SceneOpcode.PopClip:
-                case SceneOpcode.BeginFrame:
-                case SceneOpcode.EndFrame:
-                    continue;
-                default:
-                    return false;
-            }
-        }
-        return hasRenderableContent;
-    }
-
-    /// <summary>
-    /// Renders the frame to the swapchain in paint order. Shapes come from the scene buffer,
-    /// glyph runs and images from the backend's command stream, and retained ScrollView layers are
-    /// spliced in where their <c>DrawLayerTexture</c> op was painted (with their scroll offset baked
-    /// into positions). <paramref name="sceneMarks"/> (see <see cref="EtchBackendProvider.SceneMarks"/>)
-    /// is what lets text and images sit between the shapes painted before and after them.
-    /// </summary>
-    public void PresentScene(SceneBuffer scene, EtchBackend backend, IReadOnlyList<int>? sceneMarks,
-        List<LayerRenderInfo>? layers = null, List<GlyphDrawRecord>? glyphRecords = null)
+    public void PresentRecording(DrawRecording main, ComposeParameters parameters,
+        List<GlyphDrawRecord>? glyphRecords = null, IReadOnlyDictionary<ulong, int>? layerCompositeIndex = null)
     {
         if (_disposed)
         {
             return;
         }
 
-        // Per-frame dissolve threshold set by the painter (dissolve transition).
-        FrameDissolve = backend.FrameDissolve;
-
+        FrameDissolve = parameters.Dissolve;
         var frameSw = Stopwatch.StartNew();
 
         var pollSw = Stopwatch.StartNew();
@@ -507,20 +473,21 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
             return;
         }
 
-        // WP-3509: if churn filled either glyph atlas last frame (or a forced reset is requested),
-        // clear it now — between frames, before any glyph is looked up or inserted this frame.
+        // WP-3509: if churn filled an atlas last frame (or a forced reset is requested), clear it
+        // now — between frames, before anything of this frame is looked up or inserted.
         _composer.ResetAtlasesIfExhausted(ForceAtlasReset);
 
         _phaseTimer.Restart();
-        _scheduler.Build(_drawList, scene, backend, sceneMarks, layers, glyphRecords,
-            _composer.MonoAtlas, _composer.ColorAtlas, _currentWidth, _currentHeight);
-        _drawList.Parameters = new ComposeParameters
+        _placedGlyphs.Clear();
+        _builder.Begin(_drawList, _currentWidth, _currentHeight, _composer.Masks, _composer.MonoAtlas, _composer.ColorAtlas,
+            glyphRecords is null ? null : _placedGlyphs);
+        _builder.Replay(main);
+        _builder.End();
+        _drawList.Parameters = parameters;
+        if (glyphRecords is not null)
         {
-            TextGamma = TextGamma,
-            LightWeight = LightWeight,
-            Dissolve = FrameDissolve,
-        };
-        _drawList.Finish();
+            ReportGlyphs(glyphRecords, layerCompositeIndex);
+        }
         _phaseTimer.Stop();
         double buildMs = _phaseTimer.Elapsed.TotalMilliseconds;
 
@@ -531,10 +498,10 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
         _phaseTimer.Stop();
         double renderMs = _phaseTimer.Elapsed.TotalMilliseconds;
 
-        if (DebugLog.IsEnabled(DebugLogCategory.Clip) && _scheduler.CulledGlyphs > 0)
+        if (DebugLog.IsEnabled(DebugLogCategory.Clip) && _builder.CulledGlyphs > 0)
         {
             DebugLog.Write(DebugLogCategory.Clip,
-                $"[{DateTime.Now:O}] culled={_scheduler.CulledGlyphs} glyphs outside their clip");
+                $"[{DateTime.Now:O}] culled={_builder.CulledGlyphs} glyphs outside their clip");
         }
         if (DebugLog.IsEnabled(DebugLogCategory.Frame) && _drawList.BatchCount != _lastLoggedBatchCount)
         {
@@ -546,7 +513,7 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
                     $" {b.Kind}×{b.Count}@({b.MinX:F0},{b.MinY:F0})-({b.MaxX:F0},{b.MaxY:F0})");
             }
             DebugLog.Write(DebugLogCategory.Frame,
-                $"[{DateTime.Now:O}] paint order: {_drawList.BatchCount} batches, {_composer.LastCopyCount} framebuffer copies, shapes={_drawList.Shapes.Count} glyphs={_drawList.Glyphs.Count} colorGlyphs={_drawList.ColorGlyphs.Count} images={_drawList.ImageQuads.Count} blurs={_drawList.Blurs.Count}:{batchList}");
+                $"[{DateTime.Now:O}] paint order: {_drawList.BatchCount} batches, {_composer.LastCopyCount} framebuffer copies, shapes={_drawList.Shapes.Count} glyphs={_drawList.Glyphs.Count} colorGlyphs={_drawList.ColorGlyphs.Count} images={_drawList.ImageInstances.Count} blurs={_drawList.Blurs.Count} masks dropped={_builder.DroppedMasks}:{batchList}");
         }
 
         using var cb = encoder.Finish();
@@ -555,16 +522,12 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
 
         var submitSw = Stopwatch.StartNew();
         _device.Queue.Submit(cmdsSpan);
-        PollValidationErrors("PresentScene");
+        PollValidationErrors("PresentRecording");
         submitSw.Stop();
 
-        // Capture the framebuffer to CPU ONLY when a screenshot was requested.
-        // PerformCapture does a synchronous full-framebuffer GPU→CPU readback
-        // (MapSync polls the device to completion), which stalls the present
-        // pipeline ~90 ms every frame — doing it unconditionally capped the whole
-        // app to ~11 fps whenever anything presents continuously (a blinking caret,
-        // a transition). On-demand keeps steady-state present at display rate.
-        // Screenshot callers RequestCapture() + force a present + WaitForCapture().
+        // Capture the framebuffer to CPU ONLY when a screenshot was requested: the synchronous
+        // readback stalls the present pipeline, so doing it every frame capped continuously
+        // presenting apps to ~11 fps. Screenshot callers RequestCapture() + force a present.
         if (System.Threading.Interlocked.Exchange(ref _captureRequested, 0) == 1)
         {
             EnsureStagingBuffer();
@@ -593,6 +556,42 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
         _frameCount++;
     }
 
+    // Maps the builder's placed glyphs to provenance records (positions, atlas texels, clip).
+    private void ReportGlyphs(List<GlyphDrawRecord> records, IReadOnlyDictionary<ulong, int>? layerCompositeIndex)
+    {
+        var clips = _drawList.Clips;
+        foreach (var g in _placedGlyphs)
+        {
+            if (g.Source is not EtchRecorder.GlyphRunSource source)
+            {
+                continue;
+            }
+            var op = source.Op;
+            var clip = clips[(int)g.ClipIndex];
+            bool hasClip = g.ClipIndex != 0;
+            long paintOrder;
+            string category;
+            if (source.LayerHandle == 0)
+            {
+                category = "main";
+                paintOrder = DrawPaintOrder.MainGlyphRun(op.CommandIndex);
+            }
+            else
+            {
+                category = "layer";
+                int mainIndex = layerCompositeIndex is not null && layerCompositeIndex.TryGetValue(source.LayerHandle, out int index) ? index : 0;
+                paintOrder = DrawPaintOrder.LayerGlyphRun(mainIndex, op.CommandIndex);
+            }
+            records.Add(new GlyphDrawRecord(
+                g.X, g.Y, g.Width, g.Height,
+                g.GlyphId, g.RasterSize, op.FontHandle,
+                g.AtlasU, g.AtlasV, g.Width, g.Height,
+                op.Color,
+                hasClip ? clip.MinX : 0, hasClip ? clip.MinY : 0,
+                hasClip ? clip.MaxX : 0, hasClip ? clip.MaxY : 0,
+                hasClip, g.IsColor, category, op.DebugNodeId, paintOrder));
+        }
+    }
     /// <summary>
     /// Blits a CPU-rendered RGBA frame (sRGB-encoded) directly to the swapchain.
     /// </summary>
@@ -625,7 +624,7 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
         _device.Queue.Submit(cmdsSpan);
         PollValidationErrors("PresentCpuFallback");
 
-        // Capture to CPU only on request (see PresentScene) — the readback stalls
+        // Capture to CPU only on request (see PresentRecording) — the readback stalls
         // the present, so it must not run every frame.
         if (System.Threading.Interlocked.Exchange(ref _captureRequested, 0) == 1)
         {
@@ -703,7 +702,7 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
     }
     /// <summary>
     /// Requests that the next presented frame be captured to CPU memory.
-    /// Capture happens during the next PresentScene/PresentCpuFallback call.
+    /// Capture happens during the next PresentRecording/PresentCpuFallback call.
     /// </summary>
     public void RequestCapture()
     {

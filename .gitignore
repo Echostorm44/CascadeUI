@@ -57,3 +57,8 @@ BenchmarkDotNet.Artifacts/
 
 # Local pack output: the DevTools assembly (TOOLING-001) and any local NuGet feed
 artifacts/
+
+# Performance traces and the symbol folders PerfView/WPR write next to them
+*.etl
+*.etl.zip
+*.NGENPDB/

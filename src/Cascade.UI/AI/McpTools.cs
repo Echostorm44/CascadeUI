@@ -2591,7 +2591,17 @@ internal static class McpTools
                     return ErrorJson("Invalid render_mode value. Use: gpu, cpu", null);
                 }
                 long baselineFrame = Diagnostics.PresentMonitor.PresentedFrames;
+                bool wasCpu = App.activeBackendProvider?.IsCpuFallbackForced ?? false;
                 App.activeBackendProvider?.SetRenderParam("render_mode", normalized);
+                // An idle app never repaints on its own: when the mode actually changes, force a frame
+                // so it is shown and WithPresentation observes it. Setting the current mode changes
+                // nothing and truthfully reports timed_out.
+#if CASCADE_DEVTOOLS
+                if (wasCpu != (normalized == "CPU"))
+                {
+                    Dispatcher.InvokeAsync(() => DevTools.NodeTreeWalker.RequestRepaint()).Wait();
+                }
+#endif
                 return WithPresentation(
                     $"{{\"param\":\"render_mode\",\"value\":\"{normalized}\"}}",
                     baselineFrame, GetWaitFrames(parameters));

@@ -178,10 +178,10 @@ internal sealed class EtchBackendProvider : IDisposable
         _width = width;
         _height = height;
 
-        // CASCADE_FORCE_CPU=1 simulates GPU init failure so the CPU fallback
-        // (including the GDI blit path) is exercisable on machines with a
-        // working GPU.
-        if (Environment.GetEnvironmentVariable("CASCADE_FORCE_CPU") == "1")
+        // CASCADE_FORCE_CPU=1 (or CASCADE_GPU=cpu) simulates GPU init failure so the CPU fallback
+        // (including the GDI blit path) is exercisable on machines with a working GPU.
+        if (Environment.GetEnvironmentVariable("CASCADE_FORCE_CPU") == "1"
+            || string.Equals(Environment.GetEnvironmentVariable("CASCADE_GPU")?.Trim(), "cpu", StringComparison.OrdinalIgnoreCase))
         {
             _useGpu = false;
             return;
@@ -203,7 +203,8 @@ internal sealed class EtchBackendProvider : IDisposable
         }
     }
 
-    // CASCADE_GPU=auto|lowpower|highperformance|software overrides AppConfig.Gpu, so a specific
+    // CASCADE_GPU=auto|lowpower|highperformance|software overrides AppConfig.Gpu (cpu: no GPU at all, see
+    // CreateSurface), so a specific
     // adapter can be exercised (goldens recorded on one GPU, a user report from another) without a
     // rebuild. Unset or unrecognised values keep the configured preference.
     private static GpuPreference ResolveGpuPreference(GpuPreference configured)
@@ -224,6 +225,11 @@ internal sealed class EtchBackendProvider : IDisposable
         if (string.Equals(value, "software", StringComparison.OrdinalIgnoreCase))
         {
             return GpuPreference.Software;
+        }
+        if (!string.IsNullOrEmpty(value) && !string.Equals(value, "cpu", StringComparison.OrdinalIgnoreCase))
+        {
+            // A typo must not silently run on a different adapter than the one being tested.
+            Console.Error.WriteLine($"[Cascade] Ignoring CASCADE_GPU='{value}'. Valid: auto, lowpower, highperformance, software, cpu.");
         }
         return configured;
     }
@@ -388,6 +394,9 @@ internal sealed class EtchBackendProvider : IDisposable
     {
         _etchGpuPresenter?.RequestCapture();
     }
+
+    /// <summary>True while the CPU fallback is forced by render_mode=cpu.</summary>
+    internal bool IsCpuFallbackForced => _forceCpuFallback;
 
     public void SetRenderParam(string param, string value)
     {

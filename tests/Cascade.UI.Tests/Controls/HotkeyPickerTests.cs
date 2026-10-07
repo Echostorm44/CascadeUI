@@ -68,7 +68,7 @@ public class HotkeyPickerTests
     }
 
     [Test]
-    [NotInParallel(nameof(LayoutSolver.DefaultFontPath))]
+    [NotInParallel]
     public async Task Field_FitsTheRecordingPrompt_AtALargeFont()
     {
         string? saved = LayoutSolver.DefaultFontPath;
@@ -81,7 +81,7 @@ public class HotkeyPickerTests
 
             float field = LayoutSolver.HotkeyPickerFieldWidth(new HotkeyPicker());
 
-            await Assert.That(field).IsGreaterThanOrEqualTo(prompt + 24f);
+            await Assert.That(field).IsGreaterThanOrEqualTo(prompt + (ThemeSwitcher.Current.TextInput.PaddingH * 2f));
         }
         finally
         {

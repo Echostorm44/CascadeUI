@@ -949,13 +949,40 @@ internal static class LayoutSolver
     }
 
     // Label on the left, a fixed-width field on the right, TextInput height.
-    internal const float HotkeyPickerFieldWidth = 180f;
+    internal const float HotkeyPickerMinFieldWidth = 180f;
     internal const float HotkeyPickerLabelGap = 12f;
+
+    /// <summary>
+    /// The field fits its widest text — the recording prompt, the current hotkey or the placeholder —
+    /// so "Press a shortcut…" is never cut off at a larger font size.
+    /// </summary>
+    internal static float HotkeyPickerFieldWidth(HotkeyPicker picker)
+    {
+        float widest = Math.Max(TextWidth(HotkeyPicker.RecordingPrompt), TextWidth(picker.Placeholder));
+        if (picker.Current is { } current)
+        {
+            widest = Math.Max(widest, TextWidth(current.ToString()));
+        }
+        // The painter insets the text by the TextInput padding on each side.
+        float padding = ThemeSwitcher.Current.TextInput.PaddingH;
+        return Math.Max(HotkeyPickerMinFieldWidth, MathF.Ceiling(widest) + (padding * 2f) + 4f);
+    }
+
+    private static float TextWidth(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return 0f;
+        }
+        return DefaultFontPath != null
+            ? TextLayoutEngine.Layout(text, new TextLayoutOptions { FontPath = DefaultFontPath, FontSize = BodyFontSize }).BoundingBox.Width
+            : text.Length * BodyFontSize * AverageCharWidthRatio;
+    }
 
     private static Size MeasureHotkeyPicker(HotkeyPicker picker, LayoutConstraints constraints)
     {
         const float height = 36f;
-        float width = HotkeyPickerFieldWidth;
+        float width = HotkeyPickerFieldWidth(picker);
         if (!string.IsNullOrEmpty(picker.Label))
         {
             float labelWidth = DefaultFontPath != null

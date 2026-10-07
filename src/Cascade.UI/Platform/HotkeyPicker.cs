@@ -39,6 +39,9 @@ public class HotkeyPicker : Node
     /// </summary>
     internal bool IsRecording { get; set; }
 
+    /// <summary>What the field says while it waits for a key.</summary>
+    internal const string RecordingPrompt = "Press a shortcut…";
+
     /// <summary>The field's text: the hotkey, the placeholder, or the recording prompt.</summary>
     internal string FieldText(bool focused, ModifierKeys held)
     {
@@ -46,7 +49,7 @@ public class HotkeyPicker : Node
         {
             return Current?.ToString() ?? Placeholder;
         }
-        return held == ModifierKeys.None ? "Press a shortcut…" : new Hotkey(held, Cascade.UI.Key.None) + "+…";
+        return held == ModifierKeys.None ? RecordingPrompt : new Hotkey(held, Cascade.UI.Key.None) + "+…";
     }
 
     /// <summary>

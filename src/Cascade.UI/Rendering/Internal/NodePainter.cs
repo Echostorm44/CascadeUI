@@ -5590,8 +5590,12 @@ internal sealed class NodePainter
             picker.IsRecording = false; // focus moved away: stop recording
         }
 
-        var field = new Rect(bounds.X + bounds.Width - LayoutSolver.HotkeyPickerFieldWidth, bounds.Y,
-            LayoutSolver.HotkeyPickerFieldWidth, bounds.Height);
+        // Without a label the field is the whole control (it honours .Width()); with one it sits at the
+        // right, as wide as its widest text.
+        float fieldWidth = string.IsNullOrEmpty(picker.Label)
+            ? bounds.Width
+            : Math.Min(bounds.Width, LayoutSolver.HotkeyPickerFieldWidth(picker));
+        var field = new Rect(bounds.X + bounds.Width - fieldWidth, bounds.Y, fieldWidth, bounds.Height);
         if (!string.IsNullOrEmpty(picker.Label))
         {
             var labelRect = new Rect(bounds.X, bounds.Y, bounds.Width - field.Width - LayoutSolver.HotkeyPickerLabelGap, bounds.Height);
@@ -5610,8 +5614,10 @@ internal sealed class NodePainter
         }
 
         string text = picker.FieldText(focused, Keyboard.Modifiers);
+        // Recording: the prompt in the accent colour, so the field plainly asks for a key.
         var color = picker.IsDisabled ? t.DisabledTextColor
-            : recording || picker.Current is null ? t.PlaceholderColor : t.TextColor;
+            : recording ? theme.Colors.Primary
+            : picker.Current is null ? t.PlaceholderColor : t.TextColor;
         PaintText(text, field, t.PaddingH, color, alignment: TextAlignment.Center);
     }
 

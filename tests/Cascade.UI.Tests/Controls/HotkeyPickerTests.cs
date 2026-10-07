@@ -66,4 +66,27 @@ public class HotkeyPickerTests
     {
         dispatcher.HandleKeyEvent(new NativeKeyEvent { Key = key, Type = NativeKeyEventType.KeyDown, Modifiers = modifiers });
     }
+
+    [Test]
+    [NotInParallel(nameof(LayoutSolver.DefaultFontPath))]
+    public async Task Field_FitsTheRecordingPrompt_AtALargeFont()
+    {
+        string? saved = LayoutSolver.DefaultFontPath;
+        float savedSize = LayoutSolver.BodyFontSize;
+        LayoutSolver.DefaultFontPath = System.IO.Path.Combine(AppContext.BaseDirectory, "fonts", "Inter-Regular.ttf");
+        LayoutSolver.BodyFontSize = 22f;
+        try
+        {
+            float prompt = TextLayoutEngine.Layout(HotkeyPicker.RecordingPrompt, new TextLayoutOptions { FontPath = LayoutSolver.DefaultFontPath!, FontSize = 22f }).BoundingBox.Width;
+
+            float field = LayoutSolver.HotkeyPickerFieldWidth(new HotkeyPicker());
+
+            await Assert.That(field).IsGreaterThanOrEqualTo(prompt + 24f);
+        }
+        finally
+        {
+            LayoutSolver.DefaultFontPath = saved;
+            LayoutSolver.BodyFontSize = savedSize;
+        }
+    }
 }

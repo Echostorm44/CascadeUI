@@ -132,7 +132,9 @@ internal sealed partial class NodePainter
                     PaintMenuIcon(icon, iconX, y, h, m, alpha);
                 }
 
-                PaintText(item.Label, new Rect(labelX, y, Math.Max(0f, labelRight - labelX), h), 0f, textColor,
+                // A label with no shortcut may run into the (empty) shortcut column.
+                float labelEnd = string.IsNullOrEmpty(item.Shortcut) ? shortcutRight : labelRight;
+                PaintText(item.Label, new Rect(labelX, y, Math.Max(0f, labelEnd - labelX), h), 0f, textColor,
                     fontSize: m.FontSize, overflow: TextOverflow.Ellipsis);
 
                 if (!string.IsNullOrEmpty(item.Shortcut))

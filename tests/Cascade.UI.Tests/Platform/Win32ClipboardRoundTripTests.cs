@@ -123,6 +123,40 @@ public class Win32ClipboardRoundTripTests
     }
 
     [Test]
+    public async Task Capture_AnsiOnlyText_KeepsItAndTheUnicodeText()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var saved = Clipboard.CaptureRaw();
+        try
+        {
+            // An app that puts only CF_TEXT on the clipboard (OneCommander's "Copy as Path"): Windows
+            // lists it first and synthesizes CF_UNICODETEXT after it. Keeping only the first text format
+            // dropped the Unicode text, so consumers that read it saw no text at all.
+            byte[] ansi = Encoding.ASCII.GetBytes(@"C:\probe\path.txt" + "\0");
+            await Assert.That(Clipboard.WriteRaw(new ClipboardRawSnapshot([new ClipboardRawFormat(1, "CF_TEXT", ansi)]))).IsTrue();
+
+            var raw = Clipboard.CaptureRaw()!;
+            string[] names = [.. raw.Formats.Select(f => f.Name)];
+
+            await Assert.That(raw.Find("CF_TEXT")!.Data.ToArray()).IsEquivalentTo(ansi); // the original, byte for byte
+            await Assert.That(Encoding.Unicode.GetString(raw.Find("CF_UNICODETEXT")!.Data.Span).TrimEnd('\0'))
+                .IsEqualTo(@"C:\probe\path.txt");
+            await Assert.That(names).DoesNotContain("CF_OEMTEXT"); // synthesized from CF_TEXT
+        }
+        finally
+        {
+            if (saved is not null)
+            {
+                Clipboard.WriteRaw(saved);
+            }
+        }
+    }
+
+    [Test]
     public async Task ExclusionMarkers_AreDetected()
     {
         if (!OperatingSystem.IsWindows())

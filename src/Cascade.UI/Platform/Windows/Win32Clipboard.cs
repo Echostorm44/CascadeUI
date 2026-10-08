@@ -446,7 +446,8 @@ internal static unsafe class Win32Clipboard
         try
         {
             var formats = new List<ClipboardRawFormat>();
-            bool haveText = false;
+            bool haveUnicodeText = false;
+            bool haveAnsiText = false;
             bool haveDib = false;
             uint format = 0;
             while ((format = Win32.EnumClipboardFormats(format)) != 0)
@@ -455,13 +456,26 @@ internal static unsafe class Win32Clipboard
                 {
                     continue;
                 }
-                if (format is Win32.CF_UNICODETEXT or Win32.CF_TEXT or Win32.CF_OEMTEXT)
+                // Windows lists the formats the owner put first and the ones it synthesizes after.
+                // Unicode text is always kept: it is what readers want, and when the owner put only
+                // ANSI text it is Windows' own conversion of it (CF_LOCALE). An ANSI format is kept
+                // only when it came first (the owner's own bytes, restored exactly); one listed after
+                // other text is synthesized and redundant.
+                if (format == Win32.CF_UNICODETEXT)
                 {
-                    if (haveText)
+                    if (haveUnicodeText)
                     {
                         continue;
                     }
-                    haveText = true;
+                    haveUnicodeText = true;
+                }
+                else if (format is Win32.CF_TEXT or Win32.CF_OEMTEXT)
+                {
+                    if (haveUnicodeText || haveAnsiText)
+                    {
+                        continue;
+                    }
+                    haveAnsiText = true;
                 }
                 if (format is Win32.CF_DIB or Win32.CF_DIBV5)
                 {

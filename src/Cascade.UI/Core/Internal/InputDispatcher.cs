@@ -1906,7 +1906,7 @@ internal sealed partial class InputDispatcher
             if (row >= 0)
             {
                 selLv.SelectIndex(row);
-                if (selLv is Node listNode)
+                if (selLv.FocusesOnClick && selLv is Node listNode)
                 {
                     FocusManager.RequestFocus(listNode);
                 }
@@ -1989,8 +1989,16 @@ internal sealed partial class InputDispatcher
             rangeSliderDragStartValue = rangeSliderDragIsMax ? rs.MaxBind.Value : rs.MinBind.Value;
         }
 
+        // A list that selects without taking focus (FocusOnClick(false)) leaves focus where it was:
+        // neither the list nor the row's content takes it, and it is not cleared.
+        bool keepFocus = clickedList is IListViewNode { FocusesOnClick: false };
+
         if (hitNode == null)
         {
+            if (keepFocus)
+            {
+                return;
+            }
             // A click on a list's empty area (or unlaid rows) keeps the list focused.
             if (clickedList is not null)
             {
@@ -2004,7 +2012,7 @@ internal sealed partial class InputDispatcher
         }
 
         // Focus the clicked node if it's focusable
-        var focusTarget = FindFocusableNode(hitNode);
+        var focusTarget = keepFocus ? null : FindFocusableNode(hitNode);
         if (focusTarget != null)
         {
             // Clear TagInput focus state if moving away from a TagInput
@@ -2154,7 +2162,7 @@ internal sealed partial class InputDispatcher
                 TextAreaEditBuffer = null;
             }
         }
-        else
+        else if (!keepFocus)
         {
             if (FocusManager.FocusedElement is TagInput prevTag2)
             {

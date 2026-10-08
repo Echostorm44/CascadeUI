@@ -261,6 +261,7 @@ internal static class LinuxInput
             0xFF61 => Key.PrintScreen,  // XK_Print
             0xFF14 => Key.ScrollLock,   // XK_Scroll_Lock
             0xFF13 => Key.Pause,        // XK_Pause
+            0xFF67 => Key.Apps,         // XK_Menu
             0xFFE5 => Key.CapsLock,     // XK_Caps_Lock
             0xFF7F => Key.NumLock,      // XK_Num_Lock
             0xFFAA => Key.NumPadMultiply,  // XK_KP_Multiply
@@ -330,6 +331,7 @@ internal static class LinuxInput
             Key.PrintScreen     => 0xFF61,
             Key.ScrollLock      => 0xFF14,
             Key.Pause           => 0xFF13,
+            Key.Apps            => 0xFF67,
             Key.CapsLock        => 0xFFE5,
             Key.NumLock         => 0xFF7F,
             Key.NumPadMultiply  => 0xFFAA,

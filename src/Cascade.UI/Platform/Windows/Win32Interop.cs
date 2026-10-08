@@ -213,6 +213,7 @@ internal static partial class Win32
     internal const int VK_DELETE    = 0x2E;
     internal const int VK_LWIN      = 0x5B;
     internal const int VK_RWIN      = 0x5C;
+    internal const int VK_APPS      = 0x5D;
     internal const int VK_NUMPAD0   = 0x60;
     internal const int VK_NUMPAD9   = 0x69;
     internal const int VK_MULTIPLY  = 0x6A;

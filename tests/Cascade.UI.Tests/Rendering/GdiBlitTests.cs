@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using Cascade.UI.Backend.Etch;
 
 namespace Cascade.UI.Tests.Rendering;
@@ -9,7 +8,7 @@ namespace Cascade.UI.Tests.Rendering;
 /// landed where it belongs (no mirrored rows, no offset).
 /// </summary>
 [NotInParallel(nameof(GdiBlitTests))]
-public partial class GdiBlitTests
+public class GdiBlitTests
 {
     private const int Size = 192;
 
@@ -20,8 +19,7 @@ public partial class GdiBlitTests
         {
             return;
         }
-        nint hwnd = CreateWindowExW(0x00000080 /* WS_EX_TOOLWINDOW */ | 0x00000008 /* TOPMOST */, "STATIC", "",
-            unchecked((int)0x90000000) /* WS_POPUP | WS_VISIBLE */, 40, 40, Size, Size, 0, 0, 0, 0);
+        nint hwnd = TestWindow.Create(Size, visible: true);
         await Assert.That(hwnd).IsNotEqualTo(0);
         try
         {
@@ -45,7 +43,7 @@ public partial class GdiBlitTests
                 await Assert.That(renderer.BlitToWindow(hwnd)).IsTrue();
             }
 
-            byte[] window = ReadWindow(hwnd);
+            byte[] window = TestWindow.Read(hwnd, Size);
             var expected = renderer.CaptureFrame()!;
             int mismatches = 0;
             for (int i = 0; i < Size * Size; i++)
@@ -61,99 +59,7 @@ public partial class GdiBlitTests
         }
         finally
         {
-            _ = DestroyWindow(hwnd);
+            _ = TestWindow.DestroyWindow(hwnd);
         }
     }
-
-    private static byte[] ReadWindow(nint hwnd)
-    {
-        nint windowDc = GetDC(hwnd);
-        nint memoryDc = CreateCompatibleDC(windowDc);
-        nint bitmap = CreateCompatibleBitmap(windowDc, Size, Size);
-        nint old = SelectObject(memoryDc, bitmap);
-        _ = BitBlt(memoryDc, 0, 0, Size, Size, windowDc, 0, 0, 0x00CC0020);
-        _ = SelectObject(memoryDc, old);
-        var info = new BitmapInfoHeader
-        {
-            Size = (uint)Marshal.SizeOf<BitmapInfoHeader>(),
-            Width = Size,
-            Height = -Size,
-            Planes = 1,
-            BitCount = 32,
-        };
-        var pixels = new byte[Size * Size * 4];
-        _ = GetDIBits(memoryDc, bitmap, 0, Size, pixels, ref info, 0);
-        _ = DeleteObject(bitmap);
-        _ = DeleteDC(memoryDc);
-        _ = ReleaseDC(hwnd, windowDc);
-        return pixels;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct BitmapInfoHeader
-    {
-        public uint Size;
-        public int Width;
-        public int Height;
-        public ushort Planes;
-        public ushort BitCount;
-        public uint Compression;
-        public uint SizeImage;
-        public int XPelsPerMeter;
-        public int YPelsPerMeter;
-        public uint ClrUsed;
-        public uint ClrImportant;
-        public uint Pad0;
-        public uint Pad1;
-        public uint Pad2;
-    }
-
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    [LibraryImport("user32.dll", EntryPoint = "CreateWindowExW", StringMarshalling = StringMarshalling.Utf16)]
-    private static partial nint CreateWindowExW(int exStyle, string className, string name, int style, int x, int y, int w, int h,
-        nint parent, nint menu, nint instance, nint param);
-
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    [LibraryImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool DestroyWindow(nint hwnd);
-
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    [LibraryImport("user32.dll")]
-    private static partial nint GetDC(nint hwnd);
-
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    [LibraryImport("user32.dll")]
-    private static partial int ReleaseDC(nint hwnd, nint dc);
-
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    [LibraryImport("gdi32.dll")]
-    private static partial nint CreateCompatibleDC(nint dc);
-
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    [LibraryImport("gdi32.dll")]
-    private static partial nint CreateCompatibleBitmap(nint dc, int w, int h);
-
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    [LibraryImport("gdi32.dll")]
-    private static partial nint SelectObject(nint dc, nint obj);
-
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    [LibraryImport("gdi32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool BitBlt(nint dest, int x, int y, int w, int h, nint src, int sx, int sy, uint rop);
-
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    [LibraryImport("gdi32.dll")]
-    private static partial int GetDIBits(nint dc, nint bitmap, uint start, uint lines, [Out] byte[] bits, ref BitmapInfoHeader info, uint usage);
-
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    [LibraryImport("gdi32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool DeleteObject(nint obj);
-
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    [LibraryImport("gdi32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool DeleteDC(nint dc);
 }

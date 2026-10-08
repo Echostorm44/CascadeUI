@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using Cascade.UI.Backend.Etch;
 
 namespace Cascade.UI.Tests.Rendering;
@@ -9,7 +8,7 @@ namespace Cascade.UI.Tests.Rendering;
 /// native-memory snapshot reports the composer's live objects.
 /// </summary>
 [NotInParallel(nameof(GpuResourceTests))]
-public partial class GpuResourceTests
+public class GpuResourceTests
 {
     private const int Size = 128;
     private static readonly ColorValue White = ColorValue.FromRgba(1, 1, 1);
@@ -22,8 +21,7 @@ public partial class GpuResourceTests
         {
             return;
         }
-        nint hwnd = CreateWindowExW(0x00000080 /* WS_EX_TOOLWINDOW */, "STATIC", "",
-            unchecked((int)0x80000000) /* WS_POPUP */, 0, 0, Size, Size, 0, 0, 0, 0);
+        nint hwnd = TestWindow.Create(Size, visible: false);
         await Assert.That(hwnd).IsNotEqualTo(0);
         try
         {
@@ -68,17 +66,7 @@ public partial class GpuResourceTests
         }
         finally
         {
-            _ = DestroyWindow(hwnd);
+            _ = TestWindow.DestroyWindow(hwnd);
         }
     }
-
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    [LibraryImport("user32.dll", EntryPoint = "CreateWindowExW", StringMarshalling = StringMarshalling.Utf16)]
-    private static partial nint CreateWindowExW(int exStyle, string className, string name, int style, int x, int y, int w, int h,
-        nint parent, nint menu, nint instance, nint param);
-
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    [LibraryImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool DestroyWindow(nint hwnd);
 }

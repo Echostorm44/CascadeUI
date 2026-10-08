@@ -136,6 +136,13 @@ internal sealed class SpecimenView : Component
         float deviceScale = page.Scale / ctx.PixelRatio;
         using var scale = ctx.PushScale(deviceScale, deviceScale);
 
+        // Render-parity sheets (tests/Cascade.UI.GoldenText RenderParityTests).
+        string? sceneName = Environment.GetEnvironmentVariable("CASCADE_GOLDEN_SCENE");
+        if (sceneName is not null && ParityScenes.TryDraw(sceneName, ctx, page.FontPath))
+        {
+            return;
+        }
+
         // Colour fidelity sheet (ShadowParityTests.DarkColors_RenderExactly).
         if (Environment.GetEnvironmentVariable("CASCADE_GOLDEN_SCENE") == "colors")
         {

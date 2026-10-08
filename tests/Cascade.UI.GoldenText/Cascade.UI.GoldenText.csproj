@@ -17,10 +17,12 @@
          merged the Etch backend into Cascade.UI, so reference core directly. -->
     <ProjectReference Include="..\..\src\Cascade.UI\Cascade.UI.csproj" />
     <!-- PixelDiff / ImageReader / ImageWriter / PixelDiffPngWriter.
-         Mirrors Cascade.UI: local Etch source ref for dev, the published Echostorm.Etch
-         package (which bundles Etch.Testing) when UseEtchPackage=true — CI has no Etch checkout. -->
+         Mirrors Cascade.UI: local Etch source ref for dev, the published Echostorm.Etch.Testing
+         package when UseEtchPackage=true — CI has no Etch checkout. Etch.Testing is test
+         infrastructure: it ships in its own package (Etch cpu-renderer branch onward) so that
+         nothing an app ships carries it; Cascade.UI does not reference it. -->
     <ProjectReference Include="..\..\..\Etch\src\Etch.Testing\Etch.Testing.csproj" Condition="'$(UseEtchPackage)' != 'true'" />
-    <PackageReference Include="Echostorm.Etch" Version="0.1.0-alpha.7" Condition="'$(UseEtchPackage)' == 'true'" />
+    <PackageReference Include="Echostorm.Etch.Testing" Version="0.1.0-alpha.8" Condition="'$(UseEtchPackage)' == 'true'" />
     <!-- Build-order dependencies only: the golden tests launch these as
          external processes (real CLI exe, real specimen app). -->
     <ProjectReference Include="..\..\src\Cascade.UI.Tools\Cascade.UI.Tools.csproj" ReferenceOutputAssembly="false" />

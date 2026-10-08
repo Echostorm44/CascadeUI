@@ -433,8 +433,6 @@ public class TextWeightSampleGenerator
         int h = (int)Math.Ceiling(line.Height) + 4;
         float baseline = line.Baseline + 2;
 
-        using var backend = new EtchBackend { TextGamma = 0f }; // gamma 0 → alpha == raw coverage
-        ulong font = backend.LoadFont(fontBytes, 0);
 
         var glyphs = line.GlyphsArray;
         var ids = new ushort[glyphs.Length];
@@ -446,14 +444,18 @@ public class TextWeightSampleGenerator
             pos[i * 2 + 1] = baseline + glyphs[i].Y;
         }
 
-        backend.DrawGlyphs(1UL, font, ids, pos, size, ColorValue.FromRgba(1f, 1f, 1f, 1f));
-        byte[] px = new byte[w * h * 4];
-        backend.RenderGlyphCommands(px, w, h);
+        // White on black through the CPU path with text gamma 0: the blend alpha is the raw
+        // coverage, and the linear-light result is that coverage.
+        byte[] px = Cascade.UI.Tests.Rendering.CpuFrame.Render(w, h, ColorValue.FromRgba(0f, 0f, 0f), backend =>
+        {
+            ulong font = backend.LoadFont(fontBytes, 0);
+            backend.DrawGlyphs(1UL, font, ids, pos, size, ColorValue.FromRgba(1f, 1f, 1f, 1f));
+        }, textGamma: 0f);
 
         var cov = new float[w * h];
         for (int i = 0; i < cov.Length; i++)
         {
-            cov[i] = px[i * 4 + 3] / 255f;
+            cov[i] = global::Etch.Compose.Srgb.Decode(px[i * 4] / 255f);
         }
         return new CoverageTile(cov, w, h);
     }

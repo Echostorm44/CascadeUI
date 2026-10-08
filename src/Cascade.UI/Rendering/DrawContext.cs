@@ -192,7 +192,8 @@ public sealed class DrawContext
 
             backend.DrawPath(frame, compiled, fill, strokeColor, strokeWidth,
                 stroke?.Cap ?? StrokeCap.Butt,
-                stroke?.Join ?? StrokeJoin.Miter);
+                stroke?.Join ?? StrokeJoin.Miter,
+                stroke?.Dash);
         }
         finally
         {
@@ -410,7 +411,8 @@ public sealed class DrawContext
                 strokeColor,
                 stroke?.Width ?? 0f,
                 stroke?.Cap ?? StrokeCap.Butt,
-                stroke?.Join ?? StrokeJoin.Miter);
+                stroke?.Join ?? StrokeJoin.Miter,
+                stroke?.Dash);
         }
         finally
         {

@@ -2518,7 +2518,7 @@ internal static class McpTools
         if (capture is null)
         {
             return RawTextContent(
-                "Atlas capture failed: no GPU presenter (the CPU fallback has no glyph atlas) or the GPU readback timed out.");
+                "Atlas capture failed: no frame rendered yet, or the GPU readback timed out.");
         }
 
         var image = capture.Image;
@@ -3115,17 +3115,14 @@ internal static class McpTools
     private static readonly TimeSpan PresentWaitTimeout = TimeSpan.FromSeconds(2);
 
     /// <summary>
-    /// The wait window on the CPU software-render fallback. CPU frames take far
-    /// longer than the GPU path — seconds, not milliseconds (WP-3514) — so the
-    /// 2 s GPU window spuriously reports <c>timed_out</c> under load on that path
-    /// (WP-3516). The wait returns the instant the frame presents, so this larger
-    /// ceiling costs nothing when a frame does land — it only widens the "nothing
-    /// repainted" deadline to match how long a CPU frame legitimately takes.
-    /// Callers that may genuinely never repaint on the CPU path (and thus consume
-    /// the full window) must use a client timeout larger than this — the
-    /// integration bridge's no-repaint test does (see FrameSyncTests).
+    /// The wait window on the CPU render path. CPU frames now take milliseconds (Etch's
+    /// parallel, incremental CPU composer), but a first frame rasterizes every glyph and path
+    /// mask it shows and a loaded test machine shares the cores, so the window keeps headroom
+    /// over the GPU's (WP-3516). The wait returns the instant the frame presents, so the
+    /// ceiling costs nothing when a frame lands. Callers that may genuinely never repaint
+    /// (and so consume the full window) must use a larger client timeout (see FrameSyncTests).
     /// </summary>
-    private static readonly TimeSpan CpuFallbackPresentWaitTimeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan CpuFallbackPresentWaitTimeout = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// The present-wait window for the current render mode: the generous CPU

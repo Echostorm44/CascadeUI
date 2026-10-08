@@ -25,9 +25,12 @@ public class CpuParityTests
     private const int MaxBudget = 4;
 
     // Against hardware the budget follows the reference rasterizer's own distance, but never past
-    // these caps (as in Etch.Compose.Tests' GpuCpuParityTests).
-    private const double HardwareMeanCap = 0.2;
-    private const int HardwareP999Cap = 4;
+    // these caps. The full pages sit further from hardware than Etch.Compose's parity scenes:
+    // measured on an NVIDIA RTX adapter, the reference rasterizer is up to mean 0.50 (the shadow
+    // page), p99.9 7 and max 9 (light text pages) from it, and the CPU never further. The caps
+    // sit just above that, so a GPU or CPU change that moves either beyond it fails.
+    private const double HardwareMeanCap = 0.6;
+    private const int HardwareP999Cap = 8;
     private const int HardwareMaxCap = 10;
 
     public static IEnumerable<(string Page, string Scene)> Pages()

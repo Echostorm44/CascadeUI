@@ -33,6 +33,22 @@ public class MountFocusTests
     }
 
     [Test]
+    public async Task AutoFocus_FieldMountedLater_TakesFocusFromTheMountedOne()
+    {
+        // ClipClop2: the search box (AutoFocus) stays mounted while Ctrl+K mounts a menu whose own
+        // search box asks for focus — typing must then go to the menu's box.
+        using var orchestrator = new FrameOrchestrator(() => { }, () => { });
+        orchestrator.MountRoot<OverlayForm>(800, 600);
+        await Assert.That(((TextInput)FocusManager.FocusedElement!).Placeholder.Resolve()).IsEqualTo("search");
+
+        OverlayForm.Instance!.Open(true);
+        orchestrator.Tick();
+
+        await Assert.That(FocusManager.FocusedElement).IsTypeOf<TextInput>();
+        await Assert.That(((TextInput)FocusManager.FocusedElement!).Placeholder.Resolve()).IsEqualTo("menu");
+    }
+
+    [Test]
     public async Task InitialFocus_FocusesTheReferencedNode()
     {
         using var orchestrator = new FrameOrchestrator(() => { }, () => { });
@@ -86,6 +102,38 @@ public class MountFocusTests
                 new TextInput(new Bindable<string>("", _ => { }), placeholder: "first"),
                 new TextInput(new Bindable<string>("", _ => { }), placeholder: "second").AutoFocus(),
             ]);
+        }
+    }
+
+    private sealed class OverlayForm : Component
+    {
+        private bool open;
+
+        public OverlayForm()
+        {
+            Instance = this;
+        }
+
+        public static OverlayForm? Instance { get; private set; }
+
+        public void Open(bool value)
+        {
+            open = value;
+            Invalidate();
+        }
+
+        protected override Node Render()
+        {
+            Node main = new Column(children:
+            [
+                new TextInput(new Bindable<string>("", _ => { }), placeholder: "search").AutoFocus(),
+                new Label("list"),
+            ]);
+            // The overlay slot is always there (Node.Empty when closed), so the search box keeps its
+            // identity; swapping the root between main and a Stack would remount it as a new AutoFocus node.
+            return new Stack(main, open
+                ? new TextInput(new Bindable<string>("", _ => { }), placeholder: "menu").AutoFocus()
+                : Node.Empty);
         }
     }
 

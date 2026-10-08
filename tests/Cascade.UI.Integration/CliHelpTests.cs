@@ -15,7 +15,7 @@ public class CliHelpTests
 {
     private static readonly string[] AllVerbs =
     [
-        "info", "tree", "screenshot", "click", "drag", "focus",
+        "info", "tree", "screenshot", "click", "right-click", "drag", "focus",
         "type", "scroll", "inspect", "find", "accessibility", "diagnostics",
     ];
 

@@ -793,7 +793,10 @@ internal sealed class EtchBackend : IDisposable
     // ambient clip would cut off every glyph below the viewport in the texture while
     // the geometry (driven by in-stream clip ops) stays unclipped. Reset here, restore
     // on pop. A stack handles nested captures. No-op when nothing is clipped.
-    private readonly Stack<(Rect[] Clips, Rect Bounds)> _layerClipSaves = new();
+    // The ambient opacity is saved and reset the same way: the layer's content is captured at full
+    // opacity and faded once, by the composite (DrawLayerTexture multiplies its opacity by the scope's).
+    // Capturing it faded too applied an enclosing PushLayer opacity twice (0.5 rendered as 0.25).
+    private readonly Stack<(Rect[] Clips, Rect Bounds, float Opacity)> _layerClipSaves = new();
 
     public ulong PushLayerTexture(ulong frame, ulong handle, float width, float height)
     {
@@ -807,9 +810,10 @@ internal sealed class EtchBackend : IDisposable
             InitialTransform = _currentTransform,
         };
 
-        _layerClipSaves.Push((_clipStack.ToArray(), _currentClipBounds));
+        _layerClipSaves.Push((_clipStack.ToArray(), _currentClipBounds, _currentOpacity));
         _clipStack.Clear();
         _currentClipBounds = default;
+        _currentOpacity = 1f;
         return handle;
     }
 
@@ -819,7 +823,8 @@ internal sealed class EtchBackend : IDisposable
 
         if (_layerClipSaves.Count > 0)
         {
-            var (clips, bounds) = _layerClipSaves.Pop();
+            var (clips, bounds, opacity) = _layerClipSaves.Pop();
+            _currentOpacity = opacity;
             _clipStack.Clear();
             // ToArray() yields top-first; push bottom-first to rebuild the same order.
             for (int i = clips.Length - 1; i >= 0; i--)

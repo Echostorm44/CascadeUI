@@ -107,6 +107,12 @@ internal interface IListViewNode
     int RowIndexAt(float localY);
     /// <summary>A row's top (content coordinates) and height, or null before layout.</summary>
     (float Top, float Height)? RowExtent(int index);
+
+    // ── Context menu (flat lists) ──
+    /// <summary>Whether <see cref="ListView{T}.ItemContextMenu"/> is configured (flat lists only).</summary>
+    bool HasItemContextMenu { get; }
+    /// <summary>The context-menu items for the row at <paramref name="index"/>; empty when there are none.</summary>
+    IReadOnlyList<ContextMenuItem> GetItemContextMenu(int index);
 }
 
 /// <summary>
@@ -321,11 +327,42 @@ public sealed class ListView<T> : Node, IListViewNode
         return this;
     }
 
-    /// <summary>Configures a context menu per item.</summary>
+    /// <summary>
+    /// Gives every row a context menu, built by <paramref name="factory"/> for the row's item when
+    /// the menu opens. Right-clicking a row selects it (on a selectable list) and opens the menu at
+    /// the pointer; the context-menu key or Shift+F10 opens it below the selected row while the
+    /// list has focus, and <see cref="ShowContextMenu"/> opens it from the app's own shortcut.
+    /// Return an empty list for an item that has no menu. Flat lists only.
+    /// </summary>
     public ListView<T> ItemContextMenu(Func<T, IReadOnlyList<ContextMenuItem>> factory)
     {
+        ArgumentNullException.ThrowIfNull(factory);
         contextMenuFactory = factory;
         return this;
+    }
+
+    /// <summary>
+    /// Opens the <see cref="ItemContextMenu"/> of the selected item, below its row — for an app
+    /// that handles the shortcut itself (for example while focus stays in a search box). Keep a
+    /// <see cref="NodeRef{T}"/> to the list to call it. Returns false when nothing is selected,
+    /// no menu is configured, the item's menu is empty, or no window is running.
+    /// </summary>
+    public bool ShowContextMenu()
+    {
+        IListViewNode self = this;
+        return InputDispatcher.Active?.OpenListViewContextMenu(self, self.SelectedIndex, pointer: null) == true;
+    }
+
+    bool IListViewNode.HasItemContextMenu => contextMenuFactory is not null && Sections is null;
+
+    IReadOnlyList<ContextMenuItem> IListViewNode.GetItemContextMenu(int index)
+    {
+        if (contextMenuFactory is null || Sections is not null || index < 0 || index >= Items.Count)
+        {
+            return [];
+        }
+
+        return contextMenuFactory(Items[index]) ?? [];
     }
 
     // ── IListViewNode implementation ──────────────────────────────────

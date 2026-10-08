@@ -7,7 +7,7 @@ namespace Cascade.UI;
 /// in the visual tree. Performs hit testing, tracks hover/press state, and invokes
 /// gesture callbacks and focus management.
 /// </summary>
-internal sealed class InputDispatcher
+internal sealed partial class InputDispatcher
 {
     private const float ExpandIndicatorWidth = 24f;
 
@@ -35,9 +35,6 @@ internal sealed class InputDispatcher
 
     // Open Combobox dropdown state
     private IComboboxNode? openCombobox;
-
-    // Open SplitButton dropdown state
-    private SplitButton? openSplitButton;
 
     // Open DatePicker calendar popup state
     private DatePicker? openDatePicker;
@@ -509,6 +506,11 @@ internal sealed class InputDispatcher
             self.openDateRangePicker = newDrp;
         }
 
+        if (self.menu is { } openMenu && ReferenceEquals(openMenu.Owner, oldNode))
+        {
+            openMenu.Owner = newNode;
+        }
+
         // Controlled input: when the app itself changes the value bound to the focused TextInput
         // (clearing a search box, say), the edit buffer adopts it; otherwise the field would keep
         // showing, and later commit, the stale text. Only a change between renders counts, so a
@@ -535,6 +537,15 @@ internal sealed class InputDispatcher
     internal void HandleMouseEvent(NativeMouseEvent evt)
     {
         if (rootNode == null)
+        {
+            return;
+        }
+
+        current = this;
+        LastInputWasKeyboard = false;
+
+        // An open menu is modal for the pointer: it hovers, activates or dismisses first.
+        if (HandleMenuMouse(evt))
         {
             return;
         }
@@ -767,12 +778,6 @@ internal sealed class InputDispatcher
         if (openCombobox != null)
         {
             UpdateComboboxDropdownHover(evt.X, evt.Y);
-        }
-
-        // Update dropdown hover highlighting if a SplitButton is open
-        if (openSplitButton != null)
-        {
-            UpdateSplitButtonDropdownHover(evt.X, evt.Y);
         }
 
         // Update MenuBar dropdown/label hover highlighting
@@ -1267,6 +1272,13 @@ internal sealed class InputDispatcher
             return;
         }
 
+        // Right-click on a row of a list with an item context menu: select it, open its menu.
+        if (evt.Button == NativeMouseButton.Right && TryOpenListViewContextMenuAt(evt))
+        {
+            ResetPressState();
+            return;
+        }
+
         // Check if the click is on an active toast notification
         if (evt.Button == NativeMouseButton.Left && Toast.HitZones.Count > 0)
         {
@@ -1600,59 +1612,6 @@ internal sealed class InputDispatcher
             openNotificationBell.Close();
             openNotificationBell = null;
             RequestRepaint?.Invoke();
-        }
-
-        // If a SplitButton dropdown is open, check if the click is within it
-        if (openSplitButton != null && evt.Button == NativeMouseButton.Left)
-        {
-            var dropdownBounds = openSplitButton.DropdownBounds;
-            var clickPoint = new Point(evt.X, evt.Y);
-
-            if (dropdownBounds.Width > 0 && dropdownBounds.Contains(clickPoint))
-            {
-                // Click inside dropdown — find and invoke the menu item.
-                // The 6px offset matches the painter's menuPadV top inset
-                // (PaintSplitButtonDropdown) so hit rows line up with the drawn rows.
-                float itemY = dropdownBounds.Y + 6f;
-                float separatorHeight = 9f;
-
-                for (int i = 0; i < openSplitButton.Items.Count; i++)
-                {
-                    var menuItem = openSplitButton.Items[i];
-                    float currentItemHeight = menuItem.Label == null
-                        ? separatorHeight
-                        : openSplitButton.MenuItemHeight;
-
-                    if (evt.Y >= itemY && evt.Y < itemY + currentItemHeight)
-                    {
-                        if (menuItem.Label != null && !menuItem.Disabled && menuItem.OnClick != null)
-                        {
-                            openSplitButton.Close();
-                            openSplitButton = null;
-                            RequestRepaint?.Invoke();
-                            menuItem.OnClick();
-                        }
-                        break;
-                    }
-
-                    itemY += currentItemHeight;
-                }
-
-                return;
-            }
-
-            // Click is on the trigger itself — let InvokeTap handle toggle
-            if (hitNode is SplitButton sb && ReferenceEquals(sb, openSplitButton))
-            {
-                // Fall through to normal flow
-            }
-            else
-            {
-                // Click is outside both trigger and dropdown — close it
-                openSplitButton.Close();
-                openSplitButton = null;
-                RequestRepaint?.Invoke();
-            }
         }
 
         // If a DatePicker calendar is open, check if the click is within it
@@ -2233,10 +2192,10 @@ internal sealed class InputDispatcher
             }
         }
 
-        // Right-click → context menu
+        // Right-click → the node's context-menu handler; ContextMenu.Show(items) opens at the pointer.
         if (evt.Button == NativeMouseButton.Right && hitNode != null)
         {
-            InvokeContextMenu(hitNode);
+            InvokeContextMenuHandler(hitNode, MenuPlacement.AtPoint(new Point(evt.X, evt.Y)));
         }
     }
 
@@ -2538,6 +2497,11 @@ internal sealed class InputDispatcher
             return;
         }
 
+        if (HandleMenuScroll(evt))
+        {
+            return;
+        }
+
         // Scroll within an open Select dropdown
         if (openSelect != null)
         {
@@ -2815,6 +2779,18 @@ internal sealed class InputDispatcher
         }
 #endif
 
+        current = this;
+        if (!isCharacter && evt.Key != Key.None)
+        {
+            LastInputWasKeyboard = true;
+        }
+
+        // An open menu is modal for the keyboard: it takes every key-down until it closes.
+        if (HandleMenuKey(evt))
+        {
+            return;
+        }
+
         // CommandPalette intercepts all input when open
         if (CommandPalette.IsOpen && CommandPalette.Instance != null)
         {
@@ -2946,6 +2922,17 @@ internal sealed class InputDispatcher
             TextAreaEditBuffer = null;
             RequestRepaint?.Invoke();
             return;
+        }
+
+        // The context-menu key / Shift+F10: an app binding wins, then the focused control's menu.
+        if (IsContextMenuKey(evt))
+        {
+            if (DispatchKeyBinding(evt) || OpenContextMenuForFocus())
+            {
+                suppressNextCharacter = true;
+                RequestRepaint?.Invoke();
+                return;
+            }
         }
 
         // TextInput character input — route typed characters, backspace, delete
@@ -4456,23 +4443,17 @@ internal sealed class InputDispatcher
 
             case SplitButton sb when !sb.IsDisabled:
             {
-                // Use AbsoluteBounds (set by painter) for correct viewport-coordinate math
+                // Use AbsoluteBounds (set by painter) for correct viewport-coordinate math.
+                // The arrow opens the shared menu anchored below the button; a click on the
+                // arrow while it is open is taken by the menu (outside its panel) and closes it.
                 var absBounds = sb.AbsoluteBounds;
                 float clickLocalX = lastMousePosition.X - absBounds.X;
                 if (clickLocalX >= sb.ArrowZoneX)
                 {
-                    // Arrow zone — toggle dropdown
-                    sb.ToggleOpen();
-                    openSplitButton = sb.IsOpen ? sb : null;
+                    OpenSplitButtonMenu(sb, highlightFirst: false);
                 }
                 else
                 {
-                    // Primary zone — close dropdown if open, invoke action
-                    if (sb.IsOpen)
-                    {
-                        sb.Close();
-                        openSplitButton = null;
-                    }
                     sb.OnClick();
                 }
                 RequestRepaint?.Invoke();
@@ -7468,58 +7449,6 @@ internal sealed class InputDispatcher
         }
     }
 
-    private void UpdateSplitButtonDropdownHover(float x, float y)
-    {
-        if (openSplitButton == null)
-        {
-            return;
-        }
-
-        var dropdownBounds = openSplitButton.DropdownBounds;
-        if (dropdownBounds.Width <= 0 || openSplitButton.Items.Count == 0)
-        {
-            return;
-        }
-
-        var point = new Point(x, y);
-        if (dropdownBounds.Contains(point))
-        {
-            // Walk through items to find which one the cursor is over.
-            // The 6px offset matches the painter's menuPadV top inset so the
-            // highlighted row matches the row the cursor is actually over.
-            float itemY = dropdownBounds.Y + 6f;
-            float separatorHeight = 9f;
-
-            for (int i = 0; i < openSplitButton.Items.Count; i++)
-            {
-                var menuItem = openSplitButton.Items[i];
-                float currentItemHeight = menuItem.Label == null
-                    ? separatorHeight
-                    : openSplitButton.MenuItemHeight;
-
-                if (y >= itemY && y < itemY + currentItemHeight)
-                {
-                    // Don't highlight separators or disabled items
-                    int newIndex = (menuItem.Label != null && !menuItem.Disabled) ? i : -1;
-                    if (openSplitButton.HighlightedIndex != newIndex)
-                    {
-                        openSplitButton.HighlightedIndex = newIndex;
-                        RequestRepaint?.Invoke();
-                    }
-                    return;
-                }
-
-                itemY += currentItemHeight;
-            }
-        }
-
-        if (openSplitButton.HighlightedIndex != -1)
-        {
-            openSplitButton.HighlightedIndex = -1;
-            RequestRepaint?.Invoke();
-        }
-    }
-
     private void UpdateMenuBarHover(float x, float y)
     {
         if (openMenuBar == null)
@@ -7983,17 +7912,6 @@ internal sealed class InputDispatcher
         };
     }
 
-    private static void InvokeContextMenu(Node node)
-    {
-        // Check Button-specific context menu
-        if (node is Button { OnContextMenuHandler: not null } btn)
-        {
-            btn.OnContextMenuHandler();
-            return;
-        }
-
-        InvokeGesture(node, g => g.ContextMenu);
-    }
 
     private static void InvokePointerEnter(Node node)
     {

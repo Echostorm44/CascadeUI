@@ -360,6 +360,24 @@ internal static class McpToolRegistry
                         ["interaction"] = "click",
                     }),
                 new McpCliVerbSpec(
+                    Verb: "right-click",
+                    HelpSummary: "Simulate a right-click (secondary button) on a node, e.g. to open its context menu (use --x/--y for a point)",
+                    Positionals:
+                    [
+                        new CliPositionalMapping("node_id", CliValueKind.String),
+                    ],
+                    Options:
+                    [
+                        new CliOptionMapping("--x", "x", CliValueKind.Double),
+                        new CliOptionMapping("--y", "y", CliValueKind.Double),
+                        new CliOptionMapping("--coord-space", "coord_space", CliValueKind.String),
+                        new CliOptionMapping("--wait-frames", "wait_frames", CliValueKind.Int),
+                    ],
+                    ConstantArguments: new Dictionary<string, JsonNode>
+                    {
+                        ["interaction"] = "right_click",
+                    }),
+                new McpCliVerbSpec(
                     Verb: "hover",
                     HelpSummary: "Hover the pointer over a node (use --x/--y for a point; drives tooltips/hover states)",
                     Positionals:

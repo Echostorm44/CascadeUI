@@ -900,7 +900,98 @@ internal static class NodeTreeWalker
             };
         }
 
-        return BuildAccessibilityNode(mountedRoot);
+        var root = BuildAccessibilityNode(mountedRoot);
+        if (inputDispatcher?.Menu is not { IsOpen: true } menu)
+        {
+            return root;
+        }
+
+        // The open menu is a painted overlay, not a node: expose it as menu / menuitem
+        // elements after the tree, one menu per open panel (submenus included).
+        var children = new List<AccessibleNode>(root.Children);
+        for (int level = 0; level < menu.Levels.Count; level++)
+        {
+            children.Add(BuildMenuAccessibilityNode(menu, level));
+        }
+
+        return new AccessibleNode
+        {
+            NodeId = root.NodeId,
+            Role = root.Role,
+            Label = root.Label,
+            Description = root.Description,
+            Focusable = root.Focusable,
+            Focused = root.Focused,
+            Disabled = root.Disabled,
+            TabIndex = root.TabIndex,
+            LiveRegion = root.LiveRegion,
+            StateProperties = root.StateProperties,
+            Bounds = root.Bounds,
+            Children = children,
+        };
+    }
+
+    // A submenu is named by the item that opened it; the root by its split button, else "Context menu".
+    private static string MenuAccessibleLabel(MenuOverlay menu, int levelIndex)
+    {
+        if (levelIndex > 0)
+        {
+            int parent = menu.Levels[levelIndex].ParentIndex;
+            return menu.Levels[levelIndex - 1].Items[parent].Label ?? "Submenu";
+        }
+
+        return menu.Owner is SplitButton owner ? owner.Label.Resolve() : "Context menu";
+    }
+
+    private static AccessibleNode BuildMenuAccessibilityNode(MenuOverlay menu, int levelIndex)
+    {
+        var level = menu.Levels[levelIndex];
+        var items = new List<AccessibleNode>(level.Items.Length);
+        for (int i = 0; i < level.Items.Length; i++)
+        {
+            var item = level.Items[i];
+            if (item.Label is null)
+            {
+                continue;
+            }
+
+            var states = new Dictionary<string, string>();
+            if (!string.IsNullOrEmpty(item.Shortcut))
+            {
+                states["shortcut"] = item.Shortcut;
+            }
+            if (item.Items is not null)
+            {
+                states["has_popup"] = "menu";
+                states["expanded"] = menu.Levels.Count > levelIndex + 1 && menu.Levels[levelIndex + 1].ParentIndex == i ? "true" : "false";
+            }
+            if (item.Style == MenuItemStyle.Destructive)
+            {
+                states["destructive"] = "true";
+            }
+
+            var bounds = level.Bounds;
+            items.Add(new AccessibleNode
+            {
+                NodeId = $"menu-{levelIndex}-item-{i}",
+                Role = AccessibleRole.MenuItem,
+                Label = item.Label,
+                Focusable = !item.Disabled,
+                Focused = i == level.Highlighted,
+                Disabled = item.Disabled,
+                StateProperties = states,
+                Bounds = new Rect(bounds.X, level.ItemTop(i), bounds.Width, level.ItemHeights[i]),
+            });
+        }
+
+        return new AccessibleNode
+        {
+            NodeId = $"menu-{levelIndex}",
+            Role = AccessibleRole.Menu,
+            Label = MenuAccessibleLabel(menu, levelIndex),
+            Bounds = level.Bounds,
+            Children = items,
+        };
     }
 
     /// <summary>Gets colors for contrast checking.</summary>

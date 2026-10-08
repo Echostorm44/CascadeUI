@@ -332,6 +332,10 @@ internal sealed class EtchBackendProvider : IDisposable
 
     public AtlasRegionCapture? CaptureAtlasRegion(int u, int v, int width, int height)
     {
+        if (_lastFrameCpu && _cpu is not null)
+        {
+            return _cpu.CaptureAtlasRegion(u, v, width, height);
+        }
         return _etchGpuPresenter?.CaptureAtlasRegion(u, v, width, height);
     }
 

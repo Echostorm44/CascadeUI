@@ -385,10 +385,9 @@ internal static class PresentMonitor
 
     /// <summary>
     /// True when the most recently presented frame was produced by the CPU
-    /// software-render fallback rather than the GPU presenter. CPU frames take
-    /// an order of magnitude longer to produce (WP-3514: seconds, not
-    /// milliseconds), so frame-synchronous MCP waits use a much larger timeout
-    /// in this mode instead of spuriously reporting <c>timed_out</c> under load
+    /// render path rather than the GPU presenter. A first CPU frame rasterizes
+    /// everything it shows on the CPU, so frame-synchronous MCP waits allow more
+    /// time in this mode instead of spuriously reporting <c>timed_out</c> under load
     /// (WP-3516). Set by the render backend at each present.
     /// </summary>
     internal static bool CpuRenderActive

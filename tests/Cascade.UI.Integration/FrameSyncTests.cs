@@ -228,9 +228,9 @@ public class FrameSyncCpuFallbackTests
     /// WP-3513: with no GPU presenter (CASCADE_FORCE_CPU=1) the CLI screenshot
     /// must still return the CPU-rendered frame — a no-GPU machine has to be
     /// inspectable. Before WP-3513 this path returned "Screenshot capture
-    /// failed". The frame is the reduced-resolution CPU render (640-capped
-    /// until WP-3514); this test only requires a real captured frame, not GPU
-    /// fidelity.
+    /// failed". The frame is the CPU framebuffer at native resolution (GPU/CPU
+    /// parity is GoldenText's CpuParityTests); this test only requires a real
+    /// captured frame.
     /// </summary>
     [Test]
     public async Task Screenshot_UnderCpuFallback_ReturnsRenderedFrame()
@@ -266,8 +266,8 @@ public class FrameSyncCpuFallbackTests
 
     /// <summary>
     /// WP-3514 acceptance: the CPU fallback frame is non-trivially populated. The
-    /// whole frame goes through the CPU rasterizer + native-resolution text pass +
-    /// retained-layer compositor. A blank frame, a renderer that drops shape/chart
+    /// whole frame goes through Etch's CPU composer (geometry, text and retained
+    /// layers in one draw list). A blank frame, a renderer that drops shape/chart
     /// geometry, or a CPU path that never composites the ScrollView layer would
     /// each collapse ink coverage and fail this fast. The lower-region check
     /// specifically guards the retained-layer compositing (the ScrollView rows).

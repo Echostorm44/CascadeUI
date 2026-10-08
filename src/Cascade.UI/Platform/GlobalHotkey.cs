@@ -174,7 +174,13 @@ public enum Key
     NumPad5, NumPad6, NumPad7, NumPad8, NumPad9,
     NumPadAdd, NumPadSubtract, NumPadMultiply, NumPadDivide, NumPadDecimal, NumPadEnter,
     Semicolon, Equals, Comma, Minus, Period, Slash, Backtick,
-    LeftBracket, Backslash, RightBracket, Quote
+    LeftBracket, Backslash, RightBracket, Quote,
+
+    /// <summary>
+    /// The context-menu (application) key: VK_APPS on Windows, XK_Menu on X11. Opens the focused
+    /// control's context menu, as Shift+F10 does.
+    /// </summary>
+    Apps
 }
 
 /// <summary>

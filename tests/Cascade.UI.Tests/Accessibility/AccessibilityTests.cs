@@ -54,6 +54,20 @@ public class AccessibilityTests
     }
 
     [Test]
+    public async Task AccessibleRoleAndLabel_OnAnyNode_OverrideTheInferredOnes()
+    {
+        // A clickable row (label + key caps) that acts as a button: it must say so to assistive tech.
+        var row = new Row(children: [new Label("Paste"), new Label("↵")])
+            .OnTap(() => { })
+            .AccessibleRole(AccessibleRole.Button)
+            .AccessibleLabel("Paste");
+
+        await Assert.That(AccessibilityTreeBuilder.ResolveRole(row)).IsEqualTo(AccessibleRole.Button);
+        await Assert.That(AccessibilityTreeBuilder.ResolveLabel(row)).IsEqualTo("Paste");
+        await Assert.That(AccessibilityTreeBuilder.ResolveRole(new Row(children: []))).IsNotEqualTo(AccessibleRole.Button);
+    }
+
+    [Test]
     public async Task ResolveLabel_IconButton_FallsBackToTooltipThenIconName()
     {
         var bare = new IconButton(TrashIcon, () => { });

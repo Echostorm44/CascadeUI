@@ -156,6 +156,7 @@ internal sealed class NsAccessibilityBridge : IPlatformAccessibilityBridge
             AccessibleRole.TabPanel => "AXGroup",
             AccessibleRole.MenuBar => "AXMenuBar",
             AccessibleRole.MenuItem => "AXMenuItem",
+            AccessibleRole.Menu => "AXMenu",
             AccessibleRole.Dialog => "AXSheet",
             AccessibleRole.AlertDialog => "AXSheet",
             AccessibleRole.ProgressBar => "AXProgressIndicator",

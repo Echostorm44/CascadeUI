@@ -405,6 +405,7 @@ internal static class AccessibilityTreeBuilder
             "TabPanel" or "TabContent" => AccessibleRole.TabPanel,
             "MenuBar" => AccessibleRole.MenuBar,
             "MenuItem" or "MenuEntry" => AccessibleRole.MenuItem,
+            "Menu" or "ContextMenu" => AccessibleRole.Menu,
             "Dialog" or "Modal" => AccessibleRole.Dialog,
             "AlertDialog" => AccessibleRole.AlertDialog,
             "ProgressBar" or "Progress" => AccessibleRole.ProgressBar,

@@ -41,6 +41,12 @@ public sealed class AccessibleNode
     /// <summary>ARIA-equivalent state properties.</summary>
     public IReadOnlyDictionary<string, string> StateProperties { get; init; } = new Dictionary<string, string>();
 
+    /// <summary>
+    /// Window-logical bounds, when the element is not a node of the tree (e.g. an open menu and
+    /// its items, which are painted overlays). Null for tree nodes.
+    /// </summary>
+    public Rect? Bounds { get; init; }
+
     /// <summary>Child nodes in the accessibility tree.</summary>
     public IReadOnlyList<AccessibleNode> Children { get; init; } = [];
 }

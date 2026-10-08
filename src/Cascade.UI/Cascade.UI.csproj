@@ -146,11 +146,7 @@
     <ProjectReference Include="..\..\..\Etch\src\Etch.Text\Etch.Text.csproj" />
     <ProjectReference Include="..\..\..\Etch\src\Etch.Scene\Etch.Scene.csproj" />
     <ProjectReference Include="..\..\..\Etch\src\Etch.Geometry\Etch.Geometry.csproj" />
-    <ProjectReference Include="..\..\..\Etch\src\Etch.Testing\Etch.Testing.csproj" />
     <ProjectReference Include="..\..\..\Etch\src\Etch.Gpu\Etch.Gpu.csproj" />
-    <ProjectReference Include="..\..\..\Etch\src\Etch.Raster.Cpu\Etch.Raster.Cpu.csproj" />
-    <ProjectReference Include="..\..\..\Etch\src\Etch.Gpu.Compositor\Etch.Gpu.Compositor.csproj" />
-    <ProjectReference Include="..\..\..\Etch\src\Etch.Tiling\Etch.Tiling.csproj" />
     <ProjectReference Include="..\..\..\Etch\src\Etch.Compose\Etch.Compose.csproj" />
   </ItemGroup>
 

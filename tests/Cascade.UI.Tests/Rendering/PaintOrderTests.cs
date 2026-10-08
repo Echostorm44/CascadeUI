@@ -4,9 +4,9 @@ using Cascade.UI.Backend.Etch;
 namespace Cascade.UI.Tests.Rendering;
 
 /// <summary>
-/// The CPU side of painting in order on the GPU path: glyph runs remember where they were painted
-/// among the shapes, the provider maps every command to its position in the scene, retained
-/// layers keep their image draws across frames. The batcher itself is tested in Etch.Compose.Tests.
+/// Painting in order: glyph runs remember where they were painted among the shapes, every op kind
+/// records into a draw list (main stream and retained layers), retained layers keep their image
+/// draws across frames. The batcher itself is tested in Etch.Compose.Tests.
 /// The GPU pixels themselves are covered by Cascade.UI.GoldenText's PaintOrderTests.
 /// </summary>
 public class PaintOrderTests
@@ -48,46 +48,22 @@ public class PaintOrderTests
     }
 
     [Test]
-    public async Task SceneMarks_PointAtEachCommandsFirstSceneCommand()
+    public async Task EveryOpKind_RecordsAndRendersOnTheCpu()
     {
-        using var provider = new EtchBackendProvider();
-        provider.BeginFrame(200, 200);
-        var backend = provider.Backend;
-        ulong image = backend.UploadImage(new byte[4 * 4 * 4], 4, 4);
-
-        backend.DrawRect(0, 0, 0, 10, 10, 0, Red, null, 0);      // FillRect
-        backend.DrawRect(0, 0, 0, 10, 10, 0, Red, Blue, 1);      // FillRect + StrokePath
-        backend.PushClip(0, 0, 0, 50, 50);                       // PushClip
-        backend.DrawImage(0, image, 0, 0, 4, 4, 1);              // DrawImage
-        backend.PopClip(0);                                      // PopClip
-
-        provider.BuildSceneBuffer(ColorValue.FromRgba(1, 1, 1));
-
-        // The scene opens with BeginFrame, SetTransform and the background FillRect.
-        int[] expected = [3, 4, 6, 7, 8, 9];
-        var marks = provider.SceneMarks;
-        await Assert.That(marks).IsNotNull();
-        await Assert.That(marks!.ToArray()).IsEquivalentTo(expected);
-    }
-
-    [Test]
-    public async Task SceneMarks_StayExactForEveryOpKind()
-    {
-        // A scene-writing call added to AppendSceneOp without counting it would make the marks
-        // disagree with the scene; the provider then drops them (SceneMarks == null).
+        // Every op kind goes through the recorder into a draw list the CPU composer executes.
         using var provider = new EtchBackendProvider();
         provider.BeginFrame(200, 200);
         DrawEveryOpKind(provider.Backend);
 
-        provider.BuildSceneBuffer(ColorValue.FromRgba(1, 1, 1));
+        var list = RenderCpu(provider);
 
-        var marks = provider.SceneMarks;
-        await Assert.That(marks).IsNotNull();
-        await Assert.That(marks!.Count).IsEqualTo(provider.Backend.Commands.Count + 1);
+        await Assert.That(list.Shapes.Count).IsGreaterThan(10);
+        await Assert.That(list.ImageInstances.Count).IsEqualTo(1);
+        await Assert.That(list.Blurs.Count).IsEqualTo(1);
     }
 
     [Test]
-    public async Task LayerSceneMarks_StayExactForEveryOpKind()
+    public async Task EveryOpKindInALayer_RecordsAndRendersOnTheCpu()
     {
         using var provider = new EtchBackendProvider();
         provider.BeginFrame(200, 200);
@@ -95,16 +71,14 @@ public class PaintOrderTests
         ulong handle = backend.NextLayerHandle();
         backend.PushLayerTexture(0, handle, 200, 200);
         DrawEveryOpKind(backend);
-        int layerCommands = backend.LayerCaptures[handle].Commands.Count;
         backend.PopLayerTexture(0, handle);
         backend.DrawLayerTexture(0, handle, 0, 0, 1);
 
-        provider.BuildSceneBuffer(ColorValue.FromRgba(1, 1, 1));
+        var list = RenderCpu(provider);
 
-        await Assert.That(provider.ActiveLayers.Count).IsEqualTo(1);
-        var marks = provider.ActiveLayers[0].SceneMarks;
-        await Assert.That(marks).IsNotNull();
-        await Assert.That(marks!.Count).IsEqualTo(layerCommands + 1);
+        await Assert.That(list.Shapes.Count).IsGreaterThan(10);
+        await Assert.That(list.ImageInstances.Count).IsEqualTo(1);
+        await Assert.That(list.Blurs.Count).IsEqualTo(1);
     }
 
     [Test]
@@ -114,7 +88,6 @@ public class PaintOrderTests
         // do not recapture it (scrolling), so its image draws must not alias recycled ops.
         using var provider = new EtchBackendProvider();
         var backend = provider.Backend;
-        var white = ColorValue.FromRgba(1, 1, 1);
 
         provider.BeginFrame(200, 200);
         ulong image = backend.UploadImage(new byte[4 * 4 * 4], 4, 4);
@@ -123,7 +96,7 @@ public class PaintOrderTests
         backend.DrawImage(0, image, 10, 20, 30, 40, 1);
         backend.PopLayerTexture(0, handle);
         backend.DrawLayerTexture(0, handle, 0, 0, 1);
-        provider.BuildSceneBuffer(white);
+        RenderCpu(provider);
 
         // Next frame: the layer is only composited (scrolled), and the recycled ops say otherwise.
         provider.EndFrame(0);
@@ -131,19 +104,25 @@ public class PaintOrderTests
         backend.DrawRect(0, 1, 2, 3, 4, 0, Red, null, 0);
         backend.DrawRect(0, 5, 6, 7, 8, 0, Red, null, 0);
         backend.DrawLayerTexture(0, handle, 0, -15, 1);
-        provider.BuildSceneBuffer(white);
+        var list = RenderCpu(provider);
 
-        await Assert.That(provider.ActiveLayers.Count).IsEqualTo(1);
-        var images = provider.ActiveLayers[0].ImageCommands;
-        await Assert.That(images.Count).IsEqualTo(1);
-        await Assert.That(images[0].ImageHandle).IsEqualTo(image);
-        await Assert.That(images[0].X).IsEqualTo(10f);
-        await Assert.That(images[0].Y).IsEqualTo(20f);
-        await Assert.That(images[0].W).IsEqualTo(30f);
-        await Assert.That(images[0].H).IsEqualTo(40f);
-        await Assert.That(images[0].CommandIndex).IsEqualTo(0);
+        await Assert.That(list.ImageInstances.Count).IsEqualTo(1);
+        var drawn = list.ImageInstances[0];
+        // The image's (10, 20, 30, 40) rect, scrolled up 15: u = 0 at x = 10, 1 at x = 40; v = 0 at y = 5, 1 at y = 45.
+        await Assert.That(Math.Abs(drawn.Ux * 10 + drawn.U0)).IsLessThan(1e-5f);
+        await Assert.That(Math.Abs(drawn.Ux * 40 + drawn.U0 - 1)).IsLessThan(1e-5f);
+        await Assert.That(Math.Abs(drawn.Vy * 5 + drawn.V0)).IsLessThan(1e-5f);
+        await Assert.That(Math.Abs(drawn.Vy * 45 + drawn.V0 - 1)).IsLessThan(1e-5f);
     }
 
+    private static global::Etch.Compose.DrawList RenderCpu(EtchBackendProvider provider)
+    {
+        provider.RecordFrame(ColorValue.FromRgba(1, 1, 1));
+        using var renderer = new EtchCpuRenderer();
+        renderer.Render(provider.MainRecording, new global::Etch.Compose.ComposeParameters { TextGamma = 1.5f, LightWeight = 1f },
+            200, 200, null, null);
+        return renderer.DrawList;
+    }
     private static void DrawGlyphRun(EtchBackend backend)
     {
         // DrawGlyphs records the op without resolving the font, so any handle will do.

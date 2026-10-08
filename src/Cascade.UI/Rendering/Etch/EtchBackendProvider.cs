@@ -5,91 +5,9 @@ using System.Runtime.InteropServices;
 using Cascade.UI;
 using Cascade.UI.Diagnostics;
 using Etch.Scene;
-using Etch.Testing;
 using EGeometry = Etch.Geometry;
 
 namespace Cascade.UI.Backend.Etch;
-
-/// <summary>
-/// Information needed to render a cached layer texture during compositing.
-/// </summary>
-internal readonly struct LayerRenderInfo
-{
-    public readonly ulong LayerHandle;
-    public readonly SceneBuffer Scene;
-    public readonly float OffsetX;
-    public readonly float OffsetY;
-    public readonly float Opacity;
-    public readonly IReadOnlyList<EtchBackend.GlyphOp> GlyphCommands;
-
-    /// <summary>
-    /// The layer's <c>DrawImage</c> ops paired with the full local→device transform
-    /// in effect where each was captured (the layer's initial transform composed with
-    /// any intra-layer <c>PushTransform</c>s — the same chain the layer's shapes are
-    /// baked through). Unlike glyphs, whose positions are baked to absolute device
-    /// coords at capture time, image ops store raw rects, so the presenter applies
-    /// this transform then the scroll delta to composite them. Empty when the layer
-    /// draws no images.
-    /// </summary>
-    public readonly IReadOnlyList<LayerImageOp> ImageCommands;
-
-    /// <summary>
-    /// Paint-order map for <see cref="Scene"/>: entry <c>k</c> is the number of scene commands
-    /// emitted before the layer's captured command <c>k</c>, with one extra entry for the end of
-    /// the stream (see <see cref="EtchBackendProvider.SceneMarks"/>). Null when it could not be built, in which case
-    /// the presenter draws the layer's text and images over all of its shapes.
-    /// </summary>
-    public readonly IReadOnlyList<int>? SceneMarks;
-
-    /// <summary>
-    /// Screen-space viewport clip the layer is composited into (the ScrollView
-    /// viewport), or null when the layer is drawn unclipped. The presenter
-    /// intersects composited layer shapes and glyphs with this so retained
-    /// layer content does not bleed outside its viewport (WP-3517).
-    /// </summary>
-    public readonly Cascade.UI.Rect? ViewportClip;
-
-    public LayerRenderInfo(ulong handle, SceneBuffer scene, float x, float y, float opacity,
-        IReadOnlyList<EtchBackend.GlyphOp> glyphCommands,
-        IReadOnlyList<LayerImageOp> imageCommands,
-        IReadOnlyList<int>? sceneMarks,
-        Cascade.UI.Rect? viewportClip)
-    {
-        LayerHandle = handle;
-        Scene = scene;
-        OffsetX = x;
-        OffsetY = y;
-        Opacity = opacity;
-        GlyphCommands = glyphCommands;
-        ImageCommands = imageCommands;
-        SceneMarks = sceneMarks;
-        ViewportClip = viewportClip;
-    }
-}
-
-/// <summary>
-/// One image drawn inside a retained layer, copied out of the layer's captured
-/// <see cref="EtchBackend.SceneOp"/> when the layer is (re)built. It must be a copy: SceneOps
-/// come from the backend's per-frame arena and are recycled on the next frame, while the layer
-/// keeps compositing these on frames that do not recapture it (scrolling).
-/// </summary>
-/// <param name="ImageHandle">Backend image handle.</param>
-/// <param name="X">Destination rect, layer-local units.</param>
-/// <param name="Y">Destination rect, layer-local units.</param>
-/// <param name="W">Destination rect, layer-local units.</param>
-/// <param name="H">Destination rect, layer-local units.</param>
-/// <param name="Transform">Local→device transform in force where the image was captured.</param>
-/// <param name="Clip">Device-space intersection of the clips around the image, or null.</param>
-/// <param name="CommandIndex">Index of the image's op in the layer's captured command stream (paint order).</param>
-internal readonly record struct LayerImageOp(
-    ulong ImageHandle,
-    float X,
-    float Y,
-    float W,
-    float H,
-    Matrix3x2 Transform,
-    Cascade.UI.Rect? Clip,
-    int CommandIndex);
 
 internal sealed class EtchBackendProvider : IDisposable
 {
@@ -107,53 +25,11 @@ internal sealed class EtchBackendProvider : IDisposable
     // WP-3537: persisted light-on-dark weight factor (0 = linear, 1 = full weight).
     private float _lightWeight = EtchGpuPresenter.DefaultLightWeight;
 
-    // WP-3513: retains the last CPU-rendered frame (RGBA, native buffer size)
-    // when there is no GPU presenter, so CaptureFrame() — and therefore
-    // `mcp screenshot` — works on a no-GPU machine. One reused buffer; no
-    // per-frame allocation in the steady state.
-    private byte[]? _cpuCaptureBuffer;
-    private int _cpuCaptureWidth;
-    private int _cpuCaptureHeight;
 
-    // Reusable transform/clip state for AppendSceneOp — avoids per-build allocations
-    // and is shared (sequentially) by the live frame and each retained-layer build.
-    private readonly SceneAppendState _appendState = new();
-
-    // SceneBuffer cache — avoid rebuilding when commands and viewport are unchanged
-    private SceneBuffer? _cachedSceneBuffer;
-    private ulong _cachedSceneHash;
-    private ColorValue _cachedBaseColor;
-    private uint _cachedWidth;
-    private uint _cachedHeight;
-    private float _cachedScale;
-    private List<LayerRenderInfo> _cachedActiveLayers = new();
-
-    // Layer SceneBuffer cache — each layer is cached independently by its command hash.
-    // Also preserves glyph and image commands (plus the layer's initial transform) so
-    // EtchGpuPresenter can re-rasterize text and re-blit icons during scroll even when
-    // LayerCaptures has been cleared by Reset().
-    private readonly Dictionary<ulong, (SceneBuffer Scene, ulong Hash,
-        List<EtchBackend.GlyphOp> GlyphCommands,
-        List<LayerImageOp> ImageCommands,
-        int[]? SceneMarks)> _cachedLayerScenes = new();
-
-    // Active layers for the current frame — passed to EtchGpuPresenter for compositing
-    private readonly List<LayerRenderInfo> _activeLayers = new();
-
-    // Paint-order map for _cachedSceneBuffer, rebuilt with it. See SceneMarks.
-    private readonly List<int> _sceneMarks = new();
-    private bool _sceneMarksValid;
-
-    /// <summary>
-    /// Paint-order map for the scene <see cref="BuildSceneBuffer"/> last built: entry <c>k</c> is the
-    /// number of commands the scene held before backend command <c>k</c> was appended, plus one
-    /// final entry for the end of the stream. Glyphs and images never become scene geometry, so
-    /// this is what lets the GPU presenter draw a glyph run (<see cref="EtchBackend.GlyphOp.CommandIndex"/>)
-    /// or an image between the shapes painted before and after it. Null if the count kept while
-    /// building disagreed with the finished scene — the presenter then falls back to drawing text
-    /// and images over all shapes rather than interleaving them wrongly.
-    /// </summary>
-    internal IReadOnlyList<int>? SceneMarks => _sceneMarksValid ? _sceneMarks : null;
+    // The CPU renderer (created on the first CPU frame): renders the recorded frame at native
+    // resolution with Etch's CPU composer and presents it through the GPU presenter or GDI.
+    private EtchCpuRenderer? _cpu;
+    private bool _lastFrameCpu;
 
     // The frame as recorded for the composers: the main stream plus retained layers (owned by the
     // recorder, replayed at their scroll offsets).
@@ -257,6 +133,7 @@ internal sealed class EtchBackendProvider : IDisposable
         _width = width;
         _height = height;
         _etchGpuPresenter?.Resize(width, height);
+        _cpu?.InvalidatePresentation();
     }
 
     /// <summary>
@@ -266,6 +143,9 @@ internal sealed class EtchBackendProvider : IDisposable
     public void SuspendSurface()
     {
         _etchGpuPresenter?.Resize(1, 1);
+        _etchGpuPresenter?.ReleaseCpuFrameTexture();
+        // The CPU framebuffer (8 MB at 1080p) and its tile buffers go too; the next frame renders in full.
+        _cpu?.Release();
     }
 
     /// <summary>The window is visible again: restore the surface to the window size.</summary>
@@ -293,32 +173,6 @@ internal sealed class EtchBackendProvider : IDisposable
     private int presentErrorCount;
     private const int MaxPresentErrorLogEntries = 100;
 
-    // RENDER-001 fail-loud guard. The live and layer render paths each dispatch on
-    // SceneOp kind; a kind one of them does not handle used to drop silently (that is
-    // how the retained-layer image gap shipped invisibly). This sink asserts in Debug
-    // (so a parity gap fails tests and dev builds immediately) and throttled-logs in
-    // Release, so the next missed primitive is a loud failure, never a missing pixel.
-    private int unhandledOpCount;
-    private const int MaxUnhandledOpLogEntries = 50;
-
-    private void ReportUnhandledOp(EtchBackend.OpKind kind, string context)
-    {
-        System.Diagnostics.Debug.Assert(false,
-            $"Unhandled SceneOp {kind} in {context} — live/layer render parity gap (RENDER-001).");
-        unhandledOpCount++;
-        if (unhandledOpCount > MaxUnhandledOpLogEntries)
-        {
-            return;
-        }
-        var path = System.IO.Path.Combine(System.AppContext.BaseDirectory, "etch-backend-error.log");
-        System.IO.File.AppendAllText(path,
-            $"[{DateTime.Now:O}] Unhandled SceneOp {kind} in {context} — render parity gap (RENDER-001)\n");
-        if (unhandledOpCount == MaxUnhandledOpLogEntries)
-        {
-            System.IO.File.AppendAllText(path,
-                $"[{DateTime.Now:O}] {MaxUnhandledOpLogEntries} unhandled-op entries logged — further entries suppressed\n");
-        }
-    }
 
     // CASCADE_CAPTURE=<path>: write the latest presented frame to a PNG (overwritten each
     // present). A headless/CI-friendly way to prove the window actually rendered (not just
@@ -378,28 +232,13 @@ internal sealed class EtchBackendProvider : IDisposable
 
     public ImageData? CaptureFrame()
     {
-        var gpuFrame = _etchGpuPresenter?.CaptureFrame();
-        if (gpuFrame is not null)
+        // A CPU frame is captured from the CPU framebuffer itself: native resolution, exactly
+        // the presented pixels, no GPU readback.
+        if (_lastFrameCpu && _cpu is not null)
         {
-            return gpuFrame;
+            return _cpu.CaptureFrame();
         }
-
-        // No GPU presenter (CASCADE_FORCE_CPU=1 or real GPU init failure):
-        // serve the retained CPU frame at its native (reduced) buffer size.
-        // It is the 640-capped render until WP-3514 lands native-res CPU
-        // fidelity; do not upscale here — a screenshot must not fake detail.
-        if (_cpuCaptureBuffer is not null && _cpuCaptureWidth > 0 && _cpuCaptureHeight > 0)
-        {
-            return new ImageData
-            {
-                Pixels = _cpuCaptureBuffer,
-                Width = _cpuCaptureWidth,
-                Height = _cpuCaptureHeight,
-                Stride = _cpuCaptureWidth * 4,
-            };
-        }
-
-        return null;
+        return _etchGpuPresenter?.CaptureFrame();
     }
 
     public void RequestCapture()
@@ -563,7 +402,7 @@ internal sealed class EtchBackendProvider : IDisposable
 
     /// <summary>
     /// Replays a backend command list into device-space draw records,
-    /// mirroring the transform/clip semantics of <see cref="BuildSceneBuffer"/>:
+    /// mirroring the transform/clip semantics the frame is recorded with (<see cref="EtchRecorder"/>):
     /// transforms compose onto the current matrix, clip bounds are the
     /// axis-aligned intersection of the clip stack.
     /// </summary>
@@ -855,6 +694,7 @@ internal sealed class EtchBackendProvider : IDisposable
                 IndexLayerComposites();
             }
             _etchGpuPresenter.PresentRecording(_mainRecording, parameters, captureDraws ? pendingGlyphs : null, captureDraws ? _layerCompositeIndex : null);
+            _lastFrameCpu = false;
             if (captureDraws)
             {
                 PublishDrawSnapshot(captureBaseline);
@@ -862,975 +702,74 @@ internal sealed class EtchBackendProvider : IDisposable
             return;
         }
 
-        // WP-3514: the single-threaded CPU rasterizer renders this full scene at
-        // native resolution in ~12.8 s/frame (measured: HelloCascade, 1920x1080)
-        // — far too slow per frame — so the cap stays for GEOMETRY, which is then
-        // upscaled, while TEXT is rasterized at native resolution in a second
-        // pass. Text was the worst of the upscale blur; geometry tolerates the
-        // stretch. (A faster native path would need an O(n) classified-scene
-        // renderer; tracked separately.)
-        const int MaxGeomSize = 640;
-        int gw, gh;
-        if (_width >= _height)
+        // CPU path (no GPU, CASCADE_FORCE_CPU=1, or render_mode=cpu): the same recording, rendered
+        // at native resolution by Etch's CPU composer — the GPU path's draw list, so both agree to
+        // within the parity tolerance — re-rendering and presenting only the tiles that changed.
+        long cpuStart = System.Diagnostics.Stopwatch.GetTimestamp();
+        RecordFrame(baseColor, captureDraws);
+        double recordMs = System.Diagnostics.Stopwatch.GetElapsedTime(cpuStart).TotalMilliseconds;
+        if (captureDraws)
         {
-            gw = Math.Min((int)_width, MaxGeomSize);
-            gh = Math.Max(1, (int)(_height * (float)gw / _width));
+            IndexLayerComposites();
         }
-        else
+        var cpuParameters = new global::Etch.Compose.ComposeParameters
         {
-            gh = Math.Min((int)_height, MaxGeomSize);
-            gw = Math.Max(1, (int)(_width * (float)gh / _height));
-        }
-        gw = Math.Max(1, gw);
-        gh = Math.Max(1, gh);
-        float geomScale = (float)gw / _width;
-
-        int rw = Math.Max(1, (int)_width);
-        int rh = Math.Max(1, (int)_height);
-
-        var cpuSw = DebugLog.IsEnabled(DebugLogCategory.Present) ? System.Diagnostics.Stopwatch.StartNew() : null;
-
-        var scene = BuildSceneBuffer(baseColor, geomScale);
-        var geomPixels = SceneCpuRenderer.RenderToOutput(scene, gw, gh, global::Etch.Gpu.ColorSpace.Srgb);
-
-        if (geomPixels == null || geomPixels.Length == 0)
+            TextGamma = _textGamma,
+            LightWeight = _lightWeight,
+            Dissolve = _backend.FrameDissolve,
+        };
+        _cpu ??= new EtchCpuRenderer();
+        if (!_lastFrameCpu)
         {
-            return;
+            // GPU frames were presented since the last CPU frame: send the whole CPU frame.
+            _cpu.InvalidatePresentation();
         }
-
-        // Upscale the reduced-resolution geometry to native, then rasterize
-        // glyphs at native resolution on top so text stays crisp (no blur).
-        var pixels = new byte[rw * rh * 4];
-        UpscaleRgbaBilinear(geomPixels, gw, gh, pixels, rw, rh);
-        _backend.RenderGlyphCommands(pixels, rw, rh, 1.0f);
-
-        // Composite retained layers (e.g. ScrollView content). Without this the
-        // CPU path renders only the main scene + main glyphs, so anything captured
-        // into a layer never appears (WP-3514).
-        if (_activeLayers.Count > 0)
-        {
-            CompositeLayersCpu(pixels, rw, rh, geomScale, gw, gh);
-        }
-
-        if (cpuSw is not null)
-        {
-            cpuSw.Stop();
-            DebugLog.Write(DebugLogCategory.Present,
-                $"[{DateTime.Now:O}] CPU fallback: geometry {gw}x{gh} upscaled to {rw}x{rh} + native text in {cpuSw.Elapsed.TotalMilliseconds:F1} ms");
-        }
+        _cpu.Render(_mainRecording, cpuParameters, _width, _height,
+            captureDraws ? pendingGlyphs : null, captureDraws ? _layerCompositeIndex : null);
+        _lastFrameCpu = true;
+        long presentStart = System.Diagnostics.Stopwatch.GetTimestamp();
 
         if (_useGpu && _etchGpuPresenter != null)
         {
-            _etchGpuPresenter.PresentCpuFallback(pixels, (uint)rw, (uint)rh);
-            if (captureDraws)
-            {
-                // CPU fallback draws glyphs directly into the pixel buffer —
-                // there are no glyph instances, so the snapshot carries shape
-                // records only (CPU-fallback fidelity is WP-3514's program).
-                PublishDrawSnapshot(captureBaseline);
-            }
-            return;
+            _etchGpuPresenter.PresentCpuFrame(_cpu.Framebuffer, _cpu.Dirty);
         }
-
-        if (_hwnd != IntPtr.Zero)
+        else if (_hwnd != IntPtr.Zero)
         {
-            // Retain the RGBA frame for CaptureFrame() BEFORE BlitToWindow
-            // swaps it to BGRA in place. MarkCapture before NotifyPresented so
-            // the captured pixels are attributed to the frame about to present.
-            RetainCpuCapture(pixels, rw, rh);
+            // MarkCapture before NotifyPresented so the retained frame is attributed to this present.
             Cascade.UI.Diagnostics.PresentMonitor.MarkCapture();
-
-            BlitToWindow(_hwnd, pixels, rw, rh, (int)_width, (int)_height);
+            _cpu.BlitToWindow(_hwnd);
             Cascade.UI.Diagnostics.PresentMonitor.CpuRenderActive = true;
             Cascade.UI.Diagnostics.PresentMonitor.NotifyPresented();
-            if (captureDraws)
-            {
-                PublishDrawSnapshot(captureBaseline);
-            }
+        }
+        LastCpuFrameMs = System.Diagnostics.Stopwatch.GetElapsedTime(cpuStart).TotalMilliseconds;
+        if (DebugLog.IsEnabled(DebugLogCategory.Present))
+        {
+            DebugLog.Write(DebugLogCategory.Present, string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $"[{DateTime.Now:O}] CPU frame {_width}x{_height}: total {LastCpuFrameMs:F3} ms = record {recordMs:F3} + build {_cpu.LastBuildMs:F3} + render {_cpu.LastRenderMs - _cpu.LastBuildMs:F3} + present {System.Diagnostics.Stopwatch.GetElapsedTime(presentStart).TotalMilliseconds:F3}; {_cpu.LastDamagedPixels} px in {_cpu.Dirty.Length} rects"));
+        }
+        if (captureDraws)
+        {
+            PublishDrawSnapshot(captureBaseline);
         }
     }
+
+    /// <summary>Milliseconds the last CPU frame took in the renderer: record, build, composite, present.</summary>
+    internal double LastCpuFrameMs { get; private set; }
 
     /// <summary>
-    /// Copies an RGBA CPU frame into the reused capture buffer (resized only
-    /// when the dimensions grow), so CaptureFrame() can serve it without a
-    /// per-frame allocation.
+    /// The window needs its client area repainted (WM_PAINT): on the GDI path, send the whole of the
+    /// last CPU frame again. The GPU swapchain and DWM keep their own copy, so nothing else does.
     /// </summary>
-    /// <summary>
-    /// Bilinearly upscales a tightly-packed RGBA8 buffer into a destination of a
-    /// different size. Stretches the reduced-resolution CPU geometry pass up to
-    /// native resolution before the native-resolution text pass (WP-3514).
-    /// </summary>
-    private static void UpscaleRgbaBilinear(byte[] src, int sw, int sh, byte[] dst, int dw, int dh)
+    public void RepaintWindow()
     {
-        if (sw == dw && sh == dh)
+        if (_lastFrameCpu && _cpu is not null && !(_useGpu && _etchGpuPresenter != null) && _hwnd != IntPtr.Zero)
         {
-            Array.Copy(src, dst, Math.Min(src.Length, dst.Length));
-            return;
-        }
-
-        float fx = dw > 1 ? (float)(sw - 1) / (dw - 1) : 0f;
-        float fy = dh > 1 ? (float)(sh - 1) / (dh - 1) : 0f;
-        for (int y = 0; y < dh; y++)
-        {
-            float syf = y * fy;
-            int sy = (int)syf;
-            int sy1 = Math.Min(sy + 1, sh - 1);
-            float wy = syf - sy;
-            int rowOff = sy * sw * 4;
-            int row1Off = sy1 * sw * 4;
-            int dstRow = y * dw * 4;
-            for (int x = 0; x < dw; x++)
-            {
-                float sxf = x * fx;
-                int sx = (int)sxf;
-                int sx1 = Math.Min(sx + 1, sw - 1);
-                float wx = sxf - sx;
-                int i00 = rowOff + sx * 4;
-                int i10 = rowOff + sx1 * 4;
-                int i01 = row1Off + sx * 4;
-                int i11 = row1Off + sx1 * 4;
-                int d = dstRow + x * 4;
-                for (int c = 0; c < 4; c++)
-                {
-                    float top = src[i00 + c] * (1 - wx) + src[i10 + c] * wx;
-                    float bot = src[i01 + c] * (1 - wx) + src[i11 + c] * wx;
-                    dst[d + c] = (byte)(top * (1 - wy) + bot * wy + 0.5f);
-                }
-            }
+            _cpu.BlitAll(_hwnd);
         }
     }
 
-    // Reused native-size scratch buffer for compositing each retained layer on
-    // the CPU path (avoids a per-layer allocation).
-    private byte[]? _layerNativeBuffer;
-
-    /// <summary>
-    /// Composites the frame's retained layers (ScrollView content, etc.) onto the
-    /// native-resolution CPU framebuffer. Each layer's geometry is rasterized at
-    /// the reduced geometry scale and upscaled to match <paramref name="dst"/>,
-    /// then alpha-composited at the layer's scroll offset within its viewport
-    /// clip; the layer's glyphs are drawn at native resolution on top (WP-3514).
-    /// </summary>
-    private void CompositeLayersCpu(byte[] dst, int dw, int dh, float geomScale, int gw, int gh)
-    {
-        int needed = dw * dh * 4;
-        foreach (var layer in _activeLayers)
-        {
-            // Layer scenes are built at geomScale like the main scene — render at
-            // the same reduced size then upscale to native to match dst.
-            var layerGeom = SceneCpuRenderer.RenderToOutput(layer.Scene, gw, gh, global::Etch.Gpu.ColorSpace.Srgb);
-            if (layerGeom == null || layerGeom.Length == 0)
-            {
-                continue;
-            }
-            if (_layerNativeBuffer is null || _layerNativeBuffer.Length < needed)
-            {
-                _layerNativeBuffer = new byte[needed];
-            }
-            UpscaleRgbaBilinear(layerGeom, gw, gh, _layerNativeBuffer, dw, dh);
-
-            // Layer content (shapes and glyphs) is captured at ABSOLUTE scroll-0
-            // positions (BuildLayerSceneBuffer uses the layer's InitialTransform;
-            // glyphs were painted at absolute coords). The composite offset is the
-            // layer's initial translation plus the scroll, which equals the
-            // viewport-clip origin plus the scroll — so the residual shift to
-            // apply is just the scroll delta: offset − clipOrigin.
-            float effOffX = layer.OffsetX;
-            float effOffY = layer.OffsetY;
-
-            int clipX0 = 0, clipY0 = 0, clipX1 = dw, clipY1 = dh;
-            if (layer.ViewportClip is Cascade.UI.Rect vc)
-            {
-                effOffX -= vc.X;
-                effOffY -= vc.Y;
-                clipX0 = Math.Max(0, (int)MathF.Floor(vc.X));
-                clipY0 = Math.Max(0, (int)MathF.Floor(vc.Y));
-                clipX1 = Math.Min(dw, (int)MathF.Ceiling(vc.X + vc.Width));
-                clipY1 = Math.Min(dh, (int)MathF.Ceiling(vc.Y + vc.Height));
-            }
-
-            int ox = (int)MathF.Round(effOffX);
-            int oy = (int)MathF.Round(effOffY);
-            CompositeOver(dst, dw, dh, _layerNativeBuffer, ox, oy, layer.Opacity, clipX0, clipY0, clipX1, clipY1);
-
-            _backend.RenderGlyphCommandsLayer(dst, dw, dh, layer.GlyphCommands, effOffX, effOffY, layer.ViewportClip);
-        }
-    }
-
-    /// <summary>
-    /// Alpha-composites a native-resolution layer buffer over the destination at
-    /// an integer scroll offset, within a clip rect, honoring layer opacity. The
-    /// GPU adds the offset to layer positions; sampling the source at
-    /// (x − offset) shifts by the same amount.
-    /// </summary>
-    private static void CompositeOver(byte[] dst, int dw, int dh, byte[] src, int ox, int oy, float opacity,
-        int clipX0, int clipY0, int clipX1, int clipY1)
-    {
-        for (int y = clipY0; y < clipY1; y++)
-        {
-            int sy = y - oy;
-            if (sy < 0 || sy >= dh)
-            {
-                continue;
-            }
-            for (int x = clipX0; x < clipX1; x++)
-            {
-                int sx = x - ox;
-                if (sx < 0 || sx >= dw)
-                {
-                    continue;
-                }
-                int si = (sy * dw + sx) * 4;
-                float sa = src[si + 3] / 255f * opacity;
-                if (sa <= 0f)
-                {
-                    continue;
-                }
-                int di = (y * dw + x) * 4;
-                float ia = 1f - sa;
-                dst[di]     = (byte)(src[si]     * sa + dst[di]     * ia + 0.5f);
-                dst[di + 1] = (byte)(src[si + 1] * sa + dst[di + 1] * ia + 0.5f);
-                dst[di + 2] = (byte)(src[si + 2] * sa + dst[di + 2] * ia + 0.5f);
-                dst[di + 3] = (byte)(sa * 255f + dst[di + 3] * ia + 0.5f);
-            }
-        }
-    }
-
-    private void RetainCpuCapture(byte[] rgba, int w, int h)
-    {
-        int needed = w * h * 4;
-        if (_cpuCaptureBuffer is null || _cpuCaptureBuffer.Length < needed)
-        {
-            _cpuCaptureBuffer = new byte[needed];
-        }
-        Array.Copy(rgba, _cpuCaptureBuffer, needed);
-        _cpuCaptureWidth = w;
-        _cpuCaptureHeight = h;
-    }
-
-    /// <summary>The retained layers composited by the scene <see cref="BuildSceneBuffer"/> last returned.</summary>
-    internal IReadOnlyList<LayerRenderInfo> ActiveLayers => _activeLayers;
-
-    internal SceneBuffer BuildSceneBuffer(ColorValue baseColor, float scale = 1.0f)
-    {
-        ulong hash = _backend.CommandSequenceHash;
-        hash ^= (ulong)EtchBackend.ToArgb(baseColor);
-        hash *= 1099511628211;
-        hash ^= (ulong)_width;
-        hash *= 1099511628211;
-        hash ^= (ulong)_height;
-        hash *= 1099511628211;
-        hash ^= (ulong)BitConverter.SingleToInt32Bits(scale);
-        hash *= 1099511628211;
-
-        // A layer recapture emits no main-stream op (only the DrawLayerTexture
-        // composite, unchanged), so a recapture that changes only a layer's
-        // *internal* content — e.g. a card's selection border inside a ScrollView —
-        // hashes identically to the previous frame. Without this, the whole cached
-        // scene (with the STALE layer) is reused and the change never appears until
-        // an unrelated main-stream edit. A recapture only happens on invalidation
-        // (LayerCaptures is cleared each frame and repopulated by PushLayerTexture),
-        // so taking the rebuild path whenever one occurred costs nothing on ordinary
-        // scroll/idle frames; the per-layer hash below still reuses unchanged layers.
-        bool layerRecaptureNeedsRefresh = _backend.LayerCaptures.Count > 0;
-
-        if (_cachedSceneBuffer is not null
-            && hash == _cachedSceneHash
-            && _cachedBaseColor == baseColor
-            && _cachedWidth == _width
-            && _cachedHeight == _height
-            && _cachedScale == scale
-            && !layerRecaptureNeedsRefresh)
-        {
-            _activeLayers.Clear();
-            _activeLayers.AddRange(_cachedActiveLayers);
-            return _cachedSceneBuffer;
-        }
-
-        _cachedSceneBuffer?.Dispose();
-        _activeLayers.Clear();
-
-        // ═══════════════════════════════════════════════════════════════════════════════════
-        // Build layer SceneBuffers first — each layer is cached independently
-        // by its command hash so scrolling (which changes only the main
-        // DrawLayerTexture offset) does not invalidate layer content.
-        // ════════════════════════════════════════════════════════════════
-        foreach (var (handle, capture) in _backend.LayerCaptures)
-        {
-            ulong layerHash = ComputeLayerHash(capture);
-            if (_cachedLayerScenes.TryGetValue(handle, out var cached) && cached.Hash == layerHash)
-            {
-                // Layer unchanged — reuse cached SceneBuffer. The hash covers
-                // only visual content, so when draw-provenance capture is on,
-                // refresh the cached glyph commands anyway: a recapture
-                // re-emits them with fresh DebugNodeId tags that the cached
-                // (possibly pre-capture) copies lack.
-                if (DrawProvenance.CaptureEnabled)
-                {
-                    _cachedLayerScenes[handle] = (cached.Scene, cached.Hash,
-                        capture.GlyphCommands.ToList(), cached.ImageCommands, cached.SceneMarks);
-                }
-                continue;
-            }
-
-            // Build new SceneBuffer for this layer
-            var (layerScene, layerMarks) = BuildLayerSceneBuffer(capture, scale);
-            var layerInitial = scale == 1.0f
-                ? capture.InitialTransform
-                : Matrix3x2.CreateScale(scale, scale) * capture.InitialTransform;
-            _cachedLayerScenes[handle] = (layerScene, layerHash,
-                capture.GlyphCommands.ToList(), ExtractImageCommands(capture.Commands, layerInitial), layerMarks);
-        }
-
-        // Size the builder from the previous frame (plus headroom) so a steady-state frame never
-        // grows a table: each growth copied the table and zeroed the old one.
-        int estimatedCommands = Math.Max(4096, _backend.Commands.Count * 4);
-        var last = _lastSceneCapacity;
-        var sb = SceneBuilder.Begin(new SceneCapacity(
-            Math.Max(estimatedCommands, WithHeadroom(last.Commands)),
-            WithHeadroom(last.PathArenaBytes),
-            WithHeadroom(last.Paths),
-            WithHeadroom(last.Paints),
-            WithHeadroom(last.Transforms),
-            WithHeadroom(last.Rects)));
-        sb.BeginFrame();
-
-        var initialAffine = scale == 1.0f
-            ? EGeometry.Affine.Identity
-            : new EGeometry.Affine(scale, 0, 0, scale, 0, 0);
-        int initialTransformId = sb.AddTransform(initialAffine);
-        sb.SetTransform(initialTransformId);
-
-        // Seed the shared op→scene state with the DPI-scale base matrix. SceneBuilder
-        // .SetTransform replaces rather than composes, so AppendSceneOp tracks the
-        // accumulated matrix itself and adds each product as a single transform.
-        var baseMatrix = scale == 1.0f
-            ? System.Numerics.Matrix3x2.Identity
-            : new System.Numerics.Matrix3x2(scale, 0, 0, scale, 0, 0);
-        int identityTransformId = sb.AddTransform(EGeometry.Affine.Identity);
-        _appendState.Reset(baseMatrix, initialTransformId, identityTransformId);
-        _appendState.SceneCommands = 2; // BeginFrame, SetTransform
-
-        // Fill background with base color
-        int bgPaintId = sb.AddPaint(Paint.Solid(EtchBackend.ToArgb(baseColor)));
-        sb.FillRect(new EGeometry.Rect(0, 0, _width, _height), bgPaintId, identityTransformId);
-        _appendState.SceneCommands++;
-
-        _sceneMarks.Clear();
-        foreach (var cmd in _backend.Commands)
-        {
-            _sceneMarks.Add(_appendState.SceneCommands);
-
-            // The live frame composites retained layers; everything else flows through
-            // the shared op→scene dispatch (RENDER-001).
-            if (cmd.Kind == EtchBackend.OpKind.DrawLayerTexture)
-            {
-                ulong handle = (ulong)cmd.W;
-                if (_cachedLayerScenes.TryGetValue(handle, out var layerInfo))
-                {
-                    Cascade.UI.Rect? viewportClip = cmd.HasClipBounds ? cmd.ClipBounds : null;
-                    _activeLayers.Add(new LayerRenderInfo(
-                        handle, layerInfo.Scene, cmd.X, cmd.Y, cmd.Opacity,
-                        layerInfo.GlyphCommands, layerInfo.ImageCommands, layerInfo.SceneMarks, viewportClip));
-                }
-                continue;
-            }
-            AppendSceneOp(ref sb, cmd, _appendState, "BuildSceneBuffer");
-        }
-        _sceneMarks.Add(_appendState.SceneCommands);
-
-        while (_appendState.ClipStack.Count > 0)
-        {
-            sb.PopClip();
-            _appendState.ClipStack.Pop();
-            _appendState.SceneCommands++;
-        }
-        sb.EndFrame();
-        _appendState.SceneCommands++;
-        var sceneBuffer = sb.End();
-        _lastSceneCapacity = sceneBuffer.Capacity;
-        _sceneMarksValid = SceneCountMatches(sceneBuffer, _appendState.SceneCommands, "BuildSceneBuffer");
-
-        if (DebugLog.IsEnabled(DebugLogCategory.Transform))
-        {
-            int pushCount = 0, popCount = 0;
-            foreach (var cmd in _backend.Commands)
-            {
-                if (cmd.Kind == EtchBackend.OpKind.PushTransform)
-                {
-                    pushCount++;
-                }
-                if (cmd.Kind == EtchBackend.OpKind.PopTransform)
-                {
-                    popCount++;
-                }
-            }
-            if (pushCount > 0)
-            {
-                DebugLog.Write(DebugLogCategory.Transform,
-                    $"[{DateTime.Now:O}] BuildSceneBuffer: {pushCount} push, {popCount} pop, {_backend.Commands.Count} total commands");
-            }
-        }
-
-        _cachedSceneBuffer = sceneBuffer;
-        _cachedSceneHash = hash;
-        _cachedBaseColor = baseColor;
-        _cachedWidth = _width;
-        _cachedHeight = _height;
-        _cachedScale = scale;
-        _cachedActiveLayers.Clear();
-        _cachedActiveLayers.AddRange(_activeLayers);
-
-        return sceneBuffer;
-    }
-
-    private static ulong ComputeLayerHash(EtchBackend.LayerCapture capture)
-    {
-        ulong hash = 14695981039346656037;
-        const ulong prime = 1099511628211;
-
-        foreach (var cmd in capture.Commands)
-        {
-            // Use the same comprehensive hashing as ComputeOpHash so that
-            // any visual change (color, radius, opacity, stroke, etc.)
-            // invalidates the cached layer scene.
-            hash ^= EtchBackend.ComputeOpHash(cmd);
-            hash *= prime;
-        }
-
-        foreach (var glyph in capture.GlyphCommands)
-        {
-            hash ^= (ulong)BitConverter.SingleToInt32Bits(glyph.FontSize);
-            hash *= prime;
-            hash ^= (ulong)glyph.Color.GetHashCode();
-            hash *= prime;
-            hash ^= (ulong)glyph.FontHandle.GetHashCode();
-            hash *= prime;
-            hash ^= (ulong)glyph.GlyphIds.Length;
-            hash *= prime;
-            // Where the run sits among the layer's shapes: the same ops with the text painted at
-            // a different point must not reuse a cached layer that draws it elsewhere in order.
-            hash ^= (ulong)glyph.CommandIndex;
-            hash *= prime;
-            foreach (var id in glyph.GlyphIds)
-            {
-                hash ^= (ulong)id;
-                hash *= prime;
-            }
-            foreach (var pos in glyph.Positions)
-            {
-                hash ^= (ulong)BitConverter.SingleToInt32Bits(pos);
-                hash *= prime;
-            }
-        }
-
-        return hash;
-    }
-
-    /// <summary>
-    /// Collects a layer's <c>DrawImage</c> ops so the presenter can composite them
-    /// (the GPU image pass walks the main command stream, which a retained layer's
-    /// captured ops never reach). Image ops store raw rects, so this replays the
-    /// layer's <c>PushTransform</c>/<c>PopTransform</c> stream — starting from
-    /// <paramref name="initialTransform"/>, exactly as <see cref="BuildLayerSceneBuffer"/>
-    /// does for shapes — and pairs each image with the accumulated local→device
-    /// transform at its capture point. Returns an empty list when the layer draws no
-    /// images.
-    /// </summary>
-    /// <summary>
-    /// Pulls the image draws out of a layer's captured command stream, each paired with the
-    /// local→device transform in force at the point it was issued, and with the intersection of
-    /// the clip rects active around it.
-    /// </summary>
-    /// <remarks>
-    /// The clip is the RENDER-009 fix. This replayed only the transform ops, so an image nested
-    /// inside a <c>PushClip</c> — a custom table cell, say — carried no clip at all, and the
-    /// presenter clamped it to the ScrollView viewport alone. The image then drew wherever its
-    /// transform put it, escaping the cell and repeating down the page. There is no GPU scissor in
-    /// the wgpu binding set, so clipping is emulated by clamping the quad and its UVs; that only
-    /// works if the rect travels with the image. `PushClipPath` cannot be reduced to a rect, so it
-    /// contributes nothing rather than clipping to the wrong shape — the main (non-layer) image
-    /// path makes the same trade.
-    /// </remarks>
-    private static List<LayerImageOp> ExtractImageCommands(
-        List<EtchBackend.SceneOp> commands, Matrix3x2 initialTransform)
-    {
-        var images = new List<LayerImageOp>();
-        var current = initialTransform;
-        var stack = new Stack<Matrix3x2>();
-
-        // Device-space intersection of the clips currently in force; null = unclipped. One entry
-        // per PushClip* so PopClip restores exactly what preceded it.
-        Cascade.UI.Rect? clip = null;
-        var clipStack = new Stack<Cascade.UI.Rect?>();
-
-        for (int index = 0; index < commands.Count; index++)
-        {
-            var op = commands[index];
-            switch (op.Kind)
-            {
-                case EtchBackend.OpKind.PushTransform:
-                    stack.Push(current);
-                    current = op.Matrix * current;
-                    break;
-                case EtchBackend.OpKind.PopTransform:
-                    if (stack.Count > 0)
-                    {
-                        current = stack.Pop();
-                    }
-                    break;
-
-                case EtchBackend.OpKind.PushClip:
-                case EtchBackend.OpKind.PushClipRoundedRect:
-                    clipStack.Push(clip);
-                    clip = IntersectClip(clip, DeviceRect(op, current));
-                    break;
-
-                case EtchBackend.OpKind.PushClipPath:
-                    // Not expressible as a rect — inherit the enclosing clip unchanged.
-                    clipStack.Push(clip);
-                    break;
-
-                case EtchBackend.OpKind.PopClip:
-                    if (clipStack.Count > 0)
-                    {
-                        clip = clipStack.Pop();
-                    }
-                    break;
-
-                case EtchBackend.OpKind.DrawImage:
-                    // Copy the fields out: the op itself is recycled by the backend's frame arena.
-                    images.Add(new LayerImageOp(op.ImageHandle, op.X, op.Y, op.W, op.H, current, clip, index));
-                    break;
-            }
-        }
-
-        return images;
-    }
-
-    /// <summary>Maps a clip op's local rect through <paramref name="transform"/> to device space.</summary>
-    private static Cascade.UI.Rect DeviceRect(EtchBackend.SceneOp op, Matrix3x2 transform)
-    {
-        var local = new EGeometry.Rect(op.X, op.Y, op.X + op.W, op.Y + op.H);
-        var device = local.Transform(EtchBackend.ToAffine(transform));
-        return new Cascade.UI.Rect(
-            (float)device.MinX,
-            (float)device.MinY,
-            (float)(device.MaxX - device.MinX),
-            (float)(device.MaxY - device.MinY));
-    }
-
-    /// <summary>Intersection of two clips, treating null as "no constraint".</summary>
-    private static Cascade.UI.Rect? IntersectClip(Cascade.UI.Rect? a, Cascade.UI.Rect b)
-    {
-        if (a is not Cascade.UI.Rect existing)
-        {
-            return b;
-        }
-
-        float l = Math.Max(existing.X, b.X);
-        float t = Math.Max(existing.Y, b.Y);
-        float r = Math.Min(existing.X + existing.Width, b.X + b.Width);
-        float bo = Math.Min(existing.Y + existing.Height, b.Y + b.Height);
-
-        return r <= l || bo <= t
-            ? new Cascade.UI.Rect(l, t, 0f, 0f)   // empty: nothing inside can draw
-            : new Cascade.UI.Rect(l, t, r - l, bo - t);
-    }
-
-    /// <summary>
-    /// Reusable transform/clip state threaded through <see cref="AppendSceneOp"/>, so the
-    /// live and layer builders share one op→scene dispatch. <see cref="Reset"/> seeds the
-    /// base matrix (DPI scale for the live frame, the layer's InitialTransform for a layer)
-    /// at the bottom of the transform stack, where <see cref="AppendSceneOp"/>'s
-    /// <c>PopTransform</c> guard keeps it.
-    /// </summary>
-    private sealed class SceneAppendState
-    {
-        public readonly Stack<System.Numerics.Matrix3x2> TransformStack = new();
-        public readonly Stack<int> ClipStack = new();
-        public System.Numerics.Matrix3x2 CurrentMatrix;
-        public int CurrentTransformId;
-        public int IdentityTransformId;
-
-        /// <summary>
-        /// Commands written to the scene so far. <see cref="SceneBuilder"/> does not expose its
-        /// count, so every call that writes one bumps this; the builders check it against the
-        /// finished scene (<see cref="SceneCountMatches"/>) before trusting the marks built from it.
-        /// </summary>
-        public int SceneCommands;
-
-        public void Reset(System.Numerics.Matrix3x2 baseMatrix, int baseTransformId, int identityTransformId)
-        {
-            TransformStack.Clear();
-            ClipStack.Clear();
-            CurrentMatrix = baseMatrix;
-            TransformStack.Push(baseMatrix);
-            CurrentTransformId = baseTransformId;
-            IdentityTransformId = identityTransformId;
-            SceneCommands = 0;
-        }
-    }
-
-    /// <summary>
-    /// True when the command count kept in <see cref="SceneAppendState.SceneCommands"/> matches
-    /// the finished scene, i.e. the paint-order marks taken from it are exact. A mismatch means a
-    /// scene-writing call in <see cref="AppendSceneOp"/> was added without counting it: Debug
-    /// asserts, Release logs once per occurrence (throttled) and the presenter falls back to
-    /// drawing text and images over all shapes rather than interleaving them at wrong points.
-    /// </summary>
-    private bool SceneCountMatches(SceneBuffer scene, int counted, string context)
-    {
-        int actual = scene.Commands.Length;
-        if (actual == counted)
-        {
-            return true;
-        }
-
-        System.Diagnostics.Debug.Assert(false,
-            $"{context}: counted {counted} scene commands but the scene holds {actual} — a SceneBuilder call in AppendSceneOp is not counted.");
-        unhandledOpCount++;
-        if (unhandledOpCount <= MaxUnhandledOpLogEntries)
-        {
-            var path = System.IO.Path.Combine(System.AppContext.BaseDirectory, "etch-backend-error.log");
-            System.IO.File.AppendAllText(path,
-                $"[{DateTime.Now:O}] {context}: counted {counted} scene commands, scene holds {actual} — paint-order marks disabled for this scene\n");
-        }
-        return false;
-    }
-
-    /// <summary>
-    /// Appends one captured <see cref="EtchBackend.SceneOp"/> to <paramref name="sb"/>,
-    /// mutating <paramref name="st"/>'s transform/clip stacks. RENDER-001: this is the
-    /// single op→scene dispatch shared by the live frame (<see cref="BuildSceneBuffer"/>)
-    /// and each retained layer (<see cref="BuildLayerSceneBuffer"/>), so a primitive — or
-    /// a transform/clip nuance — can never again be handled differently in a layer than in
-    /// the main frame. <c>DrawLayerTexture</c> is intentionally absent: the live caller
-    /// composites it; for a layer it reaches the fail-loud default (nested layers are
-    /// unsupported).
-    /// </summary>
-    private void AppendSceneOp(ref SceneBuilder sb, EtchBackend.SceneOp cmd, SceneAppendState st, string context)
-    {
-        int identityTransformId = st.IdentityTransformId;
-        switch (cmd.Kind)
-        {
-            case EtchBackend.OpKind.DrawShadow:
-                if (cmd.Fill.HasValue && cmd.Fill.Value.A > 0 && cmd.W > 0 && cmd.H > 0)
-                {
-                    uint argb = EtchBackend.ToArgb(cmd.Fill.Value);
-                    var path = EtchBackend.BuildRoundedRectPath(cmd.X, cmd.Y, cmd.W, cmd.H, Math.Min(cmd.Radius, Math.Min(cmd.W, cmd.H) * 0.5f));
-                    sb.DrawShadow(sb.AddPath(path), sb.AddPaint(Paint.Solid(argb)), identityTransformId, default, cmd.StrokeWidth, argb);
-                    st.SceneCommands++;
-                }
-                break;
-
-            case EtchBackend.OpKind.DrawBackdropBlur:
-                // Handled by the presenter's dedicated backdrop-blur pass (it reads
-                // these ops straight from backend.Commands), not the SceneBuffer.
-                break;
-
-            case EtchBackend.OpKind.DrawRect:
-                if (cmd.Fill.HasValue && cmd.Fill.Value.A > 0)
-                {
-                    int paintId = sb.AddPaint(Paint.Solid(EtchBackend.ToArgb(cmd.Fill.Value)));
-                    float r = Math.Min(cmd.Radius, Math.Min(cmd.W, cmd.H) * 0.5f);
-                    if (r > 0.5f)
-                    {
-                        var path = EtchBackend.BuildRoundedRectPath(cmd.X, cmd.Y, cmd.W, cmd.H, r);
-                        sb.FillPath(sb.AddPath(path), paintId, identityTransformId, FillRule.NonZero);
-                        st.SceneCommands++;
-                    }
-                    else
-                    {
-                        sb.FillRect(new EGeometry.Rect(cmd.X, cmd.Y, cmd.X + cmd.W, cmd.Y + cmd.H), paintId, identityTransformId);
-                        st.SceneCommands++;
-                    }
-                }
-                if (cmd.StrokeColor.HasValue && cmd.StrokeWidth > 0)
-                {
-                    var path = EtchBackend.BuildRoundedRectPath(cmd.X, cmd.Y, cmd.W, cmd.H, Math.Min(cmd.Radius, Math.Min(cmd.W, cmd.H) * 0.5f));
-                    int paintId = sb.AddPaint(Paint.Solid(EtchBackend.ToArgb(cmd.StrokeColor.Value)));
-                    sb.StrokePath(sb.AddPath(path), paintId, identityTransformId, cmd.StrokeWidth, default);
-                    st.SceneCommands++;
-                }
-                break;
-
-            case EtchBackend.OpKind.DrawRectGradient:
-                if (cmd.GradientStops != null && cmd.GradientStops.Length >= 2)
-                {
-                    uint id = (uint)sb.AddGradientStops(EtchBackend.ConvertGradientStops(cmd.GradientStops));
-                    var paint = cmd.GradientKind == 0 ? Paint.LinearGradient(id) : Paint.RadialGradient(id);
-                    int paintId = sb.AddPaint(paint);
-                    float r = Math.Min(cmd.Radius, Math.Min(cmd.W, cmd.H) * 0.5f);
-                    if (r > 0.5f)
-                    {
-                        var path = EtchBackend.BuildRoundedRectPath(cmd.X, cmd.Y, cmd.W, cmd.H, r);
-                        sb.FillPath(sb.AddPath(path), paintId, identityTransformId, FillRule.NonZero);
-                        st.SceneCommands++;
-                    }
-                    else
-                    {
-                        sb.FillRect(new EGeometry.Rect(cmd.X, cmd.Y, cmd.X + cmd.W, cmd.Y + cmd.H), paintId, identityTransformId);
-                        st.SceneCommands++;
-                    }
-                }
-                break;
-
-            case EtchBackend.OpKind.DrawPath:
-            {
-                var path = _backend.GetCompiledPath(cmd.PathHandle);
-                if (!path.HasValue)
-                {
-                    break;
-                }
-                int pathId = sb.AddPath(path.Value);
-                if (cmd.Fill.HasValue && cmd.Fill.Value.A > 0)
-                {
-                    sb.FillPath(pathId, sb.AddPaint(Paint.Solid(EtchBackend.ToArgb(cmd.Fill.Value))), identityTransformId, FillRule.NonZero);
-                    st.SceneCommands++;
-                }
-                if (cmd.StrokeColor.HasValue && cmd.StrokeWidth > 0)
-                {
-                    sb.StrokePath(pathId, sb.AddPaint(Paint.Solid(EtchBackend.ToArgb(cmd.StrokeColor.Value))), identityTransformId, cmd.StrokeWidth, default);
-                    st.SceneCommands++;
-                }
-                break;
-            }
-
-            case EtchBackend.OpKind.DrawPathGradient:
-            {
-                var path = _backend.GetCompiledPath(cmd.PathHandle);
-                if (!path.HasValue)
-                {
-                    break;
-                }
-                int pathId = sb.AddPath(path.Value);
-                if (cmd.GradientStops != null && cmd.GradientStops.Length >= 2)
-                {
-                    uint id = (uint)sb.AddGradientStops(EtchBackend.ConvertGradientStops(cmd.GradientStops));
-                    var paint = cmd.GradientKind == 0 ? Paint.LinearGradient(id) : Paint.RadialGradient(id);
-                    sb.FillPath(pathId, sb.AddPaint(paint), identityTransformId, FillRule.NonZero);
-                    st.SceneCommands++;
-                }
-                if (cmd.StrokeColor.HasValue && cmd.StrokeWidth > 0)
-                {
-                    sb.StrokePath(pathId, sb.AddPaint(Paint.Solid(EtchBackend.ToArgb(cmd.StrokeColor.Value))), identityTransformId, cmd.StrokeWidth, default);
-                    st.SceneCommands++;
-                }
-                break;
-            }
-
-            case EtchBackend.OpKind.DrawCircle:
-            {
-                var path = EtchBackend.BuildCirclePath(cmd.X, cmd.Y, cmd.Radius);
-                int pathId = sb.AddPath(path);
-                if (cmd.Fill.HasValue && cmd.Fill.Value.A > 0)
-                {
-                    sb.FillPath(pathId, sb.AddPaint(Paint.Solid(EtchBackend.ToArgb(cmd.Fill.Value))), identityTransformId, FillRule.NonZero);
-                    st.SceneCommands++;
-                }
-                if (cmd.StrokeColor.HasValue && cmd.StrokeWidth > 0)
-                {
-                    sb.StrokePath(pathId, sb.AddPaint(Paint.Solid(EtchBackend.ToArgb(cmd.StrokeColor.Value))), identityTransformId, cmd.StrokeWidth, default);
-                    st.SceneCommands++;
-                }
-                break;
-            }
-
-            case EtchBackend.OpKind.DrawSector:
-                if (cmd.Fill.HasValue && cmd.Fill.Value.A > 0)
-                {
-                    int paintId = sb.AddPaint(Paint.Solid(EtchBackend.ToArgb(cmd.Fill.Value)));
-                    sb.FillSector(cmd.X, cmd.Y, cmd.Radius, cmd.InnerRadius,
-                        cmd.StartRad, cmd.SweepRad, paintId, identityTransformId);
-                    st.SceneCommands++;
-                }
-                break;
-
-            case EtchBackend.OpKind.DrawArc:
-                if (cmd.StrokeColor.HasValue && cmd.StrokeWidth > 0)
-                {
-                    var path = EtchBackend.BuildArcPath(cmd.X, cmd.Y, cmd.Radius, cmd.StartRad, cmd.SweepRad);
-                    sb.StrokePath(sb.AddPath(path), sb.AddPaint(Paint.Solid(EtchBackend.ToArgb(cmd.StrokeColor.Value))), identityTransformId, cmd.StrokeWidth, default);
-                    st.SceneCommands++;
-                }
-                break;
-
-            case EtchBackend.OpKind.DrawLine:
-                if (cmd.StrokeColor.HasValue && cmd.StrokeWidth > 0)
-                {
-                    var path = EtchBackend.BuildLinePath(cmd.X, cmd.Y, cmd.W, cmd.H);
-                    sb.StrokePath(sb.AddPath(path), sb.AddPaint(Paint.Solid(EtchBackend.ToArgb(cmd.StrokeColor.Value))), identityTransformId, cmd.StrokeWidth, default);
-                    st.SceneCommands++;
-                }
-                break;
-
-            case EtchBackend.OpKind.DrawImage:
-            {
-                var img = _backend.GetImage(cmd.ImageHandle);
-                if (img != null)
-                {
-                    uint argb = (uint)(((byte)(cmd.Opacity * 255) << 24) | 0xFFFFFF);
-                    int paintId = sb.AddPaint(Paint.Solid(argb));
-                    sb.DrawImage((int)cmd.ImageHandle, paintId, identityTransformId);
-                    st.SceneCommands++;
-                }
-                break;
-            }
-
-            case EtchBackend.OpKind.PushTransform:
-                st.CurrentMatrix = cmd.Matrix * st.CurrentMatrix;
-                st.TransformStack.Push(st.CurrentMatrix);
-                st.CurrentTransformId = sb.AddTransform(EtchBackend.ToAffine(st.CurrentMatrix));
-                sb.SetTransform(st.CurrentTransformId);
-                st.SceneCommands++;
-                break;
-
-            case EtchBackend.OpKind.PopTransform:
-                // Never pop below the base matrix seeded by Reset (DPI scale / layer
-                // InitialTransform). The layer path historically used a `> 0` guard and
-                // fell back to Identity on an extra pop — a latent bug this removes.
-                if (st.TransformStack.Count > 1)
-                {
-                    st.TransformStack.Pop();
-                    st.CurrentMatrix = st.TransformStack.Peek();
-                    st.CurrentTransformId = sb.AddTransform(EtchBackend.ToAffine(st.CurrentMatrix));
-                    sb.SetTransform(st.CurrentTransformId);
-                    st.SceneCommands++;
-                }
-                break;
-
-            case EtchBackend.OpKind.PushClip:
-            {
-                var path = EtchBackend.BuildRectPath(cmd.X, cmd.Y, cmd.W, cmd.H);
-                sb.PushClip(sb.AddPath(path), FillRule.NonZero);
-                st.SceneCommands++;
-                st.ClipStack.Push(0);
-                break;
-            }
-
-            case EtchBackend.OpKind.PushClipRoundedRect:
-            {
-                var path = EtchBackend.BuildRoundedRectPath(cmd.X, cmd.Y, cmd.W, cmd.H, Math.Min(cmd.Radius, Math.Min(cmd.W, cmd.H) * 0.5f));
-                sb.PushClip(sb.AddPath(path), FillRule.NonZero);
-                st.SceneCommands++;
-                st.ClipStack.Push(0);
-                break;
-            }
-
-            case EtchBackend.OpKind.PushClipPath:
-            {
-                var path = _backend.GetCompiledPath(cmd.PathHandle);
-                if (path.HasValue)
-                {
-                    sb.PushClip(sb.AddPath(path.Value), FillRule.NonZero);
-                    st.SceneCommands++;
-                    st.ClipStack.Push(0);
-                }
-                break;
-            }
-
-            case EtchBackend.OpKind.PopClip:
-                if (st.ClipStack.Count > 0)
-                {
-                    sb.PopClip();
-                    st.SceneCommands++;
-                    st.ClipStack.Pop();
-                }
-                break;
-
-            case EtchBackend.OpKind.PushLayerTexture:
-            case EtchBackend.OpKind.PopLayerTexture:
-                // Backend-level layer scoping — never emitted into a command stream.
-                break;
-
-            default:
-                // DrawLayerTexture reaches here only from a layer build (the live caller
-                // composites it). A layer compositing another layer (nested ScrollViews)
-                // is unsupported — fail loud rather than drop the inner content silently.
-                ReportUnhandledOp(cmd.Kind, context);
-                break;
-        }
-    }
-
-    private SceneCapacity _lastSceneCapacity;
-
-    private static int WithHeadroom(int count) => count + (count >> 2) + 16;
-
-    /// <summary>
-    /// Builds a retained layer's scene, and its paint-order marks (see <see cref="SceneMarks"/>;
-    /// null if the count kept while building did not match the scene).
-    /// </summary>
-    private (SceneBuffer Scene, int[]? Marks) BuildLayerSceneBuffer(EtchBackend.LayerCapture capture, float scale)
-    {
-        if (DebugLog.IsEnabled(DebugLogCategory.Layer))
-        {
-            DebugLog.Write(DebugLogCategory.Layer,
-                $"[{DateTime.Now:O}] Building layer {capture.Handle}: {capture.Commands.Count} commands, {capture.GlyphCommands.Count} glyphs");
-        }
-        int estimatedCommands = Math.Max(4096, capture.Commands.Count * 4);
-        var sb = SceneBuilder.Begin(estimatedCommands);
-        sb.BeginFrame();
-
-        var layerBaseMatrix = capture.InitialTransform;
-        if (scale != 1.0f)
-        {
-            layerBaseMatrix = System.Numerics.Matrix3x2.CreateScale(scale, scale) * layerBaseMatrix;
-        }
-        var initialAffine = EtchBackend.ToAffine(layerBaseMatrix);
-        int initialTransformId = sb.AddTransform(initialAffine);
-        sb.SetTransform(initialTransformId);
-
-        // Seed the shared op→scene state with the layer's base transform (InitialTransform
-        // × DPI scale) and run every captured op through the same dispatch the live frame
-        // uses (RENDER-001). DrawLayerTexture has no case there, so a nested layer reaches
-        // the fail-loud default rather than dropping its content silently.
-        int identityTransformId = sb.AddTransform(EGeometry.Affine.Identity);
-        _appendState.Reset(layerBaseMatrix, initialTransformId, identityTransformId);
-        _appendState.SceneCommands = 2; // BeginFrame, SetTransform
-
-        // Built once per recapture and cached with the scene, not per frame.
-        var marks = new int[capture.Commands.Count + 1];
-        for (int i = 0; i < capture.Commands.Count; i++)
-        {
-            marks[i] = _appendState.SceneCommands;
-            AppendSceneOp(ref sb, capture.Commands[i], _appendState, "BuildLayerSceneBuffer");
-        }
-        marks[capture.Commands.Count] = _appendState.SceneCommands;
-
-        while (_appendState.ClipStack.Count > 0)
-        {
-            sb.PopClip();
-            _appendState.ClipStack.Pop();
-            _appendState.SceneCommands++;
-        }
-        sb.EndFrame();
-        _appendState.SceneCommands++;
-
-        if (DebugLog.IsEnabled(DebugLogCategory.Transform))
-        {
-            int layerPushCount = 0, layerPopCount = 0;
-            foreach (var cmd in capture.Commands)
-            {
-                if (cmd.Kind == EtchBackend.OpKind.PushTransform)
-                {
-                    layerPushCount++;
-                }
-                if (cmd.Kind == EtchBackend.OpKind.PopTransform)
-                {
-                    layerPopCount++;
-                }
-            }
-            if (layerPushCount > 0)
-            {
-                DebugLog.Write(DebugLogCategory.Transform,
-                    $"[{DateTime.Now:O}] BuildLayerSceneBuffer layer {capture.Handle}: {layerPushCount} push, {layerPopCount} pop, {capture.Commands.Count} total commands");
-            }
-        }
-
-        var scene = sb.End();
-        return (scene, SceneCountMatches(scene, _appendState.SceneCommands, "BuildLayerSceneBuffer") ? marks : null);
-    }
+    /// <summary>The CPU renderer, once a CPU frame has rendered (tests and diagnostics).</summary>
+    internal EtchCpuRenderer? CpuRenderer => _cpu;
 
     public void EndFrame(ulong frameHandle)
     {
@@ -1845,45 +784,8 @@ internal sealed class EtchBackendProvider : IDisposable
         }
         _disposed = true;
         NativeMemorySnapshotProvider.Register(null);
-        _cachedSceneBuffer?.Dispose();
+        _cpu?.Dispose();
         _etchGpuPresenter?.Dispose();
         _backend.Dispose();
-    }
-
-    private static void BlitToWindow(nint hwnd, byte[] pixels, int srcWidth, int srcHeight, int dstWidth, int dstHeight)
-    {
-        // Swap RGBA → BGRA for StretchDIBits
-        for (int i = 0; i < pixels.Length; i += 4)
-        {
-            byte r = pixels[i];
-            byte b = pixels[i + 2];
-            pixels[i] = b;
-            pixels[i + 2] = r;
-        }
-
-        var hdc = GetDC(hwnd);
-        if (hdc == IntPtr.Zero)
-        {
-            return;
-        }
-
-        var bmi = new BITMAPINFO { bmiHeader = new BITMAPINFOHEADER {
-            biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>(),
-            biWidth = srcWidth, biHeight = -srcHeight, biPlanes = 1, biBitCount = 32, biCompression = 0 }};
-
-        GCHandle handle = GCHandle.Alloc(pixels, GCHandleType.Pinned);
-        try { _ = StretchDIBits(hdc, 0, 0, dstWidth, dstHeight, 0, 0, srcWidth, srcHeight, handle.AddrOfPinnedObject(), ref bmi, 0, 0x00CC0020); }
-        finally { handle.Free(); _ = ReleaseDC(hwnd, hdc); }
-    }
-
-    [DllImport("user32.dll")] private static extern nint GetDC(nint hwnd);
-    [DllImport("user32.dll")] private static extern int ReleaseDC(nint hwnd, nint hdc);
-    [DllImport("gdi32.dll")] private static extern int StretchDIBits(nint hdc, int xDst, int yDst, int wDst, int hDst,
-        int xSrc, int ySrc, int wSrc, int hSrc, nint bits, ref BITMAPINFO bmi, uint usage, uint rop);
-
-    [StructLayout(LayoutKind.Sequential)] private struct BITMAPINFO { public BITMAPINFOHEADER bmiHeader; }
-    [StructLayout(LayoutKind.Sequential)] private struct BITMAPINFOHEADER {
-        public uint biSize; public int biWidth, biHeight; public ushort biPlanes, biBitCount;
-        public uint biCompression, biSizeImage; public int biXPelsPerMeter, biYPelsPerMeter; public uint biClrUsed, biClrImportant;
     }
 }

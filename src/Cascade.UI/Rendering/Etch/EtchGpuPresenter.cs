@@ -113,42 +113,6 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
     /// <summary>Adaptive light-weight strength uploaded to the glyph shader. See <see cref="DefaultLightWeight"/>.</summary>
     internal float LightWeight { get; set; } = DefaultLightWeight;
 
-    /// <summary>
-    /// WP-3526/3537: the single source of the contrast-adaptive perceptual text-weight
-    /// curve, shared by both render paths. Maps a glyph's linear
-    /// <paramref name="coverage"/> (0..1), its foreground luminance
-    /// <paramref name="fgLum"/> and the local background luminance
-    /// <paramref name="bgLum"/> (both sRGB 0..1) to the displayed ink fraction.
-    /// Dark-on-light (fg darker than bg) gets the full perceptual weight 1-(1-c)^gamma;
-    /// light-on-dark is scaled toward linear coverage as the contrast grows (light text
-    /// blooms), by the adaptive <paramref name="strength"/> (1 = full adaptive). Because
-    /// the weight is derived from the real contrast, there is no tuned constant.
-    ///
-    /// The CPU blitter blends in naïve sRGB and uses this value directly as the blend
-    /// alpha (it reads the destination pixel as the background); the GPU shader reaches
-    /// the same displayed result through a linear-space transform after destination
-    /// sampling. Keep this in sync with the WGSL fragment shader so the paths never drift.
-    /// </summary>
-    internal static float AdaptiveInkCoverage(float coverage, float gamma, float fgLum, float bgLum, float strength)
-    {
-        if (gamma <= 0f)
-        {
-            return coverage;
-        }
-        float c = Math.Clamp(coverage, 0f, 1f);
-        float pc = 1f - MathF.Pow(1f - c, gamma);                       // dark-on-light: full weight
-        float rel = Math.Clamp(fgLum - bgLum, 0f, 1f);                  // light-on-dark contrast
-        float wLight = c + (pc - c) * (1f - Math.Clamp(strength, 0f, 1f) * rel);
-        float polarity = SmoothStep01(-0.1f, 0.1f, fgLum - bgLum);      // 0 dark-on-light → 1 light-on-dark
-        return pc + (wLight - pc) * polarity;
-    }
-
-    private static float SmoothStep01(float e0, float e1, float x)
-    {
-        float t = Math.Clamp((x - e0) / (e1 - e0), 0f, 1f);
-        return t * t * (3f - 2f * t);
-    }
-
     // Auto prefers the GPU driving the window's monitor. Otherwise hardware first unless Software was
     // asked for; the software adapter (WARP) is the fallback when no hardware adapter can present,
     // which keeps rendering on the GPU pipeline instead of dropping to the reduced-resolution CPU
@@ -297,6 +261,9 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
         _swapChain.Resize(width, height);
         _composer.Resize(width, height);
     }
+
+    /// <summary>Frees the texture CPU frames are presented through (the window is hidden).</summary>
+    internal void ReleaseCpuFrameTexture() => _composer.ReleaseFramebufferTexture();
 
     /// <summary>Glyph atlas dimension in texels (page 0, monochrome atlas).</summary>
     internal int AtlasDimension => _composer.MonoAtlas.Dimension;
@@ -486,7 +453,7 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
         _drawList.Parameters = parameters;
         if (glyphRecords is not null)
         {
-            ReportGlyphs(glyphRecords, layerCompositeIndex);
+            GlyphProvenance.Report(_placedGlyphs, _drawList, glyphRecords, layerCompositeIndex);
         }
         _phaseTimer.Stop();
         double buildMs = _phaseTimer.Elapsed.TotalMilliseconds;
@@ -556,46 +523,11 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
         _frameCount++;
     }
 
-    // Maps the builder's placed glyphs to provenance records (positions, atlas texels, clip).
-    private void ReportGlyphs(List<GlyphDrawRecord> records, IReadOnlyDictionary<ulong, int>? layerCompositeIndex)
-    {
-        var clips = _drawList.Clips;
-        foreach (var g in _placedGlyphs)
-        {
-            if (g.Source is not EtchRecorder.GlyphRunSource source)
-            {
-                continue;
-            }
-            var op = source.Op;
-            var clip = clips[(int)g.ClipIndex];
-            bool hasClip = g.ClipIndex != 0;
-            long paintOrder;
-            string category;
-            if (source.LayerHandle == 0)
-            {
-                category = "main";
-                paintOrder = DrawPaintOrder.MainGlyphRun(op.CommandIndex);
-            }
-            else
-            {
-                category = "layer";
-                int mainIndex = layerCompositeIndex is not null && layerCompositeIndex.TryGetValue(source.LayerHandle, out int index) ? index : 0;
-                paintOrder = DrawPaintOrder.LayerGlyphRun(mainIndex, op.CommandIndex);
-            }
-            records.Add(new GlyphDrawRecord(
-                g.X, g.Y, g.Width, g.Height,
-                g.GlyphId, g.RasterSize, op.FontHandle,
-                g.AtlasU, g.AtlasV, g.Width, g.Height,
-                op.Color,
-                hasClip ? clip.MinX : 0, hasClip ? clip.MinY : 0,
-                hasClip ? clip.MaxX : 0, hasClip ? clip.MaxY : 0,
-                hasClip, g.IsColor, category, op.DebugNodeId, paintOrder));
-        }
-    }
     /// <summary>
-    /// Blits a CPU-rendered RGBA frame (sRGB-encoded) directly to the swapchain.
+    /// Presents a CPU-rendered frame: uploads <paramref name="dirty"/> of <paramref name="frame"/>
+    /// into the composer's persistent frame texture and blits it to the swapchain.
     /// </summary>
-    public void PresentCpuFallback(byte[] pixels, uint srcWidth, uint srcHeight)
+    public void PresentCpuFrame(global::Etch.Compose.Cpu.CpuFramebuffer frame, ReadOnlySpan<global::Etch.Compose.Cpu.CpuDirtyRect> dirty)
     {
         if (_disposed)
         {
@@ -604,36 +536,36 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
 
         _device.Poll(false);
 
-        var status = _swapChain.AcquireFrame(out SurfaceTexture frame);
-        if (status != SurfaceTextureResult.Ok || !frame.IsValid)
+        var status = _swapChain.AcquireFrame(out SurfaceTexture surface);
+        if (status != SurfaceTextureResult.Ok || !surface.IsValid)
         {
             if (status == SurfaceTextureResult.Outdated || status == SurfaceTextureResult.Lost)
             {
                 _swapChain.Resize(_currentWidth, _currentHeight);
             }
-            frame.Dispose();
+            surface.Dispose();
             return;
         }
 
         using var encoder = _device.CreateCommandEncoder();
-        _composer.EncodeFullFrameUpload(encoder, new TextureView(frame.View), pixels, srcWidth, srcHeight);
+        _composer.EncodeFramebufferUpload(encoder, new TextureView(surface.View), frame.Pixels, (uint)frame.Width, (uint)frame.Height, dirty);
 
         using var cb = encoder.Finish();
         Span<CommandBuffer> cmdsSpan = stackalloc CommandBuffer[1];
         cmdsSpan[0] = cb;
         _device.Queue.Submit(cmdsSpan);
-        PollValidationErrors("PresentCpuFallback");
+        PollValidationErrors("PresentCpuFrame");
 
         // Capture to CPU only on request (see PresentRecording) — the readback stalls
         // the present, so it must not run every frame.
         if (System.Threading.Interlocked.Exchange(ref _captureRequested, 0) == 1)
         {
             EnsureStagingBuffer();
-            PerformCapture(frame);
+            PerformCapture(surface);
             PresentMonitor.MarkCapture();
         }
 
-        _swapChain.Present(frame);
+        _swapChain.Present(surface);
         PresentMonitor.CpuRenderActive = true;
         PresentMonitor.NotifyPresented();
     }

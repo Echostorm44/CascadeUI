@@ -292,48 +292,7 @@ internal static class HitTester
     /// </summary>
     internal static IListViewNode? FindReorderableListViewAt(Node root, float x, float y)
     {
-        var point = new Point(x, y);
-
-        if (root is Component comp && comp.RenderedTree is { } rendered)
-        {
-            return FindReorderableListViewAt(rendered, x, y);
-        }
-
-        if (root is IListViewNode lv && lv.IsReorderable && lv.ReorderBounds.Contains(point))
-        {
-            return lv;
-        }
-
-        var children = GetChildren(root);
-        if (children != null)
-        {
-            for (int i = children.Count - 1; i >= 0; i--)
-            {
-                var hit = FindReorderableListViewAt(children[i], x, y);
-                if (hit != null)
-                {
-                    return hit;
-                }
-            }
-        }
-
-        if (root is ScrollView sv && sv.Content != null)
-        {
-            var hit = FindReorderableListViewAt(sv.Content, x, y);
-            if (hit != null)
-            {
-                return hit;
-            }
-        }
-
-        if (root is SplitView split)
-        {
-            return FindReorderableListViewAt(split.First, x, y)
-                ?? FindReorderableListViewAt(split.Second, x, y);
-        }
-
-        var single = GetSingleChild(root);
-        return single != null ? FindReorderableListViewAt(single, x, y) : null;
+        return FindListViewAt(root, x, y, static lv => lv.IsReorderable);
     }
 
     /// <summary>
@@ -342,95 +301,13 @@ internal static class HitTester
     /// </summary>
     internal static IListViewNode? FindScrollableListViewAt(Node root, float x, float y)
     {
-        var point = new Point(x, y);
-
-        if (root is Component comp && comp.RenderedTree is { } rendered)
-        {
-            return FindScrollableListViewAt(rendered, x, y);
-        }
-
-        if (root is IListViewNode lv && lv.MaxY > 0f && lv.ReorderBounds.Contains(point))
-        {
-            return lv;
-        }
-
-        var children = GetChildren(root);
-        if (children != null)
-        {
-            for (int i = children.Count - 1; i >= 0; i--)
-            {
-                var hit = FindScrollableListViewAt(children[i], x, y);
-                if (hit != null)
-                {
-                    return hit;
-                }
-            }
-        }
-
-        if (root is ScrollView sv && sv.Content != null)
-        {
-            var hit = FindScrollableListViewAt(sv.Content, x, y);
-            if (hit != null)
-            {
-                return hit;
-            }
-        }
-
-        if (root is SplitView split)
-        {
-            return FindScrollableListViewAt(split.First, x, y)
-                ?? FindScrollableListViewAt(split.Second, x, y);
-        }
-
-        var single = GetSingleChild(root);
-        return single != null ? FindScrollableListViewAt(single, x, y) : null;
+        return FindListViewAt(root, x, y, static lv => lv.MaxY > 0f);
     }
 
     /// <summary>Finds a selectable ListView whose bounds contain the point (click-to-select).</summary>
     internal static IListViewNode? FindSelectableListViewAt(Node root, float x, float y)
     {
-        var point = new Point(x, y);
-
-        if (root is Component comp && comp.RenderedTree is { } rendered)
-        {
-            return FindSelectableListViewAt(rendered, x, y);
-        }
-
-        if (root is IListViewNode lv && lv.IsSelectable && lv.ReorderBounds.Contains(point))
-        {
-            return lv;
-        }
-
-        var children = GetChildren(root);
-        if (children != null)
-        {
-            for (int i = children.Count - 1; i >= 0; i--)
-            {
-                var hit = FindSelectableListViewAt(children[i], x, y);
-                if (hit != null)
-                {
-                    return hit;
-                }
-            }
-        }
-
-        if (root is ScrollView sv && sv.Content != null)
-        {
-            var hit = FindSelectableListViewAt(sv.Content, x, y);
-            if (hit != null)
-            {
-                return hit;
-            }
-        }
-
-        if (root is SplitView split)
-        {
-            return FindSelectableListViewAt(split.First, x, y)
-                ?? FindSelectableListViewAt(split.Second, x, y);
-        }
-
-        var single = GetSingleChild(root);
-        return single != null ? FindSelectableListViewAt(single, x, y) : null;
+        return FindListViewAt(root, x, y, static lv => lv.IsSelectable);
     }
 
     /// <summary>
@@ -439,14 +316,28 @@ internal static class HitTester
     /// </summary>
     internal static IListViewNode? FindSwipeableListViewAt(Node root, float x, float y)
     {
-        var point = new Point(x, y);
+        return FindListViewAt(root, x, y, static lv => lv.HasSwipeActions);
+    }
 
+    /// <summary>Finds a ListView with a per-item context menu whose bounds contain the point (right-click).</summary>
+    internal static IListViewNode? FindContextMenuListViewAt(Node root, float x, float y)
+    {
+        return FindListViewAt(root, x, y, static lv => lv.HasItemContextMenu);
+    }
+
+    /// <summary>
+    /// The top-most ListView matching <paramref name="predicate"/> whose painter-stamped
+    /// <see cref="IListViewNode.ReorderBounds"/> (absolute) contain the point. Lists are
+    /// control-level hit targets: their rows are built content, so the list is located itself.
+    /// </summary>
+    private static IListViewNode? FindListViewAt(Node root, float x, float y, Func<IListViewNode, bool> predicate)
+    {
         if (root is Component comp && comp.RenderedTree is { } rendered)
         {
-            return FindSwipeableListViewAt(rendered, x, y);
+            return FindListViewAt(rendered, x, y, predicate);
         }
 
-        if (root is IListViewNode lv && lv.HasSwipeActions && lv.ReorderBounds.Contains(point))
+        if (root is IListViewNode lv && predicate(lv) && lv.ReorderBounds.Contains(new Point(x, y)))
         {
             return lv;
         }
@@ -456,7 +347,7 @@ internal static class HitTester
         {
             for (int i = children.Count - 1; i >= 0; i--)
             {
-                var hit = FindSwipeableListViewAt(children[i], x, y);
+                var hit = FindListViewAt(children[i], x, y, predicate);
                 if (hit != null)
                 {
                     return hit;
@@ -466,7 +357,7 @@ internal static class HitTester
 
         if (root is ScrollView sv && sv.Content != null)
         {
-            var hit = FindSwipeableListViewAt(sv.Content, x, y);
+            var hit = FindListViewAt(sv.Content, x, y, predicate);
             if (hit != null)
             {
                 return hit;
@@ -475,14 +366,83 @@ internal static class HitTester
 
         if (root is SplitView split)
         {
-            return FindSwipeableListViewAt(split.First, x, y)
-                ?? FindSwipeableListViewAt(split.Second, x, y);
+            return FindListViewAt(split.First, x, y, predicate)
+                ?? FindListViewAt(split.Second, x, y, predicate);
         }
 
         var single = GetSingleChild(root);
-        return single != null ? FindSwipeableListViewAt(single, x, y) : null;
+        return single != null ? FindListViewAt(single, x, y, predicate) : null;
     }
 
+    /// <summary>
+    /// The window-logical bounds of <paramref name="target"/>: the same walk as
+    /// <see cref="HitTest"/> (component offsets, padding, ScrollView scroll offsets, split panes,
+    /// list rows), summing each ancestor's position. False when the node is not in the tree.
+    /// </summary>
+    internal static bool TryGetAbsoluteBounds(Node root, Node target, out Rect bounds)
+    {
+        return TryGetAbsoluteBoundsCore(root, target, 0f, 0f, out bounds);
+    }
+
+    private static bool TryGetAbsoluteBoundsCore(Node node, Node target, float originX, float originY, out Rect bounds)
+    {
+        bounds = default;
+        if (node.IsLayoutEmpty)
+        {
+            return false;
+        }
+
+        var data = node.LayoutData;
+        var b = data.Bounds;
+
+        if (node is Component comp && comp.RenderedTree is { } rendered)
+        {
+            if (ReferenceEquals(node, target))
+            {
+                bounds = new Rect(originX + b.X, originY + b.Y, b.Width, b.Height);
+                return true;
+            }
+
+            return TryGetAbsoluteBoundsCore(rendered, target, originX + b.X, originY + b.Y, out bounds);
+        }
+
+        float x = originX + b.X;
+        float y = originY + b.Y;
+        if (ReferenceEquals(node, target))
+        {
+            bounds = new Rect(x, y, b.Width, b.Height);
+            return true;
+        }
+
+        float contentX = x + data.Padding.Left;
+        float contentY = y + data.Padding.Top;
+
+        var children = GetChildren(node);
+        if (children != null)
+        {
+            for (int i = 0; i < children.Count; i++)
+            {
+                if (TryGetAbsoluteBoundsCore(children[i], target, contentX, contentY, out bounds))
+                {
+                    return true;
+                }
+            }
+        }
+
+        if (node is ScrollView scrollView && scrollView.Content is { } content)
+        {
+            return TryGetAbsoluteBoundsCore(content, target, contentX, contentY - scrollView.OffsetY, out bounds);
+        }
+
+        if (node is SplitView splitView)
+        {
+            return TryGetAbsoluteBoundsCore(splitView.First, target, contentX, contentY, out bounds)
+                || TryGetAbsoluteBoundsCore(splitView.Second, target, contentX, contentY, out bounds);
+        }
+
+        var single = GetSingleChild(node);
+        return single != null && TryGetAbsoluteBoundsCore(single, target, contentX, contentY, out bounds);
+    }
     /// <summary>
     /// Finds the innermost ScrollView whose bounds contain the given point.
     /// Used by InputDispatcher to route scroll events to the correct ScrollView.

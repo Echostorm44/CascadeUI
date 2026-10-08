@@ -22,7 +22,7 @@
          infrastructure: it ships in its own package (Etch cpu-renderer branch onward) so that
          nothing an app ships carries it; Cascade.UI does not reference it. -->
     <ProjectReference Include="..\..\..\Etch\src\Etch.Testing\Etch.Testing.csproj" Condition="'$(UseEtchPackage)' != 'true'" />
-    <PackageReference Include="Echostorm.Etch.Testing" Version="0.1.0-alpha.8" Condition="'$(UseEtchPackage)' == 'true'" />
+    <PackageReference Include="Echostorm.Etch.Testing" Version="0.1.0-alpha.9" Condition="'$(UseEtchPackage)' == 'true'" />
     <!-- Build-order dependencies only: the golden tests launch these as
          external processes (real CLI exe, real specimen app). -->
     <ProjectReference Include="..\..\src\Cascade.UI.Tools\Cascade.UI.Tools.csproj" ReferenceOutputAssembly="false" />

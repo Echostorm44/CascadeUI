@@ -694,8 +694,26 @@ internal sealed class Win32Window : IDisposable
         }
 
         nint insertAfter = topmost ? Win32.HWND_TOPMOST : Win32.HWND_NOTOPMOST;
-        Win32.SetWindowPos(handle, insertAfter, 0, 0, 0, 0,
-            Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_NOACTIVATE);
+        const uint flags = Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_NOACTIVATE;
+        Win32.SetWindowPos(handle, insertAfter, 0, 0, 0, 0, flags);
+        if (IsTopmost() == topmost)
+        {
+            return;
+        }
+
+        // While the window is hidden, Windows (11 25H2 at least) rewrites HWND_TOPMOST into "insert
+        // after the foreground window" when it reorders the windows this one owns — and the thread's
+        // default IME window is always owned by its first top-level window. The call reports
+        // success and the window silently stays non-topmost (WM_WINDOWPOSCHANGING arrives with the
+        // foreground window as hwndInsertAfter). Without owner z-ordering the request is honoured;
+        // owned windows pick up the band again when the owner is next reordered or activated.
+        Win32.SetWindowPos(handle, insertAfter, 0, 0, 0, 0, flags | Win32.SWP_NOOWNERZORDER);
+    }
+
+    internal bool IsTopmost()
+    {
+        return handle != 0
+            && (Win32.GetWindowLongPtrW(handle, Win32.GWL_EXSTYLE) & (nint)Win32.WS_EX_TOPMOST) != 0;
     }
 
     internal void SetOpacity(float opacity)

@@ -35,6 +35,10 @@ else if (string.Equals(view, "keys", StringComparison.OrdinalIgnoreCase))
 {
     App.Run<KeysView>(Configure);
 }
+else if (string.Equals(view, "menus", StringComparison.OrdinalIgnoreCase))
+{
+    App.Run<MenusView>(Configure);
+}
 else if (string.Equals(view, "shell", StringComparison.OrdinalIgnoreCase))
 {
     App.Run<ShellView>(config =>

@@ -65,8 +65,8 @@ public sealed class MenuOverlayTests
     {
         var bounds = OpenAt(NewMenu(), FourItems(), MenuPlacement.AtPoint(new Point(100, 100)), Window);
 
-        // 2×(6+10) inset + "Delete" 60 + gap 24 + "Enter" 50 = 166; height 6+30+9+30+30+6.
-        await Assert.That(bounds.Width).IsEqualTo(166f);
+        // 2×(6+10) inset + "Delete" 60 + slack 4 + gap 24 + "Enter" 50 = 170; height 6+30+9+30+30+6.
+        await Assert.That(bounds.Width).IsEqualTo(170f);
         await Assert.That(bounds.Height).IsEqualTo(111f);
     }
 
@@ -172,6 +172,25 @@ public sealed class MenuOverlayTests
     }
 
     [Test]
+    public async Task FractionalScale_NeverLeavesAPanelShorterThanItsContent()
+    {
+        // 237 logical × 2.25 = 533.25 device px: rounding down would cut 0.11 px and show a
+        // scroll thumb on a menu that fits.
+        var menu = NewMenu();
+        var items = new[]
+        {
+            ContextMenuItem.Action("A", () => { }), ContextMenuItem.Action("B", () => { }),
+            ContextMenuItem.Action("C", () => { }), ContextMenuItem.Action("D", () => { }),
+            ContextMenuItem.Separator(),
+            ContextMenuItem.Action("E", () => { }), ContextMenuItem.Action("F", () => { }),
+        };
+        var bounds = OpenAt(menu, items, MenuPlacement.AtPoint(new Point(100.3f, 50f)), Window, pixelRatio: 2.25f);
+
+        await Assert.That(bounds.Height).IsGreaterThanOrEqualTo(6 * 30f + 9f + 12f);
+        await Assert.That(menu.Levels[0].MaxScroll).IsEqualTo(0f);
+    }
+
+    [Test]
     public async Task Submenu_OpensToTheRight_LevelWithItsItem()
     {
         var menu = NewMenu();
@@ -199,6 +218,22 @@ public sealed class MenuOverlayTests
         menu.OpenSubmenu(0, 0, highlightFirst: false);
         var sub = menu.Levels[1].Bounds;
         await Assert.That(sub.Right).IsEqualTo(root.X + MenuOverlay.SubmenuOverlap);
+    }
+
+    [Test]
+    public async Task Submenu_FittingOnNeitherSide_TakesTheRoomierSide()
+    {
+        var menu = NewMenu();
+        var items = new[] { ContextMenuItem.Submenu("Move to", [ContextMenuItem.Action("Done", () => { })]) };
+        var narrow = new Size(340, 400);
+        var root = OpenAt(menu, items, MenuPlacement.AtPoint(new Point(60, 100)), narrow);
+
+        menu.OpenSubmenu(0, 0, highlightFirst: false);
+        var sub = menu.Levels[1].Bounds;
+
+        // 56 px free on the left, 116 on the right, 160 needed: it goes right and is clamped.
+        await Assert.That(sub.Right).IsEqualTo(narrow.Width - MenuOverlay.EdgeMargin);
+        await Assert.That(sub.X).IsGreaterThan(root.X);
     }
 
     [Test]

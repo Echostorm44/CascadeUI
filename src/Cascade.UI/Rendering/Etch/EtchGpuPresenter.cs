@@ -216,7 +216,8 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
                 Usage = TextureUsage.RenderAttachment | TextureUsage.CopySrc,
                 ColorSpace = ColorSpace.Srgb,
             };
-            _swapChain = SwapChain.Configure(_device, _surface, swapChainConfig);
+            // With the loss watch, acquiring from a lost device reports DeviceLost.
+            _swapChain = SwapChain.Configure(_device, _surface, swapChainConfig, _lossWatch);
 
             _composer = new GpuComposer(_device, width, height)
             {
@@ -452,11 +453,8 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
 
         // Phase timestamps, not Stopwatch instances: a frame allocates nothing for its timing.
         long frameStart = Stopwatch.GetTimestamp();
-        // A lost device must be seen before the acquire: in wgpu-native, acquiring from (or
-        // submitting to) a lost device is a fatal error that aborts the process. Creating the
-        // frame's encoder reports a loss through the error sink, which fires the loss callback.
-        _device.Poll(false);
-        using var encoder = _device.CreateCommandEncoder();
+        // Etch's wgpu-native fails (rather than aborts on) an acquire, submit or present on a lost
+        // device and reports the loss to _lossWatch; checking first just skips a doomed frame.
         if (DeviceLost)
         {
             return false;
@@ -470,6 +468,7 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
             frame.Dispose();
             return false;
         }
+        using var encoder = _device.CreateCommandEncoder();
 
         // WP-3509: if churn filled an atlas last frame (or a forced reset is requested), clear it
         // now — between frames, before anything of this frame is looked up or inserted.
@@ -532,8 +531,13 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
         }
 
         long presentStart = Stopwatch.GetTimestamp();
-        _swapChain.Present(frame);
+        bool presented = _swapChain.Present(frame);
         long presentEnd = Stopwatch.GetTimestamp();
+        // A device lost during the submit or the present: the frame never reached the screen.
+        if (!presented || DeviceLost)
+        {
+            return false;
+        }
         PresentMonitor.CpuRenderActive = false;
         PresentMonitor.NotifyPresented();
 
@@ -573,9 +577,7 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
             return false;
         }
 
-        // A lost device must be seen before the acquire (see PresentRecording).
-        _device.Poll(false);
-        using var encoder = _device.CreateCommandEncoder();
+        // A lost device cannot present (see PresentRecording).
         if (DeviceLost)
         {
             return false;
@@ -588,6 +590,7 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
             surface.Dispose();
             return false;
         }
+        using var encoder = _device.CreateCommandEncoder();
 
         _composer.EncodeFramebufferUpload(encoder, new TextureView(surface.View), frame.Pixels, (uint)frame.Width, (uint)frame.Height, dirty);
 
@@ -606,7 +609,10 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
             PresentMonitor.MarkCapture();
         }
 
-        _swapChain.Present(surface);
+        if (!_swapChain.Present(surface) || DeviceLost)
+        {
+            return false;
+        }
         PresentMonitor.CpuRenderActive = true;
         PresentMonitor.NotifyPresented();
         return true;

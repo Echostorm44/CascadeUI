@@ -24,6 +24,12 @@ public class CpuParityTests
     private const int P999Budget = 2;
     private const int MaxBudget = 4;
 
+    // Against hardware the budget follows the reference rasterizer's own distance, but never past
+    // these caps (as in Etch.Compose.Tests' GpuCpuParityTests).
+    private const double HardwareMeanCap = 0.2;
+    private const int HardwareP999Cap = 4;
+    private const int HardwareMaxCap = 10;
+
     public static IEnumerable<(string Page, string Scene)> Pages()
     {
         foreach (string weight in new[] { "regular", "medium", "semibold" })
@@ -57,8 +63,9 @@ public class CpuParityTests
     {
         var cpu = await Capture(page, scene, cpu: true, gpu: "software");
         var warp = await Capture(page, scene, cpu: false, gpu: "software");
-        var stats = Stats.Compare(warp.Pixels, cpu.Pixels, cpu.Width, cpu.Height);
         string name = Name(page, scene);
+        await AssertSameSize(name, cpu, warp);
+        var stats = Stats.Compare(warp.Pixels, cpu.Pixels, cpu.Width, cpu.Height);
         await Report($"{name} reference: {stats}");
         if (!(stats.Mean < MeanBudget && stats.P999 <= P999Budget && stats.Max <= MaxBudget))
         {
@@ -73,17 +80,28 @@ public class CpuParityTests
         var cpu = await Capture(page, scene, cpu: true, gpu: "software");
         var hardware = await Capture(page, scene, cpu: false, gpu: "highperformance");
         var warp = await Capture(page, scene, cpu: false, gpu: "software");
+        string name = Name(page, scene);
+        await AssertSameSize(name, cpu, hardware);
+        await AssertSameSize(name, cpu, warp);
         var cpuStats = Stats.Compare(hardware.Pixels, cpu.Pixels, cpu.Width, cpu.Height);
         var referenceStats = Stats.Compare(hardware.Pixels, warp.Pixels, cpu.Width, cpu.Height);
-        string name = Name(page, scene);
         await Report($"{name} hardware: cpu {cpuStats} | reference {referenceStats}");
-        bool pass = cpuStats.Mean < Math.Max(MeanBudget, referenceStats.Mean * 1.25)
-            && cpuStats.P999 <= Math.Max(P999Budget, referenceStats.P999 + 1)
-            && cpuStats.Max <= Math.Max(MaxBudget, referenceStats.Max + 1);
+        bool pass = cpuStats.Mean < Math.Min(HardwareMeanCap, Math.Max(MeanBudget, referenceStats.Mean * 1.25))
+            && cpuStats.P999 <= Math.Min(HardwareP999Cap, Math.Max(P999Budget, referenceStats.P999 + 1))
+            && cpuStats.Max <= Math.Min(HardwareMaxCap, Math.Max(MaxBudget, referenceStats.Max + 1));
         if (!pass)
         {
             Assert.Fail($"{name}: CPU vs hardware GPU {cpuStats}, reference vs hardware {referenceStats}. {Artifacts(name, cpu, hardware)}");
         }
+    }
+
+    // Both captures are the page's size at its scale, pixel for pixel: a capture of another size
+    // (a window that did not resize, a cropped readback) must fail, not be compared misaligned.
+    private static async Task AssertSameSize(string name, Frame a, Frame b)
+    {
+        await Assert.That((a.Width, a.Height)).IsEqualTo((b.Width, b.Height)).Because(name);
+        await Assert.That(a.Pixels.Length).IsEqualTo(a.Width * a.Height * 4).Because(name);
+        await Assert.That(b.Pixels.Length).IsEqualTo(b.Width * b.Height * 4).Because(name);
     }
 
     private static string Name(string page, string scene) => scene.Length == 0 ? page : $"{scene}@{page}";
@@ -109,14 +127,31 @@ public class CpuParityTests
         }
         try
         {
-            int width = (int)Math.Round(GoldenHarness.SheetWidth * scale);
-            int height = (int)Math.Round(GoldenHarness.SheetHeight * scale);
+            // The size the PNG says it is (IHDR), checked against the page's expected size.
+            var (width, height) = PngSize(png!);
+            int expectedWidth = (int)Math.Round(GoldenHarness.SheetWidth * scale);
+            int expectedHeight = (int)Math.Round(GoldenHarness.SheetHeight * scale);
+            if (width != expectedWidth || height != expectedHeight)
+            {
+                Assert.Fail($"{Name(page, scene)} ({(cpu ? "CPU" : gpu)}): captured {width}x{height}, expected {expectedWidth}x{expectedHeight}");
+            }
             return new Frame(ImageReader.ReadPngToRgba8(png!), width, height);
         }
         finally
         {
             File.Delete(png!);
         }
+    }
+
+    private static (int Width, int Height) PngSize(string path)
+    {
+        Span<byte> header = stackalloc byte[24];
+        using (var stream = File.OpenRead(path))
+        {
+            stream.ReadExactly(header);
+        }
+        return ((int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(header[16..]),
+            (int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(header[20..]));
     }
 
     private static string Artifacts(string name, Frame cpu, Frame gpu)

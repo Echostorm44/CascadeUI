@@ -18,7 +18,7 @@ namespace Cascade.UI.Backend.Etch;
 
 /// <summary>
 /// Presents frames to a window's swapchain through wgpu-native. Each frame's draws are scheduled
-/// into an Etch <see cref="DrawList"/> by <see cref="EtchFrameScheduler"/> and executed by an Etch
+/// into an Etch <see cref="DrawList"/> by a <see cref="DrawListBuilder"/> and executed by an Etch
 /// <see cref="GpuComposer"/>; this class owns the device, the swapchain and screenshot capture.
 /// </summary>
 #pragma warning disable CA1812
@@ -42,9 +42,6 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
     // Performance instrumentation
     private readonly Stopwatch _phaseTimer = new();
     private int _frameCount;
-    private double _totalFrameMs;
-    private double _totalBuildMs;
-    private double _totalRenderMs;
 
     // Screenshot capture. _captureBuffer is written row-by-row on the present
     // thread (PerformCapture) and read on the MCP/CLI thread (CaptureFrame);
@@ -57,16 +54,6 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
     private GpuBuffer _stagingBuffer;
     private ulong _stagingBufferSize;
     private int _captureRequested;
-
-    private static readonly bool SkipGlyphPass =
-        Environment.GetEnvironmentVariable("CASCADE_SKIP_GLYPHS") == "1";
-
-    // WP-3509 test hook: reset both glyph atlases at the start of every frame.
-    // A reset re-rasterizes the whole frame, so output must be byte-identical
-    // to a non-reset frame — the golden suite asserts exactly that, proving a
-    // mid-session atlas reset yields a visually complete frame.
-    private static readonly bool ForceAtlasReset =
-        Environment.GetEnvironmentVariable("CASCADE_FORCE_ATLAS_RESET") == "1";
 
     // ── Animated font-size churn (WP-3509 decision) ─────────────────
     // A size animation emits a distinct raster font size per frame, each a new atlas
@@ -88,13 +75,6 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
     /// Set live via cascade_set_render_param "textgamma".
     /// </summary>
     internal float TextGamma { get; set; } = DefaultTextGamma;
-
-    /// <summary>
-    /// Per-frame pixel-dissolve threshold [0,1], copied from the backend each frame
-    /// in <see cref="PresentRecording"/> and uploaded into the surface uniform. Drives
-    /// the screen-space dissolve discard in the geometry/glyph fragment shaders.
-    /// </summary>
-    internal float FrameDissolve { get; set; }
 
     /// <summary>
     /// WP-3537: light-on-dark weight factor. The WP-3525 symmetric model weighted
@@ -240,7 +220,7 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
 
         _composer = new GpuComposer(_device, width, height)
         {
-            SkipGlyphs = SkipGlyphPass,
+            SkipGlyphs = RenderDebugSwitches.SkipGlyphs,
         };
 
         // Force GPU initialization by submitting an empty command buffer.
@@ -264,6 +244,18 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
 
     /// <summary>Frees the texture CPU frames are presented through (the window is hidden).</summary>
     internal void ReleaseCpuFrameTexture() => _composer.ReleaseFramebufferTexture();
+
+    /// <summary>Frees the GPU texture of a destroyed image (no-op if it was never drawn).</summary>
+    internal void ReleaseImage(ulong handle) => _composer.ReleaseImage((int)handle);
+
+    /// <summary>
+    /// The window is hidden: frees image textures, mask pages and the CPU-frame texture (all
+    /// re-created on demand by the next frame). The glyph atlases stay.
+    /// </summary>
+    internal void Trim() => _composer.Trim();
+
+    /// <summary>GPU objects the composer holds (tests and diagnostics).</summary>
+    internal global::Etch.Compose.GpuResourceUsage ResourceUsage() => _composer.ResourceUsage();
 
     /// <summary>Glyph atlas dimension in texels (page 0, monochrome atlas).</summary>
     internal int AtlasDimension => _composer.MonoAtlas.Dimension;
@@ -420,16 +412,12 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
             return;
         }
 
-        FrameDissolve = parameters.Dissolve;
-        var frameSw = Stopwatch.StartNew();
-
-        var pollSw = Stopwatch.StartNew();
+        // Phase timestamps, not Stopwatch instances: a frame allocates nothing for its timing.
+        long frameStart = Stopwatch.GetTimestamp();
         _device.Poll(false);
-        pollSw.Stop();
-
-        var acquireSw = Stopwatch.StartNew();
+        long acquireStart = Stopwatch.GetTimestamp();
         var status = _swapChain.AcquireFrame(out SurfaceTexture frame);
-        acquireSw.Stop();
+        long acquireEnd = Stopwatch.GetTimestamp();
         if (status != SurfaceTextureResult.Ok || !frame.IsValid)
         {
             if (status == SurfaceTextureResult.Outdated || status == SurfaceTextureResult.Lost)
@@ -442,7 +430,7 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
 
         // WP-3509: if churn filled an atlas last frame (or a forced reset is requested), clear it
         // now — between frames, before anything of this frame is looked up or inserted.
-        _composer.ResetAtlasesIfExhausted(ForceAtlasReset);
+        _composer.ResetAtlasesIfExhausted(RenderDebugSwitches.ForceAtlasReset);
 
         _phaseTimer.Restart();
         _placedGlyphs.Clear();
@@ -487,10 +475,10 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
         Span<CommandBuffer> cmdsSpan = stackalloc CommandBuffer[1];
         cmdsSpan[0] = cb;
 
-        var submitSw = Stopwatch.StartNew();
+        long submitStart = Stopwatch.GetTimestamp();
         _device.Queue.Submit(cmdsSpan);
         PollValidationErrors("PresentRecording");
-        submitSw.Stop();
+        long submitEnd = Stopwatch.GetTimestamp();
 
         // Capture the framebuffer to CPU ONLY when a screenshot was requested: the synchronous
         // readback stalls the present pipeline, so doing it every frame capped continuously
@@ -502,26 +490,21 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
             PresentMonitor.MarkCapture();
         }
 
-        var presentSw = Stopwatch.StartNew();
+        long presentStart = Stopwatch.GetTimestamp();
         _swapChain.Present(frame);
-        presentSw.Stop();
+        long presentEnd = Stopwatch.GetTimestamp();
         PresentMonitor.CpuRenderActive = false;
         PresentMonitor.NotifyPresented();
-
-        frameSw.Stop();
-        double totalMs = frameSw.Elapsed.TotalMilliseconds;
 
         if (_frameCount == 0 && DebugLog.IsEnabled(DebugLogCategory.Frame))
         {
             DebugLog.Write(DebugLogCategory.Frame,
-                $"[{DateTime.Now:O}] Frame 0: total={totalMs:F2}ms poll={pollSw.ElapsedMilliseconds}ms acquire={acquireSw.ElapsedMilliseconds}ms build={buildMs:F2}ms encode={renderMs:F2}ms submit={submitSw.ElapsedMilliseconds}ms present={presentSw.ElapsedMilliseconds}ms shapes={_drawList.Shapes.Count} batches={_drawList.BatchCount}");
+                $"[{DateTime.Now:O}] Frame 0: total={Ms(frameStart, presentEnd):F2}ms poll={Ms(frameStart, acquireStart):F2}ms acquire={Ms(acquireStart, acquireEnd):F2}ms build={buildMs:F2}ms encode={renderMs:F2}ms submit={Ms(submitStart, submitEnd):F2}ms present={Ms(presentStart, presentEnd):F2}ms shapes={_drawList.Shapes.Count} batches={_drawList.BatchCount}");
         }
-
-        _totalFrameMs += totalMs;
-        _totalBuildMs += buildMs;
-        _totalRenderMs += renderMs;
         _frameCount++;
     }
+
+    private static double Ms(long start, long end) => (end - start) * 1000.0 / Stopwatch.Frequency;
 
     /// <summary>
     /// Presents a CPU-rendered frame: uploads <paramref name="dirty"/> of <paramref name="frame"/>
@@ -613,7 +596,8 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
     /// </summary>
     internal NativeMemorySnapshot GetNativeMemorySnapshot()
     {
-        int images = _composer.ImageTextureCount;
+        // Counted from the composer's live resources (a trimmed, hidden window reports less).
+        var usage = _composer.ResourceUsage();
         return new NativeMemorySnapshot
         {
             Version = 1,
@@ -626,17 +610,20 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
             SurfaceIntermediateBytes = (ulong)(_currentWidth * _currentHeight * 4),
             SurfaceSwapchainBytesEst = (ulong)(_currentWidth * _currentHeight * 4 * 2),
 
-            WgpuShaderModules = 5,
-            WgpuRenderPipelines = 5,
-            WgpuBuffers = (ulong)(8 + (images > 0 ? 1 : 0)),
-            WgpuTextures = (ulong)(3 + images),
-            WgpuTextureViews = (ulong)(3 + images),
-            WgpuBindGroups = (ulong)(4 + images),
+            ImageCount = (ulong)_composer.ImageTextureCount,
+            WgpuShaderModules = (ulong)usage.ShaderModules,
+            WgpuRenderPipelines = (ulong)usage.RenderPipelines,
+            WgpuBuffers = (ulong)usage.Buffers,
+            WgpuBufferMemoryBytes = (ulong)usage.BufferBytes,
+            WgpuTextures = (ulong)usage.Textures,
+            WgpuTextureViews = (ulong)usage.TextureViews,
+            WgpuTextureMemoryBytes = (ulong)usage.TextureBytes,
+            WgpuBindGroups = (ulong)usage.BindGroups,
         };
     }
     /// <summary>
     /// Requests that the next presented frame be captured to CPU memory.
-    /// Capture happens during the next PresentRecording/PresentCpuFallback call.
+    /// Capture happens during the next PresentRecording/PresentCpuFrame call.
     /// </summary>
     public void RequestCapture()
     {

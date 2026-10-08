@@ -42,7 +42,7 @@ public class CpuParityTests
         {
             yield return ("regular-light-100", scene);
         }
-        foreach (string scene in new[] { "shapes", "strokes", "paths", "gradients", "clips", "opacity", "images", "layers", "blur", "ui", "text" })
+        foreach (string scene in new[] { "shapes", "strokes", "paths", "gradients", "clips", "opacity", "images", "layers", "blur", "ui", "text", "layer-opacity" })
         {
             foreach (string scale in new[] { "100", "125", "150", "200" })
             {

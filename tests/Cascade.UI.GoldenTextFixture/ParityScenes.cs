@@ -12,7 +12,7 @@ internal static class ParityScenes
     /// <summary>Scene names accepted by <see cref="TryDraw"/> (CASCADE_GOLDEN_SCENE=parity-&lt;name&gt;).</summary>
     public static readonly string[] Names =
     [
-        "shapes", "strokes", "paths", "gradients", "clips", "opacity", "images", "layers", "blur", "ui", "text",
+        "shapes", "strokes", "paths", "gradients", "clips", "opacity", "images", "layers", "blur", "ui", "text", "layer-opacity",
     ];
 
     private static readonly ColorValue White = new("#FFFFFF");
@@ -52,6 +52,9 @@ internal static class ParityScenes
                 return true;
             case "parity-clips":
                 DrawClips(ctx, fontPath);
+                return true;
+            case "parity-layer-opacity":
+                DrawLayerOpacity(ctx);
                 return true;
             case "parity-opacity":
                 DrawOpacity(ctx, fontPath);
@@ -445,6 +448,26 @@ internal static class ParityScenes
         }
         ctx.DrawRect(new Rect(250, 300, 160, 100), Orange, radius: 14);
         ctx.DrawText("Over layer", 265, 335, 20, White, fontPath);
+    }
+
+    // A retained layer (a ScrollView's content) inside an opacity scope, beside the same rect drawn
+    // directly in the scope: both must fade once (the layer used to fade twice, 0.5 → 0.25).
+    private static void DrawLayerOpacity(DrawContext ctx)
+    {
+        Background(ctx, White);
+        using (ctx.PushOpacity(0.5f))
+        {
+            ulong handle = ctx.NextLayerHandle();
+            using (ctx.PushLayerTexture(handle, 200, 200))
+            {
+                ctx.DrawRect(new Rect(40, 40, 160, 160), Red);
+            }
+            using (ctx.PushClip(new Rect(20, 20, 260, 260)))
+            {
+                ctx.DrawLayerTexture(handle, 0, 0);
+            }
+            ctx.DrawRect(new Rect(340, 40, 160, 160), Red);
+        }
     }
 
     // Backdrop blur: frosted panels over high-contrast content, with and without tint, plus one

@@ -93,6 +93,8 @@ internal interface IListViewNode
     // ── Selection and keyboard navigation (flat lists) ──
     /// <summary>Whether rows can be selected (a flat list with a selection mode).</summary>
     bool IsSelectable { get; }
+    /// <summary>Whether a click on a row moves keyboard focus to the list (see <see cref="ListView{T}.FocusOnClick"/>).</summary>
+    bool FocusesOnClick { get; }
     /// <summary>Index of the selected item in the flat list, or -1.</summary>
     int SelectedIndex { get; }
     /// <summary>Selects the item at <paramref name="index"/>: updates the binding and raises OnSelect.</summary>
@@ -207,6 +209,7 @@ public sealed class ListView<T> : Node, IListViewNode
     internal Action<T>? onActivateHandler;
     internal bool selectionHighlight = true;
     private bool plain;
+    private bool focusOnClick = true;
     internal int scrollIntoViewIndex = -1;
     private int lastScrolledIntoView = -1;
 
@@ -315,6 +318,20 @@ public sealed class ListView<T> : Node, IListViewNode
     }
 
     bool IListViewNode.IsPlain => plain;
+
+    /// <summary>
+    /// Whether clicking (or right-clicking) a row moves keyboard focus to the list, as it does by
+    /// default so the arrow keys then move the selection. A search-driven list (a launcher, a
+    /// command palette) passes false: the click selects the row and focus stays where it was, so
+    /// typing keeps going to the search box, which drives the selection itself.
+    /// </summary>
+    public ListView<T> FocusOnClick(bool focus = true)
+    {
+        focusOnClick = focus;
+        return this;
+    }
+
+    bool IListViewNode.FocusesOnClick => focusOnClick;
 
     /// <summary>
     /// Scrolls the item at <paramref name="index"/> into view whenever the index changes — e.g. pass

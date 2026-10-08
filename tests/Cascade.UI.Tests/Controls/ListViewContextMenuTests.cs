@@ -89,6 +89,28 @@ public class ListViewContextMenuTests
     }
 
     [Test]
+    public async Task RightClick_WithFocusOnClickOff_FocusStaysInTheSearchBox_BeforeAndAfterTheMenu()
+    {
+        var list = BuildList().FocusOnClick(false);
+        var search = new TextInput(new Bindable<string>("", _ => { }));
+        dispatcher.SetRoot(new Column(children: [search, list]));
+        FocusManager.RequestFocus(search);
+        float y = 50 + RowHeight + 10;
+
+        Mouse(NativeMouseEventType.MouseDown, 100, y, NativeMouseButton.Right);
+        Mouse(NativeMouseEventType.MouseUp, 100, y, NativeMouseButton.Right);
+
+        await Assert.That(selected).IsEqualTo("item1");
+        await Assert.That(dispatcher.IsMenuOpen).IsTrue();
+        await Assert.That(FocusManager.FocusedElement).IsSameReferenceAs(search);
+
+        Press(Key.Escape);
+
+        await Assert.That(dispatcher.IsMenuOpen).IsFalse();
+        await Assert.That(FocusManager.FocusedElement).IsSameReferenceAs(search);
+    }
+
+    [Test]
     public async Task RightClickBelowTheLastRow_OpensNothing()
     {
         BuildList(count: 3);

@@ -48,6 +48,21 @@ public class ListViewSelectionTests
     }
 
     [Test]
+    public async Task Click_WithFocusOnClickOff_SelectsRow_AndFocusStaysInTheSearchBox()
+    {
+        // A search-driven list (Raycast, a launcher): typing must keep filtering after a row is clicked.
+        var list = BuildList(10).FocusOnClick(false);
+        var search = new TextInput(new Bindable<string>("", _ => { }));
+        dispatcher.SetRoot(new Column(children: [search, list]));
+        FocusManager.RequestFocus(search);
+
+        Click(y: 2 * RowHeight + 5);
+
+        await Assert.That(selected).IsEqualTo("item2");
+        await Assert.That(FocusManager.FocusedElement).IsSameReferenceAs(search);
+    }
+
+    [Test]
     public async Task ArrowKeys_MoveSelection_AndScrollItIntoView()
     {
         var list = BuildList(10);

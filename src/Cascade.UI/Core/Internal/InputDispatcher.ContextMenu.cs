@@ -169,7 +169,7 @@ internal sealed partial class InputDispatcher
         if (list.IsSelectable)
         {
             list.SelectIndex(row);
-            if (list is Node listNode)
+            if (list.FocusesOnClick && list is Node listNode)
             {
                 FocusManager.RequestFocus(listNode);
             }

@@ -150,6 +150,43 @@ internal sealed partial class EtchCpuRenderer : IDisposable
         }
     }
 
+    /// <summary>
+    /// A rect of the monochrome glyph atlas as RGBA (coverage as gray, alpha 255), rows flipped
+    /// upright — the CPU twin of <see cref="EtchGpuPresenter.CaptureAtlasRegion"/>. Width/height of
+    /// 0 mean "to the atlas edge".
+    /// </summary>
+    public AtlasRegionCapture? CaptureAtlasRegion(int u, int v, int width, int height)
+    {
+        var atlas = _composer.MonoAtlas;
+        var page = atlas.GetPage(0).Pixels;
+        if (page is null)
+        {
+            return null;
+        }
+        int dim = atlas.Dimension;
+        int rx = Math.Clamp(u, 0, dim - 1);
+        int ry = Math.Clamp(v, 0, dim - 1);
+        int rw = width <= 0 ? dim - rx : Math.Clamp(width, 1, dim - rx);
+        int rh = height <= 0 ? dim - ry : Math.Clamp(height, 1, dim - ry);
+        var pixels = new byte[rw * rh * 4];
+        for (int row = 0; row < rh; row++)
+        {
+            // Glyph bitmaps are stored bottom-up; flip so a captured glyph reads upright.
+            int sourceRow = ry + (rh - 1 - row);
+            for (int col = 0; col < rw; col++)
+            {
+                byte coverage = page[sourceRow * dim + rx + col];
+                int offset = (row * rw + col) * 4;
+                pixels[offset] = coverage;
+                pixels[offset + 1] = coverage;
+                pixels[offset + 2] = coverage;
+                pixels[offset + 3] = 255;
+            }
+        }
+        var image = new ImageData { Pixels = pixels, Width = rw, Height = rh, Stride = rw * 4 };
+        return new AtlasRegionCapture(image, dim, rx, ry, rw, rh);
+    }
+
     /// <summary>The last frame as RGBA at native resolution, or null before the first frame.</summary>
     public ImageData? CaptureFrame()
     {

@@ -173,6 +173,7 @@ internal sealed class UiaProvider : IPlatformAccessibilityBridge
             AccessibleRole.TabPanel => 50033,      // UIA_PaneControlTypeId
             AccessibleRole.MenuBar => 50010,       // UIA_MenuBarControlTypeId
             AccessibleRole.MenuItem => 50011,      // UIA_MenuItemControlTypeId
+            AccessibleRole.Menu => 50009,          // UIA_MenuControlTypeId
             AccessibleRole.Dialog => 50033,        // UIA_PaneControlTypeId (window)
             AccessibleRole.AlertDialog => 50033,   // UIA_PaneControlTypeId (window)
             AccessibleRole.ProgressBar => 50012,   // UIA_ProgressBarControlTypeId

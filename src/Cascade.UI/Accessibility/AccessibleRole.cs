@@ -112,5 +112,8 @@ public enum AccessibleRole
     /// <summary>
     /// A decorative/presentational element hidden from the accessibility tree.
     /// </summary>
-    Presentation
+    Presentation,
+
+    /// <summary>A popup menu (a context menu or a dropdown menu) containing <see cref="MenuItem"/>s.</summary>
+    Menu
 }

@@ -1361,7 +1361,7 @@ internal static class McpTools
         Key parsedKey = ParseKeyName(keyName);
         if (parsedKey == Key.None && !string.Equals(keyName, "None", StringComparison.OrdinalIgnoreCase))
         {
-            return ErrorJson($"Unknown key name: {keyName}. Valid keys: Enter, Tab, Escape, Backspace, Delete, Space, ArrowLeft, ArrowRight, ArrowUp, ArrowDown, Home, End, PageUp, PageDown, F1-F12, A-Z, 0-9, or any Cascade.UI.Key name (Comma, Backtick, NumPad1, …)", null);
+            return ErrorJson($"Unknown key name: {keyName}. Valid keys: Enter, Tab, Escape, Backspace, Delete, Space, ArrowLeft, ArrowRight, ArrowUp, ArrowDown, Home, End, PageUp, PageDown, F1-F12, A-Z, 0-9, Apps (the context-menu key), or any Cascade.UI.Key name (Comma, Backtick, NumPad1, …)", null);
         }
 
         ModifierKeys modifiers = ModifierKeys.None;
@@ -1472,6 +1472,7 @@ internal static class McpTools
             "PAGEUP" => Key.PageUp,
             "PAGEDOWN" => Key.PageDown,
             "INSERT" => Key.Insert,
+            "APPS" or "CONTEXTMENU" or "MENU" => Key.Apps,
             "F1" => Key.F1, "F2" => Key.F2, "F3" => Key.F3, "F4" => Key.F4,
             "F5" => Key.F5, "F6" => Key.F6, "F7" => Key.F7, "F8" => Key.F8,
             "F9" => Key.F9, "F10" => Key.F10, "F11" => Key.F11, "F12" => Key.F12,
@@ -2756,6 +2757,7 @@ internal static class McpTools
             {
                 sb.Append($",\"label\":\"{EscapeJson(node.Label)}\"");
             }
+            AppendAccessibleExtras(sb, node);
             sb.Append('}');
         }
 
@@ -2927,6 +2929,41 @@ internal static class McpTools
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Disabled/focused flags, state properties and — for painted overlays such as an open menu —
+    /// window-logical bounds (use them with click --x/--y --coord-space logical).
+    /// </summary>
+    private static void AppendAccessibleExtras(StringBuilder sb, DevTools.AccessibleNode node)
+    {
+        if (node.Disabled)
+        {
+            sb.Append(",\"disabled\":true");
+        }
+        if (node.Focused)
+        {
+            sb.Append(",\"focused\":true");
+        }
+        if (node.StateProperties.Count > 0)
+        {
+            sb.Append(",\"states\":{");
+            bool first = true;
+            foreach (var pair in node.StateProperties)
+            {
+                if (!first)
+                {
+                    sb.Append(',');
+                }
+                first = false;
+                sb.Append($"\"{EscapeJson(pair.Key)}\":\"{EscapeJson(pair.Value)}\"");
+            }
+            sb.Append('}');
+        }
+        if (node.Bounds is { } b)
+        {
+            sb.Append(System.FormattableString.Invariant($",\"bounds\":{{\"x\":{b.X},\"y\":{b.Y},\"width\":{b.Width},\"height\":{b.Height}}}"));
+        }
+    }
+
     private static void SerializeAccessibleNodeRecursive(StringBuilder sb, DevTools.AccessibleNode node, int maxDepth, int currentDepth)
     {
         sb.Append($"{{\"id\":\"{EscapeJson(node.NodeId)}\"");
@@ -2935,6 +2972,8 @@ internal static class McpTools
         {
             sb.Append($",\"label\":\"{EscapeJson(node.Label)}\"");
         }
+
+        AppendAccessibleExtras(sb, node);
 
         if (currentDepth < maxDepth && node.Children.Count > 0)
         {

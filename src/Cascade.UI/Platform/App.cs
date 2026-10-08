@@ -374,7 +374,13 @@ public static class App
             {
                 // Key-ups while another app has focus never reach us: re-read the modifiers on
                 // activation and report none on deactivation.
-                Keyboard.Observe(Win32.LoWord((nint)wParam) != Win32.WA_INACTIVE ? Win32Input.GetAsyncModifierKeys() : ModifierKeys.None);
+                bool active = Win32.LoWord((nint)wParam) != Win32.WA_INACTIVE;
+                Keyboard.Observe(active ? Win32Input.GetAsyncModifierKeys() : ModifierKeys.None);
+                if (!active)
+                {
+                    // Menus close when the window loses activation, as native menus do.
+                    orchestrator.Input.HandleWindowDeactivated();
+                }
             }
             else if (msg == Win32.WM_TRAYICON)
             {

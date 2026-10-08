@@ -14,7 +14,7 @@ namespace Cascade.UI;
 /// <see cref="LayoutNodeData.Bounds"/> is populated. The painter traverses depth-first
 /// (parent before children) so backgrounds are painted below content.
 /// </remarks>
-internal sealed class NodePainter
+internal sealed partial class NodePainter
 {
     // TEMP DIAGNOSTIC: per-node-type allocation profiler. Attributes bytes
     // allocated during PaintNode for each Node type, EXCLUSIVE of descendant
@@ -310,6 +310,7 @@ internal sealed class NodePainter
         {
             PaintCommandPaletteOverlay();
         }
+        PaintMenuOverlay();
         PaintToasts();
         PaintDragDropOverlay();
         Cascade.UI.Diagnostics.DiagnosticsHub.EndPhase();
@@ -1720,155 +1721,6 @@ internal sealed class NodePainter
                 bounds.Height + outlineOffset * 2);
             ctx.DrawRect(outlineRect, stroke: new Stroke(st.FocusRingColor, st.FocusRingWidth),
                 radius: bt.Radius + outlineOffset);
-        }
-
-        // Dropdown overlay (deferred)
-        if (sb.IsOpen && !sb.IsDisabled && sb.Items.Count > 0)
-        {
-            float absX = absoluteX;
-            float absY = absoluteY;
-            float triggerW = bounds.Width;
-            float triggerH = bounds.Height;
-
-            deferredOverlays ??= [];
-            deferredOverlays.Add(() =>
-            {
-                var absTrigger = new Rect(absX, absY, triggerW, triggerH);
-                PaintSplitButtonDropdown(sb, absTrigger);
-            });
-        }
-        else
-        {
-            sb.DropdownBounds = default;
-        }
-    }
-
-    private void PaintSplitButtonDropdown(SplitButton sb, Rect triggerBounds)
-    {
-        var st = theme.Select;
-        float gap = 4f;
-        float itemHeight = st.ItemHeight;
-        sb.MenuItemHeight = itemHeight;
-
-        // Count non-separator items for sizing; separators are thin
-        float separatorHeight = 9f;
-        float totalHeight = 0f;
-        float maxLabelW = 0f;
-        float maxShortcutW = 0f;
-        float fontSize = theme.Typography.Body.Size;
-
-        foreach (var item in sb.Items)
-        {
-            if (item.Label == null)
-            {
-                totalHeight += separatorHeight;
-                continue;
-            }
-
-            totalHeight += itemHeight;
-            float labelW = ctx.MeasureText(item.Label, fontSize).Width;
-            if (labelW > maxLabelW)
-            {
-                maxLabelW = labelW;
-            }
-
-            if (item.Shortcut is { } sc)
-            {
-                float scW = ctx.MeasureText(sc, 12f).Width;
-                if (scW > maxShortcutW)
-                {
-                    maxShortcutW = scW;
-                }
-            }
-        }
-
-        // Inset the items from the rounded container so text and highlights get
-        // breathing room instead of sitting flush against the top/bottom edges and
-        // the corner radius — matching how native menus pad their item list.
-        const float menuPadV = 6f;
-        const float menuInsetH = 6f;
-
-        float dropdownHeight = Math.Min(totalHeight + menuPadV * 2f, st.DropdownMaxHeight);
-        float shortcutGap = maxShortcutW > 0 ? 24f : 0f;
-        float measuredWidth = (st.ItemPaddingH + menuInsetH) * 2f + maxLabelW + shortcutGap + maxShortcutW;
-        float dropdownWidth = Math.Max(Math.Max(triggerBounds.Width, 160f), measuredWidth);
-
-        var dropdownBounds = new Rect(
-            triggerBounds.X,
-            triggerBounds.Y + triggerBounds.Height + gap,
-            dropdownWidth,
-            dropdownHeight);
-
-        sb.DropdownBounds = dropdownBounds;
-
-        // Shadow
-        PaintShadow(st.DropdownShadow, dropdownBounds, st.DropdownRadius);
-
-        // Background
-        ctx.DrawRect(dropdownBounds, st.DropdownBackground, radius: st.DropdownRadius);
-
-        // Border
-        if (st.BorderWidth > 0)
-        {
-            ctx.DrawRect(dropdownBounds,
-                stroke: new Stroke(st.BorderColor, st.BorderWidth),
-                radius: st.DropdownRadius);
-        }
-
-        using var clip = ctx.PushClip(dropdownBounds);
-
-        float itemY = dropdownBounds.Y + menuPadV;
-        int highlightedIndex = sb.HighlightedIndex;
-
-        for (int i = 0; i < sb.Items.Count; i++)
-        {
-            var menuItem = sb.Items[i];
-
-            // Separator
-            if (menuItem.Label == null)
-            {
-                float sepY = itemY + separatorHeight / 2f;
-                ctx.DrawLine(
-                    new Point(dropdownBounds.X + 8f, sepY),
-                    new Point(dropdownBounds.X + dropdownBounds.Width - 8f, sepY),
-                    new Stroke(st.BorderColor, 1f));
-                itemY += separatorHeight;
-                continue;
-            }
-
-            var itemBounds = new Rect(dropdownBounds.X, itemY, dropdownBounds.Width, itemHeight);
-
-            // Highlight — inset horizontally with its own rounded corners so it
-            // reads as a floating selection rather than a full-bleed bar that
-            // collides with the dropdown's rounded corners.
-            if (i == highlightedIndex && !menuItem.Disabled)
-            {
-                var highlightBounds = new Rect(
-                    itemBounds.X + menuInsetH,
-                    itemBounds.Y,
-                    itemBounds.Width - menuInsetH * 2f,
-                    itemBounds.Height);
-                ctx.DrawRect(highlightBounds, st.ItemHoverBackground,
-                    radius: Math.Min(8f, st.DropdownRadius));
-            }
-
-            // Text
-            float textOpacity = menuItem.Disabled ? 0.4f : 1f;
-            var textColor = menuItem.Style == MenuItemStyle.Destructive
-                ? theme.Colors.Danger.Opacity(textOpacity)
-                : st.TextColor.Opacity(textOpacity);
-
-            PaintText(menuItem.Label, itemBounds, st.ItemPaddingH + menuInsetH, textColor);
-
-            // Shortcut hint on the right
-            if (menuItem.Shortcut is { } shortcut)
-            {
-                var shortcutColor = st.TextColor.Opacity(0.5f * textOpacity);
-                PaintText(shortcut, itemBounds, st.ItemPaddingH + menuInsetH, shortcutColor,
-                    alignment: TextAlignment.End, fontSize: 12f);
-            }
-
-            itemY += itemHeight;
         }
     }
 

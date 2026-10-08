@@ -60,6 +60,7 @@ public class PaintOrderTests
         await Assert.That(list.Shapes.Count).IsGreaterThan(10);
         await Assert.That(list.ImageInstances.Count).IsEqualTo(1);
         await Assert.That(list.Blurs.Count).IsEqualTo(1);
+        await Assert.That(provider.Recorder.UnhandledOps).IsEqualTo(0);
     }
 
     [Test]
@@ -79,6 +80,7 @@ public class PaintOrderTests
         await Assert.That(list.Shapes.Count).IsGreaterThan(10);
         await Assert.That(list.ImageInstances.Count).IsEqualTo(1);
         await Assert.That(list.Blurs.Count).IsEqualTo(1);
+        await Assert.That(provider.Recorder.UnhandledOps).IsEqualTo(0);
     }
 
     [Test]

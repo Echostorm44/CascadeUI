@@ -22,6 +22,8 @@ internal sealed class EtchRecorder
     private readonly HashSet<ulong> reachable = new();
     private readonly Stack<ulong> pending = new();
     private readonly List<ulong> dead = new();
+    private readonly Dictionary<ulong, ComposeGradientStop[]> gradientStops = new();
+    private const int MaxCachedGradients = 512;
     private Matrix3x2 current;
     private bool transformDirty;
 
@@ -366,14 +368,9 @@ internal sealed class EtchRecorder
         return StrokeParameters.Solid(op.StrokeWidth, cap, join);
     }
 
-    private static ComposePaint GradientPaint(EtchBackend.SceneOp op)
+    private ComposePaint GradientPaint(EtchBackend.SceneOp op)
     {
-        var source = op.GradientStops!;
-        var stops = new ComposeGradientStop[source.Length];
-        for (int i = 0; i < source.Length; i++)
-        {
-            stops[i] = new ComposeGradientStop(source[i].Offset, Straight(source[i].Color));
-        }
+        var stops = ConvertStops(op.GradientStops!);
         return op.GradientKind switch
         {
             1 => ComposePaint.Radial(op.G0, op.G1, op.G2, stops),
@@ -381,6 +378,60 @@ internal sealed class EtchRecorder
             _ => ComposePaint.Linear(op.G0, op.G1, op.G2, op.G3, stops),
         };
     }
+
+    /// <summary>
+    /// The stops in Etch's form, cached by content: a gradient drawn every frame converts once.
+    /// Recordings keep the returned array, so a cached array is never written after it is stored.
+    /// </summary>
+    private ComposeGradientStop[] ConvertStops(GradientStop[] source)
+    {
+        ulong key = 14695981039346656037UL;
+        for (int i = 0; i < source.Length; i++)
+        {
+            var c = source[i].Color;
+            key = Mix(key, BitConverter.SingleToUInt32Bits(source[i].Offset));
+            key = Mix(key, BitConverter.SingleToUInt32Bits(c.R));
+            key = Mix(key, BitConverter.SingleToUInt32Bits(c.G));
+            key = Mix(key, BitConverter.SingleToUInt32Bits(c.B));
+            key = Mix(key, BitConverter.SingleToUInt32Bits(c.A));
+        }
+        if (gradientStops.TryGetValue(key, out var cached) && SameStops(cached, source))
+        {
+            return cached;
+        }
+        var stops = new ComposeGradientStop[source.Length];
+        for (int i = 0; i < source.Length; i++)
+        {
+            stops[i] = new ComposeGradientStop(source[i].Offset, Straight(source[i].Color));
+        }
+        if (gradientStops.Count >= MaxCachedGradients)
+        {
+            gradientStops.Clear();
+        }
+        gradientStops[key] = stops;
+        return stops;
+    }
+
+    private static bool SameStops(ComposeGradientStop[] cached, GradientStop[] source)
+    {
+        if (cached.Length != source.Length)
+        {
+            return false;
+        }
+        for (int i = 0; i < source.Length; i++)
+        {
+            if (cached[i] != new ComposeGradientStop(source[i].Offset, Straight(source[i].Color)))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static ulong Mix(ulong hash, uint value) => (hash ^ value) * 1099511628211UL;
+
+    /// <summary>Converted gradients held (tests read it).</summary>
+    internal int CachedGradientCount => gradientStops.Count;
 
     /// <summary>Premultiplied <see cref="ColorValue"/> → straight-alpha linear colour.</summary>
     internal static ComposeColor Straight(ColorValue c)

@@ -45,6 +45,9 @@ internal sealed class EtchBackendProvider : IDisposable
     /// <summary>The recorder translating backend ops for the composers (tests inspect it).</summary>
     internal EtchRecorder Recorder => _recorder;
 
+    /// <summary>The GPU presenter, when the surface has one (tests inspect it).</summary>
+    internal EtchGpuPresenter? GpuPresenter => _etchGpuPresenter;
+
     /// <summary>The main recording built by the last <see cref="RecordFrame"/>.</summary>
     internal global::Etch.Compose.DrawRecording MainRecording => _mainRecording;
 
@@ -138,12 +141,13 @@ internal sealed class EtchBackendProvider : IDisposable
 
     /// <summary>
     /// The window is hidden: shrink the swapchain and its framebuffer copy to 1×1 so a tray app
-    /// does not hold ~35 MB of surface memory all day. Nothing is presented while hidden.
+    /// does not hold ~35 MB of surface memory all day, and free the image textures, mask pages
+    /// and CPU-frame texture (re-created on demand). Nothing is presented while hidden.
     /// </summary>
     public void SuspendSurface()
     {
         _etchGpuPresenter?.Resize(1, 1);
-        _etchGpuPresenter?.ReleaseCpuFrameTexture();
+        _etchGpuPresenter?.Trim();
         // The CPU framebuffer (8 MB at 1080p) and its tile buffers go too; the next frame renders in full.
         _cpu?.Release();
     }
@@ -171,6 +175,9 @@ internal sealed class EtchBackendProvider : IDisposable
     // grow the error log without bound (the log itself stays unconditional so
     // real failures are visible without any env var).
     private int presentErrorCount;
+
+    /// <summary>Frames whose present threw (tests: a frame must never fail).</summary>
+    internal int PresentErrorCount => presentErrorCount;
     private const int MaxPresentErrorLogEntries = 100;
 
 
@@ -258,7 +265,6 @@ internal sealed class EtchBackendProvider : IDisposable
                 if (float.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float g))
                 {
                     _textGamma = g;
-                    _backend.TextGamma = g;
                     if (_etchGpuPresenter is not null)
                     {
                         _etchGpuPresenter.TextGamma = g;
@@ -271,7 +277,6 @@ internal sealed class EtchBackendProvider : IDisposable
                 if (float.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float lw))
                 {
                     _lightWeight = lw;
-                    _backend.LightWeight = lw;
                     if (_etchGpuPresenter is not null)
                     {
                         _etchGpuPresenter.LightWeight = lw;
@@ -287,6 +292,7 @@ internal sealed class EtchBackendProvider : IDisposable
     private List<ShapeDrawRecord> snapshotShapes = new();
     private List<GlyphDrawRecord> snapshotGlyphs = new();
     private long snapshotFrame;
+    private int snapshotAtlasDimension;
 
     // Back buffers refilled on each captured present, then swapped under the
     // gate so queries never observe a half-built frame.
@@ -323,12 +329,32 @@ internal sealed class EtchBackendProvider : IDisposable
 
             return new DrawSnapshot(
                 snapshotFrame,
-                _etchGpuPresenter?.AtlasDimension ?? 0,
+                snapshotAtlasDimension,
                 snapshotShapes.ToArray(),
                 snapshotGlyphs.ToArray(),
                 snapshotUncapturedLayers);
         }
     }
+
+    /// <summary>Frees the GPU textures of images destroyed since the last frame.</summary>
+    internal void ReleaseDestroyedImages()
+    {
+        var destroyed = _backend.DestroyedImages;
+        if (destroyed.Count == 0)
+        {
+            return;
+        }
+        foreach (ulong handle in destroyed)
+        {
+            _etchGpuPresenter?.ReleaseImage(handle);
+        }
+        destroyed.Clear();
+    }
+
+    // The glyph atlas the last frame drew from: the CPU composer's for a CPU frame.
+    private int CurrentAtlasDimension => _lastFrameCpu && _cpu is not null
+        ? _cpu.AtlasDimension
+        : _etchGpuPresenter?.AtlasDimension ?? 0;
 
     public AtlasRegionCapture? CaptureAtlasRegion(int u, int v, int width, int height)
     {
@@ -360,6 +386,7 @@ internal sealed class EtchBackendProvider : IDisposable
             (snapshotShapes, pendingShapes) = (pendingShapes, snapshotShapes);
             (snapshotGlyphs, pendingGlyphs) = (pendingGlyphs, snapshotGlyphs);
             snapshotUncapturedLayers = pendingUncapturedLayers;
+            snapshotAtlasDimension = CurrentAtlasDimension;
             snapshotFrame = presented;
         }
     }
@@ -684,6 +711,7 @@ internal sealed class EtchBackendProvider : IDisposable
                 $"[{DateTime.Now:O}] PresentFrameCore: forceCpu={_forceCpuFallback}, presenter={_etchGpuPresenter != null}, layers={_recorder.LayerCount}");
         }
 
+        ReleaseDestroyedImages();
         if (!_forceCpuFallback && _etchGpuPresenter != null)
         {
             RecordFrame(baseColor, captureDraws);

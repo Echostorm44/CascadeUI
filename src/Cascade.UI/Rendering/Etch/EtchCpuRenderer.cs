@@ -25,7 +25,11 @@ internal sealed partial class EtchCpuRenderer : IDisposable
     private readonly DrawList _drawList = new();
     private readonly CpuFramebuffer _framebuffer = new();
     private readonly List<PlacedGlyph> _placedGlyphs = new();
-    private CpuDirtyRect[] _dirty = Array.Empty<CpuDirtyRect>();
+    private CpuDirtyRect[] _dirty = new CpuDirtyRect[1];
+    // Render runs on the UI thread; MCP captures read the framebuffer from another. Both, and
+    // Release, hold this so a capture never reads a half-rendered or released frame.
+    private readonly System.Threading.Lock _frameGate = new();
+    private readonly bool _forceAtlasReset;
     private int _dirtyCount;
     private bool _presentAll = true;
     private bool _disposed;
@@ -48,6 +52,22 @@ internal sealed partial class EtchCpuRenderer : IDisposable
     /// <summary>Pixels the last <see cref="Render"/> re-rendered.</summary>
     public long LastDamagedPixels { get; private set; }
 
+    /// <summary>
+    /// Creates a renderer. The debug switches default to the environment's
+    /// (<c>CASCADE_SKIP_GLYPHS</c>, <c>CASCADE_FORCE_ATLAS_RESET</c>), as on the GPU path.
+    /// </summary>
+    public EtchCpuRenderer(bool? skipGlyphs = null, bool? forceAtlasReset = null)
+    {
+        _composer.SkipGlyphs = skipGlyphs ?? RenderDebugSwitches.SkipGlyphs;
+        _forceAtlasReset = forceAtlasReset ?? RenderDebugSwitches.ForceAtlasReset;
+    }
+
+    /// <summary>The glyph atlas side in texels (MCP <c>atlas_dimension</c>).</summary>
+    public int AtlasDimension => _composer.MonoAtlas.Dimension;
+
+    /// <summary>The glyph atlas's reset generation (tests).</summary>
+    internal int MonoAtlasGeneration => _composer.MonoAtlas.Generation;
+
     /// <summary>The next present sends the whole frame (the window surface was lost or uncovered).</summary>
     public void InvalidatePresentation() => _presentAll = true;
 
@@ -60,8 +80,17 @@ internal sealed partial class EtchCpuRenderer : IDisposable
         List<GlyphDrawRecord>? glyphRecords, IReadOnlyDictionary<ulong, int>? layerCompositeIndex)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        lock (_frameGate)
+        {
+            RenderLocked(main, parameters, width, height, glyphRecords, layerCompositeIndex);
+        }
+    }
+
+    private void RenderLocked(DrawRecording main, ComposeParameters parameters, uint width, uint height,
+        List<GlyphDrawRecord>? glyphRecords, IReadOnlyDictionary<ulong, int>? layerCompositeIndex)
+    {
         long start = System.Diagnostics.Stopwatch.GetTimestamp();
-        _composer.ResetAtlasesIfExhausted(force: false);
+        _composer.ResetAtlasesIfExhausted(_forceAtlasReset);
         _placedGlyphs.Clear();
         _builder.Begin(_drawList, width, height, _composer.Masks, _composer.MonoAtlas, _composer.ColorAtlas,
             glyphRecords is null ? null : _placedGlyphs);
@@ -74,10 +103,12 @@ internal sealed partial class EtchCpuRenderer : IDisposable
         }
 
         LastBuildMs = System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds;
-        var dirty = _composer.RenderIncremental(_drawList, _framebuffer);
+        ReadOnlySpan<CpuDirtyRect> dirty = _composer.RenderIncremental(_drawList, _framebuffer);
         if (_presentAll)
         {
-            dirty = new[] { new CpuDirtyRect(0, 0, _framebuffer.Width, _framebuffer.Height) };
+            // The whole frame, in the (never empty) damage array: no per-frame allocation.
+            _dirty[0] = new CpuDirtyRect(0, 0, _framebuffer.Width, _framebuffer.Height);
+            dirty = _dirty.AsSpan(0, 1);
             _presentAll = false;
         }
         if (_dirty.Length < dirty.Length)
@@ -187,6 +218,14 @@ internal sealed partial class EtchCpuRenderer : IDisposable
     /// </summary>
     public AtlasRegionCapture? CaptureAtlasRegion(int u, int v, int width, int height)
     {
+        lock (_frameGate)
+        {
+            return CaptureAtlasRegionLocked(u, v, width, height);
+        }
+    }
+
+    private AtlasRegionCapture? CaptureAtlasRegionLocked(int u, int v, int width, int height)
+    {
         var atlas = _composer.MonoAtlas;
         var page = atlas.GetPage(0).Pixels;
         if (page is null)
@@ -220,6 +259,14 @@ internal sealed partial class EtchCpuRenderer : IDisposable
     /// <summary>The last frame as RGBA at native resolution, or null before the first frame.</summary>
     public ImageData? CaptureFrame()
     {
+        lock (_frameGate)
+        {
+            return CaptureFrameLocked();
+        }
+    }
+
+    private ImageData? CaptureFrameLocked()
+    {
         if (_framebuffer.Width == 0 || _framebuffer.Height == 0)
         {
             return null;
@@ -236,15 +283,23 @@ internal sealed partial class EtchCpuRenderer : IDisposable
     }
 
     /// <summary>
-    /// Frees the framebuffer, the composer's frame buffers and its mask pages (the window is
-    /// hidden). The glyph atlases stay: they are what makes the next frame fast.
+    /// Frees the framebuffer, the draw list (and the images it references), the composer's frame
+    /// buffers and its mask pages (the window is hidden). The glyph atlases stay: they are what
+    /// makes the next frame fast.
     /// </summary>
     public void Release()
     {
-        _framebuffer.Release();
-        _composer.Trim();
-        _composer.Masks.Trim();
-        _presentAll = true;
+        lock (_frameGate)
+        {
+            _framebuffer.Release();
+            _drawList.Trim();
+            _placedGlyphs.Clear();
+            _placedGlyphs.TrimExcess();
+            _composer.Trim();
+            _composer.Masks.Trim();
+            _dirtyCount = 0;
+            _presentAll = true;
+        }
     }
 
     public void Dispose()

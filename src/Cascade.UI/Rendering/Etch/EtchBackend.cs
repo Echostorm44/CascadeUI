@@ -21,20 +21,6 @@ internal sealed class EtchBackend : IDisposable
     internal readonly List<GlyphOp> GlyphCommands = new();
     internal uint Width, Height;
 
-    /// <summary>
-    /// WP-3526: text-weight gamma for the CPU glyph blitter, kept in lock-step with
-    /// the GPU presenter's <see cref="EtchGpuPresenter.TextGamma"/> by the provider
-    /// so a forced-CPU machine renders text at the same weight as a GPU one.
-    /// </summary>
-    internal float TextGamma { get; set; } = EtchGpuPresenter.DefaultTextGamma;
-
-    /// <summary>
-    /// WP-3537: adaptive light-weight strength for the CPU glyph blitter (1 = full
-    /// contrast-adaptive, 0 = legacy symmetric), kept in lock-step with
-    /// <see cref="EtchGpuPresenter.LightWeight"/> by the provider.
-    /// </summary>
-    internal float LightWeight { get; set; } = EtchGpuPresenter.DefaultLightWeight;
-
     private Matrix3x2 _currentTransform = Matrix3x2.Identity;
     private readonly Stack<Matrix3x2> _transformStack = new();
 
@@ -269,6 +255,7 @@ internal sealed class EtchBackend : IDisposable
 
     // Image cache
     private readonly Dictionary<ulong, ImageEntry> _images = new();
+    private readonly List<ulong> _destroyedImages = new();
     private ulong _nextImageHandle = 1;
 
     internal sealed class ImageEntry
@@ -627,8 +614,16 @@ internal sealed class EtchBackend : IDisposable
 
     public void DestroyImage(ulong image)
     {
-        _images.Remove(image);
+        if (_images.Remove(image))
+        {
+            // The provider frees the image's GPU texture before the next frame (handles are never
+            // reused, so a retained layer still drawing it just uploads it again).
+            _destroyedImages.Add(image);
+        }
     }
+
+    /// <summary>Images destroyed since the provider last released their GPU textures.</summary>
+    internal List<ulong> DestroyedImages => _destroyedImages;
     public void DrawPathGradient(ulong frame, ulong path, int gk, ReadOnlySpan<GradientStop> s, float p0, float p1, float p2, float p3, ColorValue? sc, float sw, StrokeCap c, StrokeJoin j, DashPattern? dash = null)
     {
         var op = RentOp();

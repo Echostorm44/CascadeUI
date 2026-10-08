@@ -272,7 +272,7 @@ internal static class WatchCommand
                 state.PipeClient = null;
                 state.PipeReady = false;
 
-                int result = FullRebuild(projectPath);
+                int result = FullRebuild(projectPath, restore: changedFile.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase));
                 if (result != 0)
                 {
                     Console.Error.WriteLine($"  [cascade] ✗ Build failed: {relativePath}");
@@ -461,7 +461,9 @@ internal static class WatchCommand
 
     private static int BuildProject(string projectPath, string? theme, string? mode)
     {
-        var arguments = $"build \"{projectPath}\" --no-restore -v:q";
+        // Restores: a dependency added since the last restore would otherwise build an app that
+        // fails to load it (project.assets.json is stale until something restores).
+        var arguments = $"build \"{projectPath}\" -v:q";
         if (theme is not null || mode is not null)
         {
             if (theme is not null)
@@ -495,9 +497,12 @@ internal static class WatchCommand
         return RunDotnet($"run --project \"{projectPath}\" --no-build");
     }
 
-    private static int FullRebuild(string projectPath)
+    private static int FullRebuild(string projectPath, bool restore)
     {
-        int exitCode = RunDotnet($"build \"{projectPath}\" --no-restore -v:q", out string output);
+        // A .csproj edit can change the dependency graph, so it restores; other edits skip the
+        // restore to keep the rebuild fast.
+        string noRestore = restore ? "" : " --no-restore";
+        int exitCode = RunDotnet($"build \"{projectPath}\"{noRestore} -v:q", out string output);
         if (exitCode != 0)
         {
             Log($"  [cascade] ✗ Rebuild failed (exit code {exitCode}):");

@@ -168,7 +168,7 @@ internal static class DoctorCommand
             var psi = new System.Diagnostics.ProcessStartInfo
             {
                 FileName = "dotnet",
-                Arguments = $"build \"{projectPath}\" --no-restore -v:q -nologo",
+                Arguments = $"build \"{projectPath}\" -v:q -nologo",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,

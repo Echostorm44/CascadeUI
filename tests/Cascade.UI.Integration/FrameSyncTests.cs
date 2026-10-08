@@ -143,7 +143,7 @@ public class FrameSyncTests
         // until the call is forwarded AND reports the timeout (a late frame
         // from earlier activity can absorb the first forwarded attempt).
         // The per-call client timeout must exceed the server's CPU-fallback
-        // present window (20 s, McpTools): if this GPU fixture ever falls back to
+        // present window (5 s, McpTools): if this GPU fixture ever falls back to
         // CPU under load, a no-repaint mutation legitimately waits that whole
         // window before reporting timed_out, and the client must not give up
         // first (WP-3516).

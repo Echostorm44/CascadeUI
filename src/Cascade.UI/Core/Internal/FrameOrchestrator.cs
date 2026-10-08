@@ -140,6 +140,7 @@ internal sealed class FrameOrchestrator : IDisposable
         suspended = value;
         if (value)
         {
+            inputDispatcher.HandleWindowDeactivated();
             frameRequested = false;
             cancelFrame();
             CancelWake?.Invoke();
@@ -313,8 +314,11 @@ internal sealed class FrameOrchestrator : IDisposable
         float layoutTimeMs = (float)Stopwatch.GetElapsedTime(layoutStart).TotalMilliseconds;
 #endif
 
-        // 4. Update input dispatcher's root for hit testing
+        // 4. Update input dispatcher's root for hit testing, and the window geometry menus are
+        // placed in.
         inputDispatcher.SetRoot(rootHost.RenderedTree);
+        inputDispatcher.ViewportSize = new Size(windowWidth, windowHeight);
+        inputDispatcher.PixelRatio = PixelRatio;
 
         NodePainter.NextCaretToggle = 0;
 
@@ -352,6 +356,7 @@ internal sealed class FrameOrchestrator : IDisposable
                     DiagnosticsHub.MarkPhase("paint.painter_begin");
                     var painter = cachedPainter ??= new NodePainter(ctx, Theme, deltaTime);
                     painter.BeginFrame(Theme, deltaTime);
+                    painter.Menu = inputDispatcher.Menu;
                     DiagnosticsHub.MarkPhase("paint.painter_paint");
                     painter.Paint(rootHost.RenderedTree);
 
@@ -416,6 +421,10 @@ internal sealed class FrameOrchestrator : IDisposable
     {
         windowWidth = width;
         windowHeight = height;
+
+        // An open menu was placed against the old window edges; close it, as native menus do
+        // when their window changes.
+        inputDispatcher.CloseMenu();
 
         // A window resize recreates the GPU surface/swapchain, which invalidates the
         // cached retained-layer textures ScrollViews composite. Their size-based

@@ -12,7 +12,7 @@ public sealed class SplitButton : Node
     /// </summary>
     /// <param name="label">The primary button label.</param>
     /// <param name="onClick">The primary button action.</param>
-    /// <param name="items">Context menu items shown in the dropdown.</param>
+    /// <param name="items">Menu items shown in the dropdown (submenus, separators and disabled items included).</param>
     /// <param name="icon">Optional icon for the primary button.</param>
     public SplitButton(
         LocKey label,
@@ -42,44 +42,21 @@ public sealed class SplitButton : Node
 
     internal bool IsDisabled { get; set; }
 
-    // ── Runtime state for dropdown (set by painter/input dispatcher) ──
+    // ── Runtime state (set by painter/input dispatcher) ──
 
-    /// <summary>Whether the dropdown menu is currently open.</summary>
-    internal bool IsOpen { get; set; }
-
-    /// <summary>Index of the currently highlighted (hovered) menu item, or -1 for none.</summary>
-    internal int HighlightedIndex { get; set; } = -1;
-
-    /// <summary>Dropdown bounds in absolute coordinates for hit testing.</summary>
-    internal Rect DropdownBounds { get; set; }
-
-    /// <summary>Menu item height in logical pixels, set by the painter.</summary>
-    internal float MenuItemHeight { get; set; } = 32f;
+    /// <summary>
+    /// Whether this button's dropdown is the window's open menu. The dropdown is the shared
+    /// context menu (<see cref="MenuOverlay"/>) anchored below the button, so it gets the menu's
+    /// keyboard navigation, submenus and window-edge flipping.
+    /// </summary>
+    internal bool IsOpen => InputDispatcher.Active?.IsMenuOwnedBy(this) == true;
 
     /// <summary>X offset where the arrow zone begins (relative to the node's left edge).</summary>
     internal float ArrowZoneX { get; set; }
 
     /// <summary>Absolute bounds in viewport coordinates, set by the painter for hit testing.</summary>
     internal Rect AbsoluteBounds { get; set; }
-
-    /// <summary>Toggles the dropdown open/closed state.</summary>
-    internal void ToggleOpen()
-    {
-        IsOpen = !IsOpen;
-        if (IsOpen)
-        {
-            HighlightedIndex = -1;
-        }
-    }
-
-    /// <summary>Closes the dropdown.</summary>
-    internal void Close()
-    {
-        IsOpen = false;
-        HighlightedIndex = -1;
-    }
 }
-
 /// <summary>
 /// Extension methods for <see cref="SplitButton"/> providing fluent modifiers.
 /// </summary>

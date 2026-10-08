@@ -331,8 +331,8 @@ internal static class KanbanViews
 
     private static void ShowCardContextMenu(KanbanColumn column, KanbanCard card)
     {
+        // Called from OnContextMenu: opens at the pointer (or below the card from the keyboard).
         ContextMenu.Show(
-            new Point(0, 0),
             items:
             [
                 ContextMenuItem.Action(

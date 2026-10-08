@@ -357,7 +357,7 @@ public sealed class TreeView<T> : Node, ITreeView
                     .OnTap(() => ((ITreeView)this).ToggleRow(idx))
                 : new Center(Node.Empty).Size(chevronBox, rowHeight);
 
-            rows[i] = new Row(
+            var row = new Row(
                     spacing: 4,
                     crossAxisAlignment: CrossAxisAlignment.Center,
                     children: [chevron, content.Expand()])
@@ -366,10 +366,33 @@ public sealed class TreeView<T> : Node, ITreeView
                 .Background(isSelected ? colors.Primary : ColorValue.Transparent)
                 .CornerRadius(5)
                 .OnTap(() => ((ITreeView)this).SelectRow(idx));
+
+            // Right-click selects the row, then opens its ItemContextMenu at the pointer.
+            rows[i] = ContextMenuFactory is null
+                ? row
+                : row.OnContextMenu(() => { ShowRowContextMenu(idx); });
         }
 
         contentNode = new Column(spacing: 1, children: rows);
         return contentNode;
+    }
+
+    private Func<TreeNode<T>, IReadOnlyList<ContextMenuItem>>? ContextMenuFactory =>
+        ((Node)this).LayoutData.TreeData?.ContextMenuFactory as Func<TreeNode<T>, IReadOnlyList<ContextMenuItem>>;
+
+    private void ShowRowContextMenu(int rowIndex)
+    {
+        if (ContextMenuFactory is not { } factory || cachedNodes == null || rowIndex < 0 || rowIndex >= cachedNodes.Count)
+        {
+            return;
+        }
+
+        ((ITreeView)this).SelectRow(rowIndex);
+        var items = factory(cachedNodes[rowIndex]);
+        if (items is { Count: > 0 })
+        {
+            ContextMenu.Show(items);
+        }
     }
 
     void ITreeView.ToggleRow(int rowIndex)
@@ -548,7 +571,11 @@ public static class TreeViewExtensions
         return tree;
     }
 
-    /// <summary>Attaches a context menu factory invoked on right-click or long-press on a tree node.</summary>
+    /// <summary>
+    /// Gives every row a context menu built by <paramref name="factory"/> for the row's node.
+    /// Right-clicking a row selects it and opens the menu at the pointer; return an empty list for
+    /// a node with no menu.
+    /// </summary>
     public static TreeView<T> ItemContextMenu<T>(
         this TreeView<T> tree,
         Func<TreeNode<T>, IReadOnlyList<ContextMenuItem>> factory)

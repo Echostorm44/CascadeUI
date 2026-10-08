@@ -1122,6 +1122,25 @@ internal sealed class Win32Window : IDisposable
                 return 0;
             }
 
+            case Win32.WM_SYSKEYDOWN:
+            case Win32.WM_SYSKEYUP:
+            {
+                MessageReceived?.Invoke(msg, wParam, lParam);
+
+                // Shift+F10 is the context-menu key, which the input dispatcher handles. Left to
+                // DefWindowProc, F10 is also the menu key: the key-down arms it and the key-up
+                // sends SC_KEYMENU, entering the system-menu loop, which then takes the arrow
+                // keys meant for the context menu (Wine/ReactOS defwnd.c: WM_SYSKEYDOWN with
+                // VK_F10 sends WM_CONTEXTMENU when Shift is down and sets iF10Key; WM_SYSKEYUP
+                // with iF10Key sends SC_KEYMENU). Not passing the Shift+F10 key-down on means it
+                // is never armed. A plain F10 keeps its default behaviour.
+                if ((int)wParam == Win32.VK_F1 + 9 && (Win32.GetKeyState(Win32.VK_SHIFT) & 0x8000) != 0)
+                {
+                    return 0;
+                }
+                break;
+            }
+
             case Win32.WM_MOUSELEAVE:
             {
                 trackingMouse = false;
@@ -1144,8 +1163,6 @@ internal sealed class Win32Window : IDisposable
             case Win32.WM_KEYDOWN:
             case Win32.WM_KEYUP:
             case Win32.WM_CHAR:
-            case Win32.WM_SYSKEYDOWN:
-            case Win32.WM_SYSKEYUP:
             case Win32.WM_SYSCHAR:
             case Win32.WM_TOUCH:
             case Win32.WM_POINTERDOWN:

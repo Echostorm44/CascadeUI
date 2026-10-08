@@ -335,7 +335,12 @@ public static class App
 
         window.MessageReceived = (msg, wParam, lParam) =>
         {
-            if (msg == Win32.WM_DISPATCH)
+            if (msg == Win32.WM_PAINT)
+            {
+                // The GDI (CPU) path redraws the uncovered client area from its last frame.
+                gpu.RepaintWindow();
+            }
+            else if (msg == Win32.WM_DISPATCH)
             {
                 loop.HandleDispatchMessage();
             }

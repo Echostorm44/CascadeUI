@@ -161,6 +161,7 @@ internal static partial class Win32
     internal const uint SWP_FRAMECHANGED    = 0x0020;
     internal const uint SWP_SHOWWINDOW      = 0x0040;
     internal const uint SWP_HIDEWINDOW      = 0x0080;
+    internal const uint SWP_NOOWNERZORDER   = 0x0200;
 
     internal static readonly nint HWND_TOPMOST   = new(-1);
     internal static readonly nint HWND_NOTOPMOST = new(-2);

@@ -525,13 +525,14 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
 
     /// <summary>
     /// Presents a CPU-rendered frame: uploads <paramref name="dirty"/> of <paramref name="frame"/>
-    /// into the composer's persistent frame texture and blits it to the swapchain.
+    /// into the composer's persistent frame texture and blits it to the swapchain. False when nothing
+    /// was presented (the caller must then present the whole frame next time).
     /// </summary>
-    public void PresentCpuFrame(global::Etch.Compose.Cpu.CpuFramebuffer frame, ReadOnlySpan<global::Etch.Compose.Cpu.CpuDirtyRect> dirty)
+    public bool PresentCpuFrame(global::Etch.Compose.Cpu.CpuFramebuffer frame, ReadOnlySpan<global::Etch.Compose.Cpu.CpuDirtyRect> dirty)
     {
         if (_disposed)
         {
-            return;
+            return false;
         }
 
         _device.Poll(false);
@@ -544,7 +545,7 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
                 _swapChain.Resize(_currentWidth, _currentHeight);
             }
             surface.Dispose();
-            return;
+            return false;
         }
 
         using var encoder = _device.CreateCommandEncoder();
@@ -568,6 +569,7 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
         _swapChain.Present(surface);
         PresentMonitor.CpuRenderActive = true;
         PresentMonitor.NotifyPresented();
+        return true;
     }
 
     /// <summary>

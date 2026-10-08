@@ -95,26 +95,52 @@ internal sealed partial class EtchCpuRenderer : IDisposable
         LastRenderMs = System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds;
     }
 
-    /// <summary>Copies the whole last frame to the window with GDI (WM_PAINT).</summary>
-    public void BlitAll(nint hwnd)
+    /// <summary>Copies the whole last frame to the window with GDI (WM_PAINT). False when GDI failed.</summary>
+    public bool BlitAll(nint hwnd)
     {
-        Blit(hwnd, [new CpuDirtyRect(0, 0, _framebuffer.Width, _framebuffer.Height)]);
+        Span<CpuDirtyRect> all = [new CpuDirtyRect(0, 0, _framebuffer.Width, _framebuffer.Height)];
+        bool ok = Blit(hwnd, all);
+        if (!ok)
+        {
+            _presentAll = true;
+        }
+        return ok;
     }
 
-    /// <summary>Copies the last frame's damaged rects to the window with GDI.</summary>
-    public void BlitToWindow(nint hwnd) => Blit(hwnd, Dirty);
+    /// <summary>
+    /// Copies the last frame's damaged rects to the window with GDI. When any part fails the damage
+    /// is not lost: the next frame presents the whole framebuffer. Returns false on failure.
+    /// </summary>
+    public bool BlitToWindow(nint hwnd)
+    {
+        bool ok = Blit(hwnd, Dirty);
+        if (!ok)
+        {
+            _presentAll = true;
+        }
+        return ok;
+    }
 
-    private unsafe void Blit(nint hwnd, ReadOnlySpan<CpuDirtyRect> rects)
+    /// <summary>
+    /// The frame's damage was not presented (the swapchain could not be acquired, say): the next
+    /// frame presents the whole framebuffer, so no rect is left stale.
+    /// </summary>
+    public void PresentationFailed() => _presentAll = true;
+
+    private unsafe bool Blit(nint hwnd, ReadOnlySpan<CpuDirtyRect> rects)
     {
         if (rects.IsEmpty || _framebuffer.Width == 0)
         {
-            return;
+            return true;
         }
         nint hdc = GetDC(hwnd);
         if (hdc == 0)
         {
-            return;
+            DebugLog.Write(DebugLogCategory.Present,
+                $"[{DateTime.Now:O}] GetDC failed: {Marshal.GetLastPInvokeError()}");
+            return false;
         }
+        bool ok = true;
         try
         {
             int width = _framebuffer.Width;
@@ -138,6 +164,7 @@ internal sealed partial class EtchCpuRenderer : IDisposable
                     if (SetDIBitsToDevice(hdc, rect.X, rect.Y, (uint)rect.Width, (uint)rect.Height,
                         rect.X, 0, 0, (uint)rect.Height, pixels + (long)rect.Y * width, &info, 0) == 0)
                     {
+                        ok = false;
                         DebugLog.Write(DebugLogCategory.Present,
                             $"[{DateTime.Now:O}] SetDIBitsToDevice failed: {Marshal.GetLastPInvokeError()}");
                     }
@@ -146,10 +173,13 @@ internal sealed partial class EtchCpuRenderer : IDisposable
         }
         finally
         {
-            _ = ReleaseDC(hwnd, hdc);
+            if (ReleaseDC(hwnd, hdc) == 0)
+            {
+                DebugLog.Write(DebugLogCategory.Present, $"[{DateTime.Now:O}] ReleaseDC failed");
+            }
         }
+        return ok;
     }
-
     /// <summary>
     /// A rect of the monochrome glyph atlas as RGBA (coverage as gray, alpha 255), rows flipped
     /// upright — the CPU twin of <see cref="EtchGpuPresenter.CaptureAtlasRegion"/>. Width/height of
@@ -243,7 +273,7 @@ internal sealed partial class EtchCpuRenderer : IDisposable
         public uint biClrImportant;
     }
 
-    [LibraryImport("user32.dll")]
+    [LibraryImport("user32.dll", SetLastError = true)]
     private static partial nint GetDC(nint hwnd);
 
     [LibraryImport("user32.dll")]

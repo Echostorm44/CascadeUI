@@ -735,13 +735,16 @@ internal sealed class EtchBackendProvider : IDisposable
 
         if (_useGpu && _etchGpuPresenter != null)
         {
-            _etchGpuPresenter.PresentCpuFrame(_cpu.Framebuffer, _cpu.Dirty);
+            if (!_etchGpuPresenter.PresentCpuFrame(_cpu.Framebuffer, _cpu.Dirty))
+            {
+                _cpu.PresentationFailed();
+            }
         }
         else if (_hwnd != IntPtr.Zero)
         {
             // MarkCapture before NotifyPresented so the retained frame is attributed to this present.
             Cascade.UI.Diagnostics.PresentMonitor.MarkCapture();
-            _cpu.BlitToWindow(_hwnd);
+            _ = _cpu.BlitToWindow(_hwnd);
             Cascade.UI.Diagnostics.PresentMonitor.CpuRenderActive = true;
             Cascade.UI.Diagnostics.PresentMonitor.NotifyPresented();
         }
@@ -768,7 +771,7 @@ internal sealed class EtchBackendProvider : IDisposable
     {
         if (_lastFrameCpu && _cpu is not null && !(_useGpu && _etchGpuPresenter != null) && _hwnd != IntPtr.Zero)
         {
-            _cpu.BlitAll(_hwnd);
+            _ = _cpu.BlitAll(_hwnd);
         }
     }
 

@@ -480,13 +480,29 @@ internal static class McpToolRegistry
             Description: "Set a rendering parameter without rebuilding. param=render_mode " +
                          "value=gpu|cpu switches the backend; param=dpi value=<96-based int> " +
                          "simulates a live OS DPI change (96=100%, 144=150%) exercising the " +
-                         "window reposition + swapchain rescale + PixelRatio path. " +
+                         "window reposition + swapchain rescale + PixelRatio path; param=textgamma " +
+                         "value=<0-4> sets the glyph text-weight gamma. " +
                          "Frame-synchronous: the response includes presented_frame and timed_out " +
                          "(timed_out=true means nothing repainted within the wait window).",
             InputSchemaJson: """{"type":"object","properties":{"param":{"type":"string","description":"render_mode or dpi"},"value":{"type":"string","description":"render_mode: gpu|cpu; dpi: a 96-based integer (e.g. 144 = 150%)"},"wait_frames":{"type":"integer","default":1,"description":"How many new presented frames to wait for before responding (1-240)"}},"required":["param","value"]}""",
             DebugOnly: true,
             RawResponse: false,
-            RequiresLiveInstance: true),
+            RequiresLiveInstance: true,
+            CliVerbs:
+            [
+                new McpCliVerbSpec(
+                    Verb: "render-param",
+                    HelpSummary: "Set a render parameter live: render_mode gpu|cpu, dpi <96-based>, textgamma <0-4>",
+                    Positionals:
+                    [
+                        new CliPositionalMapping("param", CliValueKind.String),
+                        new CliPositionalMapping("value", CliValueKind.String),
+                    ],
+                    Options:
+                    [
+                        new CliOptionMapping("--wait-frames", "wait_frames", CliValueKind.Int),
+                    ]),
+            ]),
 
         new(
             Name: "cascade_undo",

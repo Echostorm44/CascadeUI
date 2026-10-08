@@ -479,4 +479,28 @@ public class CliIntegrationTests
         return System.IO.Path.Combine(
             System.IO.Path.GetTempPath(), $"cascade-cli-test-{Guid.NewGuid():N}.png");
     }
+
+    // ── render-param ─────────────────────────────────────────────
+
+    [Test]
+    [NotInParallel(nameof(CliIntegrationTests))]
+    public async Task RenderParam_SwitchesToCpuAndBack_WithAFreshFrameEachTime()
+    {
+        try
+        {
+            foreach (string mode in new[] { "cpu", "gpu" })
+            {
+                var result = await RunVerb("render-param", "render_mode", mode);
+                await Assert.That(result.ExitCode).IsEqualTo(0).Because(result.StdErr);
+
+                var json = JsonNode.Parse(result.StdOut);
+                await Assert.That(json?["value"]?.GetValue<string>()).IsEqualTo(mode.ToUpperInvariant());
+                await Assert.That(json?["timed_out"]?.GetValue<bool>()).IsFalse(); // the mode change repainted
+            }
+        }
+        finally
+        {
+            await RunVerb("render-param", "render_mode", "gpu");
+        }
+    }
 }

@@ -31,6 +31,8 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
     private readonly Surface _surface;
     private readonly SwapChain _swapChain;
     private readonly GpuComposer _composer;
+    private readonly DeviceLossWatch _lossWatch;
+    private bool _acquireLost;
     private readonly DrawList _drawList = new();
     private readonly DrawListBuilder _builder = new();
     private readonly List<PlacedGlyph> _placedGlyphs = new();
@@ -162,77 +164,112 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
             throw new InvalidOperationException("Failed to create wgpu instance");
         }
 
-        // The surface comes first so the adapter request can insist on one that presents to it.
-        nint hinstance = Win32.GetModuleHandleW(null);
-        _surface = SurfaceFactory.CreateFromWin32(_instance, hwnd, hinstance, "CascadeUI");
-        if (!_surface.IsValid)
+        try
         {
-            _instance.Dispose();
-            throw new InvalidOperationException("Failed to create surface from HWND");
+            // The surface comes first so the adapter request can insist on one that presents to it.
+            nint hinstance = Win32.GetModuleHandleW(null);
+            _surface = SurfaceFactory.CreateFromWin32(_instance, hwnd, hinstance, "CascadeUI");
+            if (!_surface.IsValid)
+            {
+                throw new InvalidOperationException("Failed to create surface from HWND");
+            }
+
+            var adapterResult = RequestAdapter(_instance, _surface, hwnd, preference);
+            if (adapterResult.Status != RequestAdapterStatus.Success || adapterResult.Adapter.IsInvalid)
+            {
+                throw new InvalidOperationException($"No GPU adapter available: {adapterResult.Message ?? adapterResult.Status.ToString()}");
+            }
+            _adapter = adapterResult.Adapter;
+            if (DebugLog.IsEnabled(DebugLogCategory.Present))
+            {
+                DebugLog.Write(DebugLogCategory.Present, $"[{DateTime.Now:O}] GPU adapter ({preference}): {_adapter.GetDescription()}");
+            }
+
+            // Etch's device defaults: allocator blocks sized for UI content and a descriptor heap sized for
+            // Cascade's bind-group usage, instead of wgpu's game-sized defaults (~200 MB committed up front).
+            // The loss watch reports a driver reset or removal, so frames fall back to the CPU.
+            DeviceDescriptor deviceDesc = default;
+            ValidationBridge.ConfigureDeviceDescriptor(&deviceDesc);
+            _lossWatch = DeviceLossWatch.Attach(&deviceDesc);
+            var deviceResult = AsyncRequest.RequestDeviceSync(_instance, _adapter, &deviceDesc);
+            if (deviceResult.Status != RequestDeviceStatus.Success || deviceResult.Device.IsInvalid)
+            {
+                throw new InvalidOperationException($"Failed to create wgpu device: {deviceResult.Message ?? deviceResult.Status.ToString()}");
+            }
+            _device = deviceResult.Device;
+
+            _currentWidth = width;
+            _currentHeight = height;
+            var swapChainConfig = new SwapChainConfig
+            {
+                Format = TextureFormat.Rgba8UnormSrgb,
+                Width = width,
+                Height = height,
+                // Mailbox, not Fifo: on this stack Fifo's AcquireFrame blocked ~93 ms
+                // per present (measured), capping the whole app to ~11 fps whenever it
+                // presents continuously (a blinking caret, any animation) and adding up
+                // to ~90 ms of input→repaint latency. Mailbox acquires immediately and
+                // still syncs to vblank (no tearing), so presents are ~0.5 ms and the
+                // frame loop paces on the frame timer instead of stalling in the driver.
+                PresentMode = PresentMode.Mailbox,
+                AlphaMode = CompositeAlphaMode.Auto,
+                Usage = TextureUsage.RenderAttachment | TextureUsage.CopySrc,
+                ColorSpace = ColorSpace.Srgb,
+            };
+            _swapChain = SwapChain.Configure(_device, _surface, swapChainConfig);
+
+            _composer = new GpuComposer(_device, width, height)
+            {
+                SkipGlyphs = RenderDebugSwitches.SkipGlyphs,
+            };
+
+            // Force GPU initialization by submitting an empty command buffer.
+            // Some drivers defer initialization until first use, causing
+            // multi-second stalls on the first real frame.
+            using var warmupEncoder = _device.CreateCommandEncoder();
+            using var warmupCb = warmupEncoder.Finish();
+            Span<CommandBuffer> warmupCmds = stackalloc CommandBuffer[1];
+            warmupCmds[0] = warmupCb;
+            _device.Queue.Submit(warmupCmds);
+            _device.Poll(true);
         }
-
-        var adapterResult = RequestAdapter(_instance, _surface, hwnd, preference);
-        if (adapterResult.Status != RequestAdapterStatus.Success || adapterResult.Adapter.IsInvalid)
+        catch
         {
-            _surface.Dispose();
-            _instance.Dispose();
-            throw new InvalidOperationException($"No GPU adapter available: {adapterResult.Message ?? adapterResult.Status.ToString()}");
+            // Whatever was created before the failure (any step can throw: the surface, the
+            // device, swapchain configuration, pipeline creation) is released, newest first.
+            ReleaseNatives();
+            throw;
         }
-        _adapter = adapterResult.Adapter;
-        if (DebugLog.IsEnabled(DebugLogCategory.Present))
-        {
-            DebugLog.Write(DebugLogCategory.Present, $"[{DateTime.Now:O}] GPU adapter ({preference}): {_adapter.GetDescription()}");
-        }
-
-        // Etch's device defaults: allocator blocks sized for UI content and a descriptor heap sized for
-        // Cascade's bind-group usage, instead of wgpu's game-sized defaults (~200 MB committed up front).
-        DeviceDescriptor deviceDesc = default;
-        ValidationBridge.ConfigureDeviceDescriptor(&deviceDesc);
-        var deviceResult = AsyncRequest.RequestDeviceSync(_instance, _adapter, &deviceDesc);
-        if (deviceResult.Status != RequestDeviceStatus.Success || deviceResult.Device.IsInvalid)
-        {
-            _adapter.Dispose();
-            _surface.Dispose();
-            _instance.Dispose();
-            throw new InvalidOperationException($"Failed to create wgpu device: {deviceResult.Message ?? deviceResult.Status.ToString()}");
-        }
-        _device = deviceResult.Device;
-
-        _currentWidth = width;
-        _currentHeight = height;
-        var swapChainConfig = new SwapChainConfig
-        {
-            Format = TextureFormat.Rgba8UnormSrgb,
-            Width = width,
-            Height = height,
-            // Mailbox, not Fifo: on this stack Fifo's AcquireFrame blocked ~93 ms
-            // per present (measured), capping the whole app to ~11 fps whenever it
-            // presents continuously (a blinking caret, any animation) and adding up
-            // to ~90 ms of input→repaint latency. Mailbox acquires immediately and
-            // still syncs to vblank (no tearing), so presents are ~0.5 ms and the
-            // frame loop paces on the frame timer instead of stalling in the driver.
-            PresentMode = PresentMode.Mailbox,
-            AlphaMode = CompositeAlphaMode.Auto,
-            Usage = TextureUsage.RenderAttachment | TextureUsage.CopySrc,
-            ColorSpace = ColorSpace.Srgb,
-        };
-        _swapChain = SwapChain.Configure(_device, _surface, swapChainConfig);
-
-        _composer = new GpuComposer(_device, width, height)
-        {
-            SkipGlyphs = RenderDebugSwitches.SkipGlyphs,
-        };
-
-        // Force GPU initialization by submitting an empty command buffer.
-        // Some drivers defer initialization until first use, causing
-        // multi-second stalls on the first real frame.
-        using var warmupEncoder = _device.CreateCommandEncoder();
-        using var warmupCb = warmupEncoder.Finish();
-        Span<CommandBuffer> warmupCmds = stackalloc CommandBuffer[1];
-        warmupCmds[0] = warmupCb;
-        _device.Queue.Submit(warmupCmds);
-        _device.Poll(true);
     }
+
+    // Releases the native objects in reverse creation order; each is skipped when it was never
+    // created (a failed constructor) and nothing is released twice.
+    private void ReleaseNatives()
+    {
+        _composer?.Dispose();
+        if (!_stagingBuffer.IsInvalid)
+        {
+            _stagingBuffer.Dispose();
+        }
+        _swapChain.Dispose();
+        _lossWatch?.Dispose();
+        _device.Dispose();
+        _adapter.Dispose();
+        if (_surface.IsValid)
+        {
+            _surface.Dispose();
+        }
+        _instance.Dispose();
+    }
+
+    /// <summary>
+    /// True once the device is lost (a driver reset or removal): nothing more can be presented
+    /// with it, and the provider falls back to CPU frames.
+    /// </summary>
+    internal bool DeviceLost => _lossWatch.IsLost || _acquireLost;
+
+    /// <summary>Destroys the device as a driver reset would (tests of the CPU fallback).</summary>
+    internal void SimulateDeviceLoss() => _device.Destroy();
 
     public void Resize(uint width, uint height)
     {
@@ -404,28 +441,34 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
     /// is reported there (draw provenance); <paramref name="layerCompositeIndex"/> maps a retained
     /// layer's handle to the main-stream command that composites it, for their paint order.
     /// </summary>
-    public void PresentRecording(DrawRecording main, ComposeParameters parameters,
+    /// <returns>False when nothing was presented (see <see cref="DeviceLost"/>).</returns>
+    public bool PresentRecording(DrawRecording main, ComposeParameters parameters,
         List<GlyphDrawRecord>? glyphRecords = null, IReadOnlyDictionary<ulong, int>? layerCompositeIndex = null)
     {
         if (_disposed)
         {
-            return;
+            return false;
         }
 
         // Phase timestamps, not Stopwatch instances: a frame allocates nothing for its timing.
         long frameStart = Stopwatch.GetTimestamp();
+        // A lost device must be seen before the acquire: in wgpu-native, acquiring from (or
+        // submitting to) a lost device is a fatal error that aborts the process. Creating the
+        // frame's encoder reports a loss through the error sink, which fires the loss callback.
         _device.Poll(false);
+        using var encoder = _device.CreateCommandEncoder();
+        if (DeviceLost)
+        {
+            return false;
+        }
         long acquireStart = Stopwatch.GetTimestamp();
         var status = _swapChain.AcquireFrame(out SurfaceTexture frame);
         long acquireEnd = Stopwatch.GetTimestamp();
         if (status != SurfaceTextureResult.Ok || !frame.IsValid)
         {
-            if (status == SurfaceTextureResult.Outdated || status == SurfaceTextureResult.Lost)
-            {
-                _swapChain.Resize(_currentWidth, _currentHeight);
-            }
+            HandleAcquireFailure(status);
             frame.Dispose();
-            return;
+            return false;
         }
 
         // WP-3509: if churn filled an atlas last frame (or a forced reset is requested), clear it
@@ -445,8 +488,6 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
         }
         _phaseTimer.Stop();
         double buildMs = _phaseTimer.Elapsed.TotalMilliseconds;
-
-        using var encoder = _device.CreateCommandEncoder();
 
         _phaseTimer.Restart();
         _composer.Encode(encoder, new Texture(frame.Texture), new TextureView(frame.View), _drawList);
@@ -502,6 +543,20 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
                 $"[{DateTime.Now:O}] Frame 0: total={Ms(frameStart, presentEnd):F2}ms poll={Ms(frameStart, acquireStart):F2}ms acquire={Ms(acquireStart, acquireEnd):F2}ms build={buildMs:F2}ms encode={renderMs:F2}ms submit={Ms(submitStart, submitEnd):F2}ms present={Ms(presentStart, presentEnd):F2}ms shapes={_drawList.Shapes.Count} batches={_drawList.BatchCount}");
         }
         _frameCount++;
+        return true;
+    }
+
+    private void HandleAcquireFailure(SurfaceTextureResult status)
+    {
+        if (status == SurfaceTextureResult.DeviceLost)
+        {
+            _acquireLost = true;
+            return;
+        }
+        if (status == SurfaceTextureResult.Outdated || status == SurfaceTextureResult.Lost)
+        {
+            _swapChain.Resize(_currentWidth, _currentHeight);
+        }
     }
 
     private static double Ms(long start, long end) => (end - start) * 1000.0 / Stopwatch.Frequency;
@@ -518,20 +573,22 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
             return false;
         }
 
+        // A lost device must be seen before the acquire (see PresentRecording).
         _device.Poll(false);
+        using var encoder = _device.CreateCommandEncoder();
+        if (DeviceLost)
+        {
+            return false;
+        }
 
         var status = _swapChain.AcquireFrame(out SurfaceTexture surface);
         if (status != SurfaceTextureResult.Ok || !surface.IsValid)
         {
-            if (status == SurfaceTextureResult.Outdated || status == SurfaceTextureResult.Lost)
-            {
-                _swapChain.Resize(_currentWidth, _currentHeight);
-            }
+            HandleAcquireFailure(status);
             surface.Dispose();
             return false;
         }
 
-        using var encoder = _device.CreateCommandEncoder();
         _composer.EncodeFramebufferUpload(encoder, new TextureView(surface.View), frame.Pixels, (uint)frame.Width, (uint)frame.Height, dirty);
 
         using var cb = encoder.Finish();
@@ -786,17 +843,6 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
             return;
         }
         _disposed = true;
-
-        _composer.Dispose();
-        if (!_stagingBuffer.IsInvalid)
-        {
-            _stagingBuffer.Dispose();
-        }
-
-        _swapChain.Dispose();
-        _surface.Dispose();
-        _device.Dispose();
-        _adapter.Dispose();
-        _instance.Dispose();
+        ReleaseNatives();
     }
 }

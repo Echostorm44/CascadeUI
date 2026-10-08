@@ -336,6 +336,34 @@ internal sealed class EtchBackendProvider : IDisposable
         }
     }
 
+    /// <summary>
+    /// The GPU device was lost: the presenter is released and the window is presented with GDI
+    /// from now on (the CPU path renders the same draw list). The next CPU frame is sent whole.
+    /// </summary>
+    private void FallBackToCpu()
+    {
+        var lost = _etchGpuPresenter;
+        if (lost is null)
+        {
+            return;
+        }
+        var logPath = System.IO.Path.Combine(System.AppContext.BaseDirectory, "etch-gpu-init.log");
+        try
+        {
+            System.IO.File.AppendAllText(logPath, $"[{DateTime.Now:O}] GPU device lost; rendering on the CPU from now on.\n");
+        }
+        catch (System.IO.IOException)
+        {
+            // The log is best effort; the fallback is not.
+        }
+        NativeMemorySnapshotProvider.Register(null);
+        _etchGpuPresenter = null;
+        _useGpu = false;
+        _lastFrameCpu = false;
+        _cpu?.InvalidatePresentation();
+        lost.Dispose();
+    }
+
     /// <summary>Frees the GPU textures of images destroyed since the last frame.</summary>
     internal void ReleaseDestroyedImages()
     {
@@ -725,13 +753,20 @@ internal sealed class EtchBackendProvider : IDisposable
             {
                 IndexLayerComposites();
             }
-            _etchGpuPresenter.PresentRecording(_mainRecording, parameters, captureDraws ? pendingGlyphs : null, captureDraws ? _layerCompositeIndex : null);
-            _lastFrameCpu = false;
-            if (captureDraws)
+            bool presented = _etchGpuPresenter.PresentRecording(_mainRecording, parameters,
+                captureDraws ? pendingGlyphs : null, captureDraws ? _layerCompositeIndex : null);
+            if (presented || !_etchGpuPresenter.DeviceLost)
             {
-                PublishDrawSnapshot(captureBaseline);
+                _lastFrameCpu = false;
+                if (captureDraws)
+                {
+                    PublishDrawSnapshot(captureBaseline);
+                }
+                return;
             }
-            return;
+            // The device is gone (driver reset or removal): this frame and every later one render
+            // on the CPU, presented with GDI.
+            FallBackToCpu();
         }
 
         // CPU path (no GPU, CASCADE_FORCE_CPU=1, or render_mode=cpu): the same recording, rendered
@@ -761,18 +796,22 @@ internal sealed class EtchBackendProvider : IDisposable
         _lastFrameCpu = true;
         long presentStart = System.Diagnostics.Stopwatch.GetTimestamp();
 
-        if (_useGpu && _etchGpuPresenter != null)
+        bool presentWhole = false;
+        if (_useGpu && _etchGpuPresenter != null && !_etchGpuPresenter.PresentCpuFrame(_cpu.Framebuffer, _cpu.Dirty))
         {
-            if (!_etchGpuPresenter.PresentCpuFrame(_cpu.Framebuffer, _cpu.Dirty))
+            _cpu.PresentationFailed();
+            if (_etchGpuPresenter.DeviceLost)
             {
-                _cpu.PresentationFailed();
+                // The window showed the swapchain until now: GDI must paint all of it.
+                FallBackToCpu();
+                presentWhole = true;
             }
         }
-        else if (_hwnd != IntPtr.Zero)
+        if (!(_useGpu && _etchGpuPresenter != null) && _hwnd != IntPtr.Zero)
         {
             // MarkCapture before NotifyPresented so the retained frame is attributed to this present.
             Cascade.UI.Diagnostics.PresentMonitor.MarkCapture();
-            _ = _cpu.BlitToWindow(_hwnd);
+            _ = presentWhole ? _cpu.BlitAll(_hwnd) : _cpu.BlitToWindow(_hwnd);
             Cascade.UI.Diagnostics.PresentMonitor.CpuRenderActive = true;
             Cascade.UI.Diagnostics.PresentMonitor.NotifyPresented();
         }

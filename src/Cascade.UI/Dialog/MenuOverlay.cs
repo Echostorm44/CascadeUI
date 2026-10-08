@@ -212,6 +212,9 @@ internal sealed class MenuOverlay
     /// </summary>
     internal const float DragActivateThreshold = 4f;
 
+    /// <summary>Extra width given to the label column beyond the widest measured label.</summary>
+    internal const float LabelSlack = 4f;
+
     private readonly List<MenuLevel> levels = new(capacity: 2);
     private Func<string, float, float> measure = MeasureText;
 
@@ -656,16 +659,22 @@ internal sealed class MenuOverlay
     /// <summary>
     /// Places a submenu beside its parent panel, its first item level with the parent item
     /// (<paramref name="itemTop"/>): to the right, or to the left when it would cross the window's
-    /// right edge; then clamped inside the window.
+    /// right edge (the roomier side when it fits on neither); then clamped inside the window.
     /// </summary>
     internal static Rect PlaceSubmenu(Size panel, Rect parent, float itemTop, Size viewport, MenuMetrics metrics, float pixelRatio = 1f)
     {
         float w = panel.Width;
         float h = panel.Height;
-        float x = parent.Right - SubmenuOverlap;
-        if (viewport.Width > 0f && x + w > viewport.Width - EdgeMargin)
+        float right = parent.Right - SubmenuOverlap;
+        float left = parent.X - w + SubmenuOverlap;
+        float x = right;
+        if (viewport.Width > 0f && right + w > viewport.Width - EdgeMargin)
         {
-            x = parent.X - w + SubmenuOverlap;
+            // Left when it fits there; when it fits on neither side, the side with more room
+            // (the clamp below then overlaps the parent as little as possible).
+            float roomRight = viewport.Width - EdgeMargin - parent.Right;
+            float roomLeft = parent.X - EdgeMargin;
+            x = left >= EdgeMargin || roomLeft > roomRight ? left : right;
         }
 
         float y = itemTop - metrics.PaddingV;
@@ -750,9 +759,11 @@ internal sealed class MenuOverlay
         level.ContentHeight = y;
         level.ShortcutWidth = MathF.Ceiling(shortcutWidth);
 
+        // LabelSlack absorbs the difference between this measurement and the painter's shaped
+        // run (hinting, weight), so the widest label never ellipsizes in its own menu.
         float width = (m.TextInset * 2f)
             + (level.HasIcons ? m.IconColumn : 0f)
-            + labelWidth
+            + labelWidth + LabelSlack
             + (shortcutWidth > 0f ? m.ShortcutGap + shortcutWidth : 0f)
             + (level.HasSubmenus ? m.SubmenuArrowWidth : 0f);
         width = MathF.Ceiling(Math.Max(width, m.MinWidth));
@@ -768,7 +779,8 @@ internal sealed class MenuOverlay
 
     private static void FinishLevel(MenuLevel level)
     {
-        level.MaxScroll = Math.Max(0f, level.ContentHeight - level.ViewportHeight);
+        float overflow = level.ContentHeight - level.ViewportHeight;
+        level.MaxScroll = overflow > 0.5f ? overflow : 0f;
     }
 
     private float CapHeight(float height)
@@ -802,10 +814,13 @@ internal sealed class MenuOverlay
     private static Rect Snap(Rect r, float pixelRatio)
     {
         float s = pixelRatio > 0f ? pixelRatio : 1f;
+        // Position rounds to the nearest device pixel; size rounds up, so snapping never makes
+        // the panel shorter than its content (which would show a scroll thumb for a fraction
+        // of a pixel at fractional scales).
         float x = MathF.Round(r.X * s) / s;
         float y = MathF.Round(r.Y * s) / s;
-        float w = MathF.Round(r.Width * s) / s;
-        float h = MathF.Round(r.Height * s) / s;
+        float w = MathF.Ceiling((r.Width * s) - 0.001f) / s;
+        float h = MathF.Ceiling((r.Height * s) - 0.001f) / s;
         return new Rect(x, y, w, h);
     }
 

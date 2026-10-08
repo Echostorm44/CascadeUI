@@ -21,20 +21,6 @@ internal sealed class EtchBackend : IDisposable
     internal readonly List<GlyphOp> GlyphCommands = new();
     internal uint Width, Height;
 
-    /// <summary>
-    /// WP-3526: text-weight gamma for the CPU glyph blitter, kept in lock-step with
-    /// the GPU presenter's <see cref="EtchGpuPresenter.TextGamma"/> by the provider
-    /// so a forced-CPU machine renders text at the same weight as a GPU one.
-    /// </summary>
-    internal float TextGamma { get; set; } = EtchGpuPresenter.DefaultTextGamma;
-
-    /// <summary>
-    /// WP-3537: adaptive light-weight strength for the CPU glyph blitter (1 = full
-    /// contrast-adaptive, 0 = legacy symmetric), kept in lock-step with
-    /// <see cref="EtchGpuPresenter.LightWeight"/> by the provider.
-    /// </summary>
-    internal float LightWeight { get; set; } = EtchGpuPresenter.DefaultLightWeight;
-
     private Matrix3x2 _currentTransform = Matrix3x2.Identity;
     private readonly Stack<Matrix3x2> _transformStack = new();
 
@@ -121,6 +107,13 @@ internal sealed class EtchBackend : IDisposable
         MixHash(ref hash, op.Matrix.M22);
         MixHash(ref hash, op.Matrix.M31);
         MixHash(ref hash, op.Matrix.M32);
+        MixHash(ref hash, (int)op.Cap | ((int)op.Join << 8));
+        if (op.Dash is DashPattern dash)
+        {
+            MixHash(ref hash, dash.On);
+            MixHash(ref hash, dash.Off);
+            MixHash(ref hash, dash.Offset);
+        }
         MixHash(ref hash, op.Fill.HasValue ? ToArgb(op.Fill.Value) : 0u);
         MixHash(ref hash, op.StrokeColor.HasValue ? ToArgb(op.StrokeColor.Value) : 0u);
         if (op.GradientStops != null)
@@ -211,8 +204,9 @@ internal sealed class EtchBackend : IDisposable
             op.StrokeColor = stroke.ScaleAlpha(_currentOpacity);
         }
 
-        if (op.Kind == OpKind.DrawImage)
+        if (op.Kind == OpKind.DrawImage || op.Kind == OpKind.DrawLayerTexture)
         {
+            // A retained layer composited inside an opacity scope fades with it.
             op.Opacity *= _currentOpacity;
         }
 
@@ -261,20 +255,24 @@ internal sealed class EtchBackend : IDisposable
 
     // Image cache
     private readonly Dictionary<ulong, ImageEntry> _images = new();
+    private readonly List<ulong> _destroyedImages = new();
     private ulong _nextImageHandle = 1;
 
     internal sealed class ImageEntry
     {
-        public byte[] Pixels;
-        public int Width;
-        public int Height;
-
         public ImageEntry(byte[] pixels, int width, int height)
         {
-            Pixels = pixels;
-            Width = width;
-            Height = height;
+            Image = new global::Etch.Compose.ComposeImage(pixels, width, height);
         }
+
+        /// <summary>The pixels as the composers read them (RGBA8, sRGB-encoded, straight alpha).</summary>
+        public global::Etch.Compose.ComposeImage Image { get; }
+
+        public byte[] Pixels => Image.Pixels;
+
+        public int Width => Image.Width;
+
+        public int Height => Image.Height;
     }
 
     private sealed class FontEntry
@@ -509,7 +507,7 @@ internal sealed class EtchBackend : IDisposable
     }
 
     public void DrawPath(ulong frame, ulong pathHandle,
-        ColorValue? fill, ColorValue? strokeColor, float strokeWidth, StrokeCap cap, StrokeJoin join)
+        ColorValue? fill, ColorValue? strokeColor, float strokeWidth, StrokeCap cap, StrokeJoin join, DashPattern? dash = null)
     {
         var op = RentOp();
         op.Kind = OpKind.DrawPath;
@@ -517,6 +515,9 @@ internal sealed class EtchBackend : IDisposable
         op.Fill = fill;
         op.StrokeColor = strokeColor;
         op.StrokeWidth = strokeWidth;
+        op.Cap = cap;
+        op.Join = join;
+        op.Dash = dash;
         AddCommand(op);
     }
 
@@ -537,6 +538,8 @@ internal sealed class EtchBackend : IDisposable
         op.Fill = fill;
         op.StrokeColor = strokeColor;
         op.StrokeWidth = strokeWidth;
+        op.Cap = cap;
+        op.Join = join;
         AddCommand(op);
     }
 
@@ -567,6 +570,8 @@ internal sealed class EtchBackend : IDisposable
         op.SweepRad = sweepRad;
         op.StrokeColor = sc;
         op.StrokeWidth = sw;
+        op.Cap = cap;
+        op.Join = join;
         AddCommand(op);
     }
 
@@ -581,6 +586,8 @@ internal sealed class EtchBackend : IDisposable
         op.H = y2;
         op.StrokeColor = sc;
         op.StrokeWidth = sw;
+        op.Cap = cap;
+        op.Join = join;
         AddCommand(op);
     }
 
@@ -607,9 +614,17 @@ internal sealed class EtchBackend : IDisposable
 
     public void DestroyImage(ulong image)
     {
-        _images.Remove(image);
+        if (_images.Remove(image))
+        {
+            // The provider frees the image's GPU texture before the next frame (handles are never
+            // reused, so a retained layer still drawing it just uploads it again).
+            _destroyedImages.Add(image);
+        }
     }
-    public void DrawPathGradient(ulong frame, ulong path, int gk, ReadOnlySpan<GradientStop> s, float p0, float p1, float p2, float p3, ColorValue? sc, float sw, StrokeCap c, StrokeJoin j)
+
+    /// <summary>Images destroyed since the provider last released their GPU textures.</summary>
+    internal List<ulong> DestroyedImages => _destroyedImages;
+    public void DrawPathGradient(ulong frame, ulong path, int gk, ReadOnlySpan<GradientStop> s, float p0, float p1, float p2, float p3, ColorValue? sc, float sw, StrokeCap c, StrokeJoin j, DashPattern? dash = null)
     {
         var op = RentOp();
         op.Kind = OpKind.DrawPathGradient;
@@ -622,6 +637,9 @@ internal sealed class EtchBackend : IDisposable
         op.G3 = p3;
         op.StrokeColor = sc;
         op.StrokeWidth = sw;
+        op.Cap = c;
+        op.Join = j;
+        op.Dash = dash;
         AddCommand(op);
     }
     // PushLayer applies an opacity to everything drawn until the matching PopLayer,
@@ -770,7 +788,10 @@ internal sealed class EtchBackend : IDisposable
     // ambient clip would cut off every glyph below the viewport in the texture while
     // the geometry (driven by in-stream clip ops) stays unclipped. Reset here, restore
     // on pop. A stack handles nested captures. No-op when nothing is clipped.
-    private readonly Stack<(Rect[] Clips, Rect Bounds)> _layerClipSaves = new();
+    // The ambient opacity is saved and reset the same way: the layer's content is captured at full
+    // opacity and faded once, by the composite (DrawLayerTexture multiplies its opacity by the scope's).
+    // Capturing it faded too applied an enclosing PushLayer opacity twice (0.5 rendered as 0.25).
+    private readonly Stack<(Rect[] Clips, Rect Bounds, float Opacity)> _layerClipSaves = new();
 
     public ulong PushLayerTexture(ulong frame, ulong handle, float width, float height)
     {
@@ -784,9 +805,10 @@ internal sealed class EtchBackend : IDisposable
             InitialTransform = _currentTransform,
         };
 
-        _layerClipSaves.Push((_clipStack.ToArray(), _currentClipBounds));
+        _layerClipSaves.Push((_clipStack.ToArray(), _currentClipBounds, _currentOpacity));
         _clipStack.Clear();
         _currentClipBounds = default;
+        _currentOpacity = 1f;
         return handle;
     }
 
@@ -796,7 +818,8 @@ internal sealed class EtchBackend : IDisposable
 
         if (_layerClipSaves.Count > 0)
         {
-            var (clips, bounds) = _layerClipSaves.Pop();
+            var (clips, bounds, opacity) = _layerClipSaves.Pop();
+            _currentOpacity = opacity;
             _clipStack.Clear();
             // ToArray() yields top-first; push bottom-first to rebuild the same order.
             for (int i = clips.Length - 1; i >= 0; i--)
@@ -819,193 +842,16 @@ internal sealed class EtchBackend : IDisposable
         op.Kind = OpKind.DrawLayerTexture;
         op.X = t.X;
         op.Y = t.Y;
+        // Device position of the local origin: the layer was captured relative to it, so the
+        // composite shift is (X, Y) − (G0, G1) — the scroll delta, for a ScrollView.
+        var origin = Vector2.Transform(Vector2.Zero, _currentTransform);
+        op.G0 = origin.X;
+        op.G1 = origin.Y;
         op.W = layerHandle;
         op.Opacity = opacity;
         op.ClipBounds = _currentClipBounds;
         op.HasClipBounds = _clipStack.Count > 0;
         AddCommand(op);
-    }
-
-    // ════════════════════════════════════════════════════════════════
-    // Glyph rendering onto RGBA pixel buffer (CPU fallback path)
-    // ════════════════════════════════════════════════════════════════
-
-    public void RenderGlyphCommands(Span<byte> rgbaPixels, int width, int height, float scale = 1.0f)
-    {
-        foreach (var op in GlyphCommands)
-        {
-            RenderGlyphOp(op, rgbaPixels, width, height, scale);
-        }
-    }
-
-    /// <summary>
-    /// Renders a retained layer's captured glyphs onto the CPU framebuffer at the
-    /// composite offset, clipped to the layer's viewport (WP-3514). Positions are
-    /// in the layer's content space (captured at scroll 0); the offset applies the
-    /// scroll and the viewport clip keeps content from bleeding outside it.
-    /// </summary>
-    public void RenderGlyphCommandsLayer(Span<byte> rgbaPixels, int width, int height,
-        IReadOnlyList<GlyphOp> glyphs, float offsetX, float offsetY, Rect? viewportClip)
-    {
-        foreach (var op in glyphs)
-        {
-            RenderGlyphOp(op, rgbaPixels, width, height, 1.0f, offsetX, offsetY, viewportClip);
-        }
-    }
-
-    private void RenderGlyphOp(GlyphOp op, Span<byte> pixels, int width, int height, float scale,
-        float offsetX = 0f, float offsetY = 0f, Rect? viewportClip = null)
-    {
-        var face = GetOrCreateFontFace(op.FontHandle, op.FontSize * scale);
-        if (face == null)
-        {
-            return;
-        }
-
-        var colorBytes = ExtractSrgbBytes(op.Color);
-        byte textR = colorBytes.R;
-        byte textG = colorBytes.G;
-        byte textB = colorBytes.B;
-        byte textA = colorBytes.A;
-
-        // Effective clip = (the op's own content clip, shifted by the composite
-        // offset) intersected with the layer viewport clip (screen-space). Stays
-        // unclipped for the ordinary main-frame path (no offset, no viewport).
-        float clipX = 0, clipY = 0, clipW = float.MaxValue, clipH = float.MaxValue;
-        if (op.HasClipBounds || viewportClip.HasValue)
-        {
-            float l = float.MinValue, t = float.MinValue, r = float.MaxValue, b = float.MaxValue;
-            if (op.HasClipBounds)
-            {
-                l = op.ClipBounds.X * scale + offsetX;
-                t = op.ClipBounds.Y * scale + offsetY;
-                r = l + op.ClipBounds.Width * scale;
-                b = t + op.ClipBounds.Height * scale;
-            }
-            if (viewportClip is Rect vc)
-            {
-                l = Math.Max(l, vc.X);
-                t = Math.Max(t, vc.Y);
-                r = Math.Min(r, vc.X + vc.Width);
-                b = Math.Min(b, vc.Y + vc.Height);
-            }
-            clipX = l;
-            clipY = t;
-            clipW = Math.Max(0f, r - l);
-            clipH = Math.Max(0f, b - t);
-        }
-
-        face.TryGetGlyph(0x0020, out uint spaceGid);
-
-        for (int i = 0; i < op.GlyphIds.Length; i++)
-        {
-            ushort glyphId = op.GlyphIds[i];
-            if (glyphId == spaceGid)
-            {
-                continue;
-            }
-
-            float gx = op.Positions[i * 2] * scale + offsetX;
-            float gy = op.Positions[i * 2 + 1] * scale + offsetY;
-            RenderGlyph(face, glyphId, gx, gy, textR, textG, textB, textA, pixels, width, height, TextGamma, LightWeight, clipX, clipY, clipW, clipH);
-        }
-    }
-
-    private static void RenderGlyph(FontFace face, ushort glyphId, float x, float y,
-        byte textR, byte textG, byte textB, byte textA,
-        Span<byte> pixels, int width, int height, float textGamma, float lightWeight,
-        float clipX = 0, float clipY = 0, float clipW = float.MaxValue, float clipH = float.MaxValue)
-    {
-        // WP-3537: foreground luminance for the contrast-adaptive weight; the local
-        // background luminance is read per-pixel from the destination in the blend loop.
-        float fgLum = (0.2126f * textR + 0.7152f * textG + 0.0722f * textB) / 255f;
-        float subpixelX = x - (int)x;
-        GlyphRasterizer.Measure(face, glyphId, out int gw, out int gh, subpixelX);
-        if (gw <= 0 || gh <= 0)
-        {
-            return;
-        }
-
-        // Custom rasterizer expands width by 1 when subpixel shift > 0,
-        // so allocate a buffer large enough to hold the expanded bitmap.
-        int bufSize = (gw + 1) * gh;
-        byte[]? rented = ArrayPool<byte>.Shared.Rent(bufSize);
-        Span<byte> bitmap = rented.AsSpan(0, bufSize);
-
-        try
-        {
-            GlyphRasterizer.Rasterize(face, glyphId, subpixelX, bitmap, out int rw, out int rh, out int minX, out int minY);
-            if (rw <= 0 || rh <= 0)
-            {
-                return;
-            }
-            // Match the GPU placement convention (BuildGlyphInstances):
-            // quad left = pen + minX, quad top = baseline − (minY + rh).
-            int startX = (int)x + minX;
-            int startY = (int)y - (minY + rh);
-
-            // Check against clip bounds
-            float clipRight = clipX + clipW;
-            float clipBottom = clipY + clipH;
-            if (startX + rw <= clipX || startX >= clipRight ||
-                startY + rh <= clipY || startY >= clipBottom)
-            {
-                return;
-            }
-
-            for (int row = 0; row < rh; row++)
-            {
-                int py = startY + row;
-                if (py < 0 || py >= height)
-                {
-                    continue;
-                }
-                for (int col = 0; col < rw; col++)
-                {
-                    int px = startX + col;
-                    if (px < 0 || px >= width)
-                    {
-                        continue;
-                    }
-
-                    // The rasterizer stores rows bottom-up (row 0 = bottom of
-                    // the glyph); screen rows run top-down, so flip on read.
-                    byte coverage = bitmap[(rh - 1 - row) * rw + col];
-                    if (coverage == 0)
-                    {
-                        continue;
-                    }
-
-                    // WP-3526/3537: apply the shared contrast-adaptive text-weight
-                    // curve so the CPU fallback matches the GPU glyph shader. The CPU
-                    // blends in naïve sRGB and already has the destination pixel, so it
-                    // reads the local background directly (the GPU samples a framebuffer
-                    // copy for the same value). The weighted coverage is the blend alpha.
-                    int idx = (py * width + px) * 4;
-                    float bgLum = (0.2126f * pixels[idx] + 0.7152f * pixels[idx + 1] + 0.0722f * pixels[idx + 2]) / 255f;
-                    float weighted = EtchGpuPresenter.AdaptiveInkCoverage(coverage / 255f, textGamma, fgLum, bgLum, lightWeight);
-                    float alpha = weighted * (textA / 255f);
-                    if (alpha <= 0)
-                    {
-                        continue;
-                    }
-
-                    float invAlpha = 1f - alpha;
-
-                    pixels[idx] = (byte)(textR * alpha + pixels[idx] * invAlpha);
-                    pixels[idx + 1] = (byte)(textG * alpha + pixels[idx + 1] * invAlpha);
-                    pixels[idx + 2] = (byte)(textB * alpha + pixels[idx + 2] * invAlpha);
-                    pixels[idx + 3] = (byte)(textA * alpha + pixels[idx + 3] * invAlpha);
-                }
-            }
-        }
-        finally
-        {
-            if (rented != null)
-            {
-                ArrayPool<byte>.Shared.Return(rented);
-            }
-        }
     }
 
     internal FontFace? GetOrCreateFontFace(ulong fontHandle, float fontSize)
@@ -1037,17 +883,6 @@ internal sealed class EtchBackend : IDisposable
         }
     }
 
-    private static (byte R, byte G, byte B, byte A) ExtractSrgbBytes(ColorValue c)
-    {
-        uint argb = ToArgb(c);
-        return (
-            (byte)((argb >> 16) & 0xFF),
-            (byte)((argb >> 8) & 0xFF),
-            (byte)(argb & 0xFF),
-            (byte)((argb >> 24) & 0xFF)
-        );
-    }
-
     internal BezPath? GetCompiledPath(ulong handle) => _compiledPaths.TryGetValue(handle, out var p) ? p : null;
 
     // ════════════════════════════════════════════════════════════════
@@ -1062,8 +897,7 @@ internal sealed class EtchBackend : IDisposable
         // Flutter-style layer texture compositing
         PushLayerTexture, PopLayerTexture, DrawLayerTexture,
         // Frosted-glass backdrop blur: blurs the framebuffer behind a rounded rect.
-        // Rendered by a dedicated presenter pass (not the SceneBuffer), so skipped
-        // in AppendSceneOp. Coords are baked to device space at emission.
+        // Coords are baked to device space at emission.
         DrawBackdropBlur,
         DrawShadow,
     }
@@ -1080,6 +914,9 @@ internal sealed class EtchBackend : IDisposable
         public GradientStop[]? GradientStops;
         public ulong ImageHandle;
         public float Opacity;
+        public StrokeCap Cap;
+        public StrokeJoin Join;
+        public DashPattern? Dash;
 
         /// <summary>
         /// DevTools node id of the node that emitted this op, or null. Only
@@ -1111,6 +948,9 @@ internal sealed class EtchBackend : IDisposable
             GradientStops = null;
             ImageHandle = 0;
             Opacity = 0;
+            Cap = StrokeCap.Butt;
+            Join = StrokeJoin.Miter;
+            Dash = null;
             DebugNodeId = null;
             ClipBounds = default;
             HasClipBounds = false;

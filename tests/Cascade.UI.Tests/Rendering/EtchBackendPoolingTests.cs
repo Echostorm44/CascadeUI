@@ -83,6 +83,8 @@ public class EtchBackendPoolingTests
         if (type == typeof(System.Numerics.Matrix3x2)) { return default(System.Numerics.Matrix3x2); }
         if (type == typeof(Rect)) { return default(Rect); }
         if (type == typeof(EtchBackend.OpKind)) { return default(EtchBackend.OpKind); }
+        if (type == typeof(StrokeCap)) { return StrokeCap.Butt; }
+        if (type == typeof(StrokeJoin)) { return StrokeJoin.Miter; }
         return null;
     }
 
@@ -94,6 +96,9 @@ public class EtchBackendPoolingTests
         if (type == typeof(bool)) { return true; }
         if (type == typeof(string)) { return "x"; }
         if (type == typeof(ColorValue?)) { return ColorValue.FromRgba(1, 1, 1); }
+        if (type == typeof(StrokeCap)) { return StrokeCap.Round; }
+        if (type == typeof(StrokeJoin)) { return StrokeJoin.Bevel; }
+        if (type == typeof(DashPattern?)) { return new DashPattern(2, 3); }
         if (type == typeof(GradientStop[])) { return Array.Empty<GradientStop>(); }
         if (type == typeof(System.Numerics.Matrix3x2)) { return System.Numerics.Matrix3x2.CreateScale(2); }
         if (type == typeof(Rect)) { return new Rect(1, 1, 1, 1); }

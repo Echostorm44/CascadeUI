@@ -470,6 +470,22 @@ public class GridCellNavigationTests
     }
 
     [Test]
+    public async Task Enter_OnABatchEdit_KeepsTheSelectionItAppliedTo()
+    {
+        var grid = BuildGrid().BatchEdit(true).BatchEditConfirmation(false);
+        ITabularDataNode tdn = grid;
+        Click(CellX(1), RowY(1));
+        Press(Key.Down, ModifierKeys.Shift);
+        Press(Key.F2);
+        Type("z");
+        Press(Key.Enter, ModifierKeys.None, '\r');
+
+        await Assert.That(data[1].Category).IsEqualTo("Az");
+        await Assert.That(data[2].Category).IsEqualTo("Az");
+        await Assert.That(tdn.SelectedRowCount).IsEqualTo(2);
+    }
+
+    [Test]
     public async Task Delete_ClearsTheCurrentCell_AsOneUndoStep()
     {
         var grid = BuildGrid(undo: true);

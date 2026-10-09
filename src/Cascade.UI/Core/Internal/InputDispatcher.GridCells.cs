@@ -341,7 +341,17 @@ internal sealed partial class InputDispatcher
                 }
 
                 bool up = evt.Key == Key.Up || (shift && evt.Key is Key.Enter or Key.NumPadEnter);
+                bool batch = tdn.IsBatchEditEnabled && tdn.SelectedRowCount > 1;
                 tdn.CommitEdit();
+
+                // An edit on a multi-row selection is a batch edit (possibly confirming in a dialog):
+                // keep the selection it applies to instead of moving on and collapsing it.
+                if (batch)
+                {
+                    RequestRepaint?.Invoke();
+                    return true;
+                }
+
                 MoveCurrentCell(tdn, cells, TabularNavigation.Step(tdn, row, up ? -1 : 1), col, CellSelectKind.Replace);
                 RequestRepaint?.Invoke();
                 return true;
@@ -352,6 +362,13 @@ internal sealed partial class InputDispatcher
                 if (ctrl)
                 {
                     return null;
+                }
+
+                if (tdn.IsBatchEditEnabled && tdn.SelectedRowCount > 1)
+                {
+                    tdn.CommitEdit();
+                    RequestRepaint?.Invoke();
+                    return true;
                 }
 
                 tdn.CommitEdit();

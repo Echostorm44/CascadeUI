@@ -42,7 +42,7 @@ internal sealed partial class InputDispatcher
     }
 
     /// <summary>Marks the action control under a left press as pressed (cleared on release).</summary>
-    private void PressRowAction(ITabularDataNode tdn, float x, float y)
+    private static void PressRowAction(ITabularDataNode tdn, float x, float y)
     {
         var bounds = tdn.AbsoluteBounds;
         if (tdn.RowActionStrip is not { } actions

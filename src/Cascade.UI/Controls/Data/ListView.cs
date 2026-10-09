@@ -8,6 +8,10 @@ internal interface IListViewNode
 {
     int ItemCount { get; }
     string GetItemText(int index);
+    /// <summary>The name a screen reader announces for item <paramref name="index"/> (see <see cref="ListView{T}.ItemAccessibleName"/>).</summary>
+    string GetItemAccessibleName(int index);
+    /// <summary>Whether an activate handler (Enter / double-click) is set.</summary>
+    bool CanActivate { get; }
     float GetItemHeight();
     bool IsItemSelected(int index);
     SelectionMode SelectionModeValue { get; }
@@ -207,6 +211,7 @@ public sealed class ListView<T> : Node, IListViewNode
     internal Func<T, SwipeActionSet?>? swipeActionsFactory;
     internal Func<T, IReadOnlyList<ContextMenuItem>>? contextMenuFactory;
     internal Action<T>? onActivateHandler;
+    private Func<T, string>? itemAccessibleName;
     internal bool selectionHighlight = true;
     private bool plain;
     private bool focusOnClick = true;
@@ -284,6 +289,18 @@ public sealed class ListView<T> : Node, IListViewNode
     public ListView<T> ItemSwipeActions(Func<T, SwipeActionSet?> factory)
     {
         swipeActionsFactory = factory;
+        return this;
+    }
+
+    /// <summary>
+    /// The name a screen reader announces for an item. By default an item is named by the text of
+    /// the labels its row template renders (an icon-and-preview row reads as its preview); supply
+    /// this when that text is not what a listener should hear — for example to add the item's
+    /// kind or omit decorative text.
+    /// </summary>
+    public ListView<T> ItemAccessibleName(Func<T, string> name)
+    {
+        itemAccessibleName = name;
         return this;
     }
 
@@ -393,6 +410,25 @@ public sealed class ListView<T> : Node, IListViewNode
     {
         return Items[index]?.ToString() ?? "";
     }
+
+    string IListViewNode.GetItemAccessibleName(int index)
+    {
+        if (index < 0 || index >= Items.Count)
+        {
+            return "";
+        }
+
+        T item = Items[index];
+        if (itemAccessibleName is not null)
+        {
+            return itemAccessibleName(item);
+        }
+
+        // The row template is pure, so rendering it again yields the text the row shows.
+        return AccessibilityTreeBuilder.TextOf(Render(item)) ?? item?.ToString() ?? "";
+    }
+
+    bool IListViewNode.CanActivate => onActivateHandler is not null && Sections is null;
 
     bool IListViewNode.IsItemSelected(int index)
     {

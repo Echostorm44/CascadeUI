@@ -117,7 +117,7 @@ public sealed class CommandPalette : Node
     /// <summary>Per-item bounds for hit-testing (set during paint).</summary>
     internal List<Rect> ItemBounds { get; } = new();
 
-    /// <summary>Resets all static state. Used for test isolation.</summary>
+    /// <summary>Resets all static state (commands, history, open state, instance). Used for test isolation.</summary>
     internal static void ResetAll()
     {
         globalCommands.Clear();
@@ -125,6 +125,7 @@ public sealed class CommandPalette : Node
         recentCommands.Clear();
         isOpen = false;
         openTick = 0;
+        Instance = null;
     }
 
     /// <summary>Returns the commands registered for a specific owner, or empty if none.</summary>

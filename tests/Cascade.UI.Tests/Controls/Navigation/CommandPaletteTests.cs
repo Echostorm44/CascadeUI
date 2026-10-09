@@ -9,6 +9,15 @@ namespace Cascade.UI.Tests;
 [NotInParallel("CommandPalette")]
 public class CommandPaletteTests
 {
+    // The palette's open state and instance are process-wide, and an open palette takes every
+    // key and click a dispatcher sees: a test that leaves it open breaks input in whichever
+    // test runs next (seen as ContextMenu/Popover failures that depended on test order).
+    [After(Test)]
+    public void CloseThePalette()
+    {
+        CommandPalette.ResetAll();
+    }
+
     private sealed class TestCommandProvider : ICommandProvider
     {
         public Task<IEnumerable<CommandResult>> SearchAsync(string query)

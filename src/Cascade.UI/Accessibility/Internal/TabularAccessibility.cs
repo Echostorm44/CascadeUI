@@ -61,6 +61,99 @@ internal static class TabularAccessibility
         return count;
     }
 
+    /// <summary>The visible columns, left to right (column indices in the current column order).</summary>
+    internal static List<int> VisibleColumns(ITabularDataNode table)
+    {
+        var result = new List<int>(table.ColumnCount);
+        for (int c = 0; c < table.ColumnCount; c++)
+        {
+            if (table.GetColumnVisible(c))
+            {
+                result.Add(c);
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>The window-logical area the rows scroll in (between the header and a bottom aggregate row).</summary>
+    internal static Rect DataArea(ITabularDataNode table, Rect bounds)
+    {
+        float top = bounds.Y + TabularRowGeometry.DataTop(table);
+        float bottom = bounds.Y + TabularRowGeometry.DataBottom(table, bounds.Height);
+        return new Rect(bounds.X, top, bounds.Width, Math.Max(0f, bottom - top));
+    }
+
+    /// <summary>
+    /// Display row <paramref name="row"/>'s window-logical rectangle where it is — possibly
+    /// scrolled out of the data area (clip with <see cref="DataArea"/>). False before the table is
+    /// painted, or for a row out of range or in a collapsed group.
+    /// </summary>
+    internal static bool TryGetRowBounds(ITabularDataNode table, Rect tableBounds, int row, out Rect bounds)
+    {
+        bounds = default;
+        if (tableBounds.Width <= 0f || !TabularRowGeometry.TryGetRowContentTop(table, row, out float contentTop))
+        {
+            return false;
+        }
+
+        float top = tableBounds.Y + TabularRowGeometry.DataTop(table) + contentTop - table.ScrollOffsetY;
+        bounds = new Rect(tableBounds.X, top, tableBounds.Width, table.GetRowHeight());
+        return true;
+    }
+
+    /// <summary>Column <paramref name="col"/>'s left edge and width within a row of <paramref name="rowBounds"/>.</summary>
+    internal static bool TryGetCellBounds(ITabularDataNode table, Rect rowBounds, int col, out Rect bounds)
+    {
+        bounds = default;
+        var widths = TabularRowGeometry.ScaledColumnWidths(table, rowBounds.Width);
+        if (!TabularRowGeometry.TryGetColumnSpan(table, widths, col, out float left, out float width))
+        {
+            return false;
+        }
+
+        bounds = new Rect(rowBounds.X + left, rowBounds.Y, width, rowBounds.Height);
+        return true;
+    }
+
+    /// <summary>The selected display rows in screen order.</summary>
+    internal static List<int> SelectedRows(ITabularDataNode table)
+    {
+        var rows = new List<int>();
+        if (!table.IsGrouped)
+        {
+            for (int row = 0; row < table.RowCount; row++)
+            {
+                if (table.IsRowSelected(row))
+                {
+                    rows.Add(row);
+                }
+            }
+
+            return rows;
+        }
+
+        for (int g = 0; g < table.GroupCount; g++)
+        {
+            if (table.IsGroupCollapsed(g))
+            {
+                continue;
+            }
+
+            int count = table.GetGroupRowCount(g);
+            for (int i = 0; i < count; i++)
+            {
+                int row = table.GetGroupDataRowIndex(g, i);
+                if (table.IsRowSelected(row))
+                {
+                    rows.Add(row);
+                }
+            }
+        }
+
+        return rows;
+    }
+
     /// <summary>
     /// The current cell: its row's 1-based on-screen position and its column, or false when
     /// nothing is selected. A <see cref="DataTable{T}"/> (or a grid with cell navigation off) has a

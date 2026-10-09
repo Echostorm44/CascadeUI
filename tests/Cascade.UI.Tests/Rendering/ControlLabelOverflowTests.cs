@@ -11,7 +11,7 @@ namespace Cascade.UI.Tests.Rendering;
 /// and checks that every glyph run it drew fits inside it — by shaping the run's text, so the
 /// check covers the run's real width, not just where its glyphs start.
 /// </summary>
-[NotInParallel(["FocusManager", nameof(LayoutSolver.DefaultFontPath)])]
+[NotInParallel(["FocusManager", nameof(LayoutSolver.DefaultFontPath), "Toast"])]
 public class ControlLabelOverflowTests
 {
     private const string Ellipsis = "…";

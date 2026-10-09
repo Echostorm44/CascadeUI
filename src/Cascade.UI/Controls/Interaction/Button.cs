@@ -40,6 +40,38 @@ public sealed class Button : Node
 }
 
 /// <summary>
+/// The one place a button's label style is decided, shared by layout and paint so the two
+/// cannot disagree: the variant's <see cref="ButtonTheme"/> (or the base one), and its
+/// <see cref="ButtonTheme.TextStyle"/> unless <c>.Style()</c> overrides it.
+/// </summary>
+/// <remarks>
+/// Layout used to measure every button at the base theme's text size and padding while the
+/// painter drew the label at the Body size and the variant's padding. Under Material 3 a
+/// button was measured at 16px (its H3 token) and painted at 14px.
+/// </remarks>
+internal static class ButtonLabelStyle
+{
+    /// <summary>The theme tokens for a button: its variant's, or the base ones.</summary>
+    internal static ButtonTheme ThemeFor(ButtonTheme baseTheme, string? variant)
+    {
+        ArgumentNullException.ThrowIfNull(baseTheme);
+        if (variant is not null && baseTheme.Variants.TryGetValue(variant, out var resolved))
+        {
+            return resolved;
+        }
+
+        return baseTheme;
+    }
+
+    /// <summary>The label's text style: the <c>.Style()</c> override, else the theme's.</summary>
+    internal static TextStyle StyleFor(ButtonTheme theme, TextStyle? overrideStyle)
+    {
+        ArgumentNullException.ThrowIfNull(theme);
+        return overrideStyle ?? theme.TextStyle;
+    }
+}
+
+/// <summary>
 /// Extension methods for <see cref="Button"/> providing fluent modifiers.
 /// </summary>
 public static class ButtonExtensions

@@ -54,6 +54,13 @@ internal static class LayoutSolver
     internal static float RadioSize { get; set; } = 22f;
     internal static float RadioLabelGap { get; set; } = 8f;
 
+    // Toggle track and label gap, synced from the theme for the same reason: the measure hardcoded
+    // Apple's 51x31 track and an 8px gap while the painter used ToggleTheme.TrackWidth and
+    // Spacing.Sm, so under another theme a toggle's label did not get the room the painter gave it.
+    internal static float ToggleTrackWidth { get; set; } = 51f;
+    internal static float ToggleTrackHeight { get; set; } = 31f;
+    internal static float ToggleLabelGap { get; set; } = 8f;
+
     /// <summary>
     /// Card content padding from the current theme's CardTheme.Padding.
     /// Default 16 matches typical Md spacing.
@@ -77,7 +84,7 @@ internal static class LayoutSolver
 
     // Average character width ratio relative to font size for estimation fallback.
     // 0.55 is a reasonable average for proportional Latin fonts.
-    private const float AverageCharWidthRatio = 0.55f;
+    internal const float AverageCharWidthRatio = 0.55f;
 
     // Default line height multiplier when not specified by the TextStyle.
     private const float DefaultLineHeightMultiplier = 1.4f;
@@ -659,10 +666,19 @@ internal static class LayoutSolver
             constraints.ConstrainHeight(textSize.Height));
     }
 
+    /// <summary>Gap between a button's leading icon and its label, in logical pixels.</summary>
+    internal const float ButtonIconGap = 8f;
+
     /// <summary>
     /// Measures a Button by computing its label text size plus standard padding.
     /// Buttons have a minimum size to ensure they're tappable.
     /// </summary>
+    /// <remarks>
+    /// The label is one line: the button asks for its whole caption, and when the parent gives it
+    /// less (a fixed width, an Expand share of a tight row) the painter ellipsizes the caption
+    /// inside the button. Measuring the caption wrapped to the narrower width made such a button
+    /// grow taller while still painting a single line.
+    /// </remarks>
     private static Size MeasureButton(Button btn, LayoutConstraints constraints)
     {
         string text = btn.Label.Resolve();
@@ -684,9 +700,8 @@ internal static class LayoutSolver
             {
                 FontPath = fontPath,
                 FontSize = fontSize,
-                MaxWidth = float.IsPositiveInfinity(constraints.MaxWidth)
-                    ? float.PositiveInfinity
-                    : Math.Max(0, constraints.MaxWidth - horizontalPadding),
+                MaxLines = 1,
+                NoWrap = true,
             };
             var result = TextLayoutEngine.Layout(text, options);
             textWidth = result.BoundingBox.Width;
@@ -699,7 +714,9 @@ internal static class LayoutSolver
         }
 
         // Include icon width if present
-        float iconWidth = btn.Icon != default ? fontSize + 8f : 0f;
+        float iconWidth = btn.Icon.Paths.Length == 0
+            ? 0f
+            : fontSize + (string.IsNullOrEmpty(text) ? 0f : ButtonIconGap);
 
         float desiredWidth = Math.Max(64f, textWidth + iconWidth + horizontalPadding);
         float desiredHeight = Math.Max(ButtonMinHeight, textHeight + verticalPadding);
@@ -781,13 +798,14 @@ internal static class LayoutSolver
 
         if (DefaultFontPath != null && !string.IsNullOrEmpty(labelText))
         {
+            // One line, as PaintCheckbox draws it (ellipsized when narrower): measuring the label
+            // wrapped made a narrow checkbox taller than the single line it paints.
             var options = new TextLayoutOptions
             {
                 FontPath = DefaultFontPath,
                 FontSize = fontSize,
-                MaxWidth = float.IsPositiveInfinity(constraints.MaxWidth)
-                    ? float.PositiveInfinity
-                    : Math.Max(0, constraints.MaxWidth - boxSize - gap),
+                MaxLines = 1,
+                NoWrap = true,
             };
             var result = TextLayoutEngine.Layout(labelText, options);
             textWidth = result.BoundingBox.Width;
@@ -901,10 +919,11 @@ internal static class LayoutSolver
 
     private static Size MeasureToggle(Toggle toggle, LayoutConstraints constraints)
     {
-        // Toggle track: 51×31 (Apple standard) or 40×20 (compact)
-        const float trackWidth = 51f;
-        const float trackHeight = 31f;
-        const float gap = 8f;
+        // Track and gap from the theme (as PaintToggle uses them). The label is one line, like the
+        // painter draws it: a toggle narrower than its label ellipsizes it rather than wrapping.
+        float trackWidth = ToggleTrackWidth;
+        float trackHeight = ToggleTrackHeight;
+        float gap = ToggleLabelGap;
         float fontSize = BodyFontSize;
         float lineHeight = fontSize * DefaultLineHeightMultiplier;
 
@@ -926,9 +945,8 @@ internal static class LayoutSolver
             {
                 FontPath = DefaultFontPath,
                 FontSize = fontSize,
-                MaxWidth = float.IsPositiveInfinity(constraints.MaxWidth)
-                    ? float.PositiveInfinity
-                    : Math.Max(0, constraints.MaxWidth - trackWidth - gap),
+                MaxLines = 1,
+                NoWrap = true,
             };
             var result = TextLayoutEngine.Layout(labelText, options);
             textWidth = result.BoundingBox.Width;
@@ -1615,13 +1633,13 @@ internal static class LayoutSolver
 
         if (DefaultFontPath != null)
         {
+            // One line, like the painter: a link narrower than its text is ellipsized, not wrapped.
             var options = new TextLayoutOptions
             {
                 FontPath = DefaultFontPath,
                 FontSize = fontSize,
-                MaxWidth = float.IsPositiveInfinity(constraints.MaxWidth)
-                    ? float.PositiveInfinity
-                    : constraints.MaxWidth,
+                MaxLines = 1,
+                NoWrap = true,
             };
             var result = TextLayoutEngine.Layout(text, options);
             return new Size(
@@ -1887,16 +1905,12 @@ internal static class LayoutSolver
 
     private static Size MeasureSegmentedControl(ISegmentedControl sc, LayoutConstraints constraints)
     {
-        float fontSize = BodyFontSize * 0.85f;
-        float paddingH = 16f;
         float segmentHeight = BodyFontSize * DefaultLineHeightMultiplier + 12f;
 
         float totalWidth = 0f;
         for (int i = 0; i < sc.SegmentCount; i++)
         {
-            string label = sc.GetSegmentLabel(i);
-            float textWidth = label.Length * fontSize * AverageCharWidthRatio;
-            totalWidth += textWidth + paddingH * 2;
+            totalWidth += SegmentLayout.NaturalWidth(sc.GetSegmentLabel(i), SegmentLayout.SegmentedPaddingH);
         }
 
         // Add 2px border allowance
@@ -2000,15 +2014,11 @@ internal static class LayoutSolver
         }
 
         float buttonHeight = 36f;
-        float paddingH = 24f; // ~8px more per side than the old 16 so labels aren't cramped
-        float fontSize = BodyFontSize * 0.85f;
         float totalWidth = 0;
 
         for (int i = 0; i < count; i++)
         {
-            string label = tg.GetOptionLabel(i);
-            float textWidth = label.Length * fontSize * 0.55f;
-            totalWidth += textWidth + paddingH * 2;
+            totalWidth += SegmentLayout.NaturalWidth(tg.GetOptionLabel(i), SegmentLayout.ToggleGroupPaddingH);
         }
 
         return new Size(

@@ -1568,13 +1568,83 @@ internal sealed partial class NodePainter
         // match or the text is drawn at the theme size inside a differently-sized
         // box (e.g. clipping). fontSize 0 falls back to PaintText's default (Body),
         // so buttons without an override render exactly as before.
-        PaintText(btn.Label.Resolve(), bounds, bt.PaddingH, textColor,
-            fontSize: btn.StyleOverride?.Size ?? 0f,
-            alignment: TextAlignment.Center,
-            fontWeight: btn.StyleOverride?.Weight ?? bt.TextStyle.Weight);
+        PaintButtonContent(btn, bounds, bt, textColor);
 
         // Tooltip overlay (deferred)
         DeferTooltipIfHovered(btn, btn.TooltipText.Resolve(), bounds);
+    }
+
+    /// <summary>The least side padding a button narrower than its content keeps around it.</summary>
+    private const float ButtonSqueezedPaddingH = 6f;
+
+    /// <summary>
+    /// Paints a button's optional leading icon and its one-line label inside the padded content
+    /// box. The icon and label are centred together when they fit; when the button is narrower
+    /// than its content (a fixed width, an Expand share of a tight row), the icon keeps its place
+    /// at the leading edge and the label is ellipsized in what is left, so nothing is drawn
+    /// outside the button.
+    /// </summary>
+    private void PaintButtonContent(Button btn, Rect bounds, ButtonTheme bt, ColorValue textColor)
+    {
+        string label = btn.Label.Resolve();
+        float fontSize = btn.StyleOverride?.Size ?? 0f;
+        var weight = btn.StyleOverride?.Weight ?? bt.TextStyle.Weight;
+        var icon = btn.Icon;
+        bool hasIcon = icon.Paths.Length > 0;
+
+        float effectiveSize = fontSize > 0f ? fontSize : theme.Typography.Scale.Body.Size;
+        float labelWidth = 0f;
+        if (!string.IsNullOrEmpty(label))
+        {
+            string? fontPath = weight is not (FontWeight.Regular or FontWeight.None) && ctx.DefaultFontPath != null
+                ? ctx.ResolveFontPath(ctx.DefaultFontPath, weight)
+                : null;
+            labelWidth = ctx.MeasureText(label, effectiveSize, fontPath).Width;
+        }
+
+        float iconSize = hasIcon ? effectiveSize : 0f;
+        float gap = hasIcon && !string.IsNullOrEmpty(label) ? LayoutSolver.ButtonIconGap : 0f;
+        float groupWidth = iconSize + gap + labelWidth;
+
+        // A squeezed button gives up its side padding (down to ButtonSqueezedPaddingH) before its
+        // caption gives up characters; with room to spare this is the theme's padding.
+        float padding = Math.Clamp((bounds.Width - groupWidth) / 2f, Math.Min(ButtonSqueezedPaddingH, bt.PaddingH), bt.PaddingH);
+
+        if (!hasIcon)
+        {
+            PaintText(label, bounds, padding, textColor,
+                fontSize: fontSize,
+                alignment: TextAlignment.Center,
+                overflow: TextOverflow.Ellipsis,
+                fontWeight: weight);
+            return;
+        }
+
+        float contentWidth = bounds.Width - (padding * 2f);
+        if (contentWidth <= 0f)
+        {
+            return;
+        }
+
+        iconSize = MathF.Min(iconSize, contentWidth);
+        groupWidth = iconSize + gap + labelWidth;
+        float left = groupWidth <= contentWidth
+            ? bounds.X + padding + ((contentWidth - groupWidth) / 2f)
+            : bounds.X + padding;
+        PaintIconBitmap(icon, left + (iconSize / 2f), bounds.Y + (bounds.Height / 2f), iconSize, 1f, textColor,
+            strokeWidthLogical: MathF.Max(1.5f, iconSize / 12f));
+
+        float labelLeft = left + iconSize + gap;
+        float labelRight = bounds.X + bounds.Width - padding;
+        if (string.IsNullOrEmpty(label) || labelRight - labelLeft <= 0f)
+        {
+            return;
+        }
+
+        PaintText(label, new Rect(labelLeft, bounds.Y, labelRight - labelLeft, bounds.Height), 0f, textColor,
+            fontSize: fontSize,
+            overflow: TextOverflow.Ellipsis,
+            fontWeight: weight);
     }
 
     private ButtonTheme ResolveButtonTheme(Button btn)
@@ -5422,12 +5492,14 @@ internal sealed partial class NodePainter
         if (!string.IsNullOrEmpty(labelText))
         {
             float labelX = bounds.X + t.Size + t.LabelGap;
+            // The label gets the radio's own width (it used to be given at least 200px, so a
+            // narrow radio painted its label past its bounds) and is ellipsized like a checkbox's.
             var labelBounds = new Rect(
                 labelX,
                 bounds.Y,
-                Math.Max(bounds.Width - t.Size - t.LabelGap, 200f),
+                Math.Max(0f, bounds.Width - t.Size - t.LabelGap),
                 bounds.Height);
-            PaintText(labelText, labelBounds, 0, theme.Colors.Text);
+            PaintText(labelText, labelBounds, 0, theme.Colors.Text, overflow: TextOverflow.Ellipsis);
         }
     }
 
@@ -5650,7 +5722,7 @@ internal sealed partial class NodePainter
                 bounds.Y,
                 bounds.Width - t.TrackWidth - theme.Spacing.Sm,
                 bounds.Height);
-            PaintText(labelText, labelBounds, 0, theme.Colors.Text);
+            PaintText(labelText, labelBounds, 0, theme.Colors.Text, overflow: TextOverflow.Ellipsis);
         }
     }
 
@@ -6466,7 +6538,8 @@ internal sealed partial class NodePainter
             textColor = ColorValue.Lerp(textColor, theme.Colors.PrimaryText.Opacity(0.4f), disabledT);
         }
 
-        PaintText(lb.Label.Resolve(), textBounds, 0, textColor);
+        // Ellipsized, not clipped or overflowing, when the link is narrower than its text.
+        PaintText(lb.Label.Resolve(), textBounds, 0, textColor, overflow: TextOverflow.Ellipsis);
 
         // Underline — slides in from left on hover, smoothly animated
         float underlineProgress = Math.Max(hoverT, pressT);
@@ -6477,8 +6550,8 @@ internal sealed partial class NodePainter
             var textSize = ctx.MeasureText(text, fontSize);
             float lineY = textBounds.Y + (textBounds.Height + textSize.Height) / 2f + 1f;
             float lineX = textBounds.X;
-            // Underline grows from left based on hover progress
-            float lineWidth = textSize.Width * underlineProgress;
+            // Underline grows from left based on hover progress, never past the link's own box
+            float lineWidth = MathF.Min(textSize.Width, textBounds.Width) * underlineProgress;
             ctx.DrawLine(
                 new Point(lineX, lineY),
                 new Point(lineX + lineWidth, lineY),
@@ -6765,6 +6838,20 @@ internal sealed partial class NodePainter
     /// <see cref="SelectTheme.ChevronStyle"/>: either a single rotating caret (default)
     /// or Apple's combo-box accent box with a single white downward chevron.
     /// </summary>
+    /// <summary>
+    /// The part of a select trigger its text may use: the trigger minus the trailing chevron (or
+    /// the Apple combo-box button) that <see cref="PaintSelectChevron"/> draws. The caller still
+    /// applies the theme's horizontal padding inside it, which leaves that gap before the chevron.
+    /// </summary>
+    private Rect SelectTextBounds(Rect bounds)
+    {
+        var t = theme.Select;
+        float chevronZone = t.ChevronStyle == SelectChevronStyle.ComboBox
+            ? bounds.Height - 3f
+            : t.PaddingH + t.ChevronSize;
+        return bounds with { Width = MathF.Max(0f, bounds.Width - chevronZone) };
+    }
+
     private void PaintSelectChevron(Rect bounds, float opacity, float openT, bool isOpen)
     {
         var t = theme.Select;
@@ -6931,6 +7018,10 @@ internal sealed partial class NodePainter
         // Border + soft focus glow (accent edge on open) — matches focused TextInput.
         PaintSelectFieldBorder(bounds, opacity, select.IsNodeDisabled ? 0f : openT);
 
+        // The value and placeholder stop short of the chevron (they used to run under it and on
+        // past the trigger's edge) and are ellipsized when the trigger is narrower than the text.
+        var textBounds = SelectTextBounds(bounds);
+
         // Text — selected value or placeholder, with crossfade on change
         string? displayText = select.SelectedDisplayText;
         var selectAnimState = GetDropdownAnimState(node);
@@ -6964,8 +7055,8 @@ internal sealed partial class NodePainter
                 && !string.IsNullOrEmpty(selectAnimState.PreviousDisplayText))
             {
                 float oldOpacity = opacity * (1f - crossfadeProgress);
-                PaintText(selectAnimState.PreviousDisplayText, bounds, t.PaddingH,
-                    t.TextColor.Opacity(oldOpacity));
+                PaintText(selectAnimState.PreviousDisplayText, textBounds, t.PaddingH,
+                    t.TextColor.Opacity(oldOpacity), overflow: TextOverflow.Ellipsis);
 
                 if (selectAnimState.CrossfadeT.IsAnimating)
                 {
@@ -6977,7 +7068,7 @@ internal sealed partial class NodePainter
             float newOpacity = selectAnimState.HasCrossfade
                 ? opacity * crossfadeProgress
                 : opacity;
-            PaintText(displayText, bounds, t.PaddingH, t.TextColor.Opacity(newOpacity));
+            PaintText(displayText, textBounds, t.PaddingH, t.TextColor.Opacity(newOpacity), overflow: TextOverflow.Ellipsis);
 
             if (selectAnimState.HasCrossfade && !selectAnimState.CrossfadeT.IsAnimating)
             {
@@ -6992,7 +7083,7 @@ internal sealed partial class NodePainter
             string placeholder = select.Placeholder.Resolve();
             if (!string.IsNullOrEmpty(placeholder))
             {
-                PaintText(placeholder, bounds, t.PaddingH, t.PlaceholderColor.Opacity(opacity));
+                PaintText(placeholder, textBounds, t.PaddingH, t.PlaceholderColor.Opacity(opacity), overflow: TextOverflow.Ellipsis);
             }
         }
 
@@ -8589,31 +8680,17 @@ internal sealed partial class NodePainter
         ctx.DrawRect(bounds, stroke: new Stroke(borderColor, 1f), radius: radius);
 
         int selectedIdx = sc.SelectedIndex;
-        float fontSize = theme.Typography.Body.Size * 0.85f;
-        float paddingH = 16f;
+        float fontSize = SegmentLayout.FontSize;
 
-        // Compute variable-width segments matching the layout measurement so every
-        // segment has the same horizontal padding regardless of label length.
+        // Segment geometry shared with MeasureSegmentedControl and the click hit test.
         float[] segLefts = new float[count];
         float[] segWidths = new float[count];
-        float measuredTotal = 0f;
         for (int i = 0; i < count; i++)
         {
-            string label = sc.GetSegmentLabel(i);
-            float textW = label.Length * fontSize * 0.55f;
-            float w = textW + paddingH * 2f;
-            segWidths[i] = w;
-            measuredTotal += w;
+            segWidths[i] = SegmentLayout.NaturalWidth(sc.GetSegmentLabel(i), SegmentLayout.SegmentedPaddingH);
         }
 
-        float scale = measuredTotal > 0f ? bounds.Width / measuredTotal : 1f;
-        if (MathF.Abs(scale - 1f) > 0.001f)
-        {
-            for (int i = 0; i < count; i++)
-            {
-                segWidths[i] *= scale;
-            }
-        }
+        SegmentLayout.ScaleToFit(segWidths, bounds.Width);
 
         float xAcc = 0f;
         for (int i = 0; i < count; i++)
@@ -8697,12 +8774,9 @@ internal sealed partial class NodePainter
                 }
             }
 
-            // Center text in segment
-            var measuredText = ctx.MeasureText(label, fontSize);
-            float textX = segLefts[i] + (segWidths[i] - measuredText.Width) / 2f;
-            float textY = (bounds.Height - fontSize * 1.3f) / 2f;
-            var textBounds = new Rect(textX, textY, measuredText.Width, fontSize * 1.3f);
-            PaintText(label, textBounds, 0, textColor, fontSize: fontSize);
+            // Centre the label in its segment, ellipsized when the segment is narrower than it
+            // (the label used to be drawn at its full width wherever that landed).
+            PaintSegmentLabel(label, segLefts[i], segWidths[i], bounds.Height, SegmentLayout.SegmentedPaddingH, fontSize, textColor);
 
             // Dividers between non-selected segments
             if (i > 0 && i != selectedIdx && i - 1 != selectedIdx)
@@ -12203,30 +12277,15 @@ internal sealed partial class NodePainter
 
         int selectedIdx = tg.SelectedIndex;
 
-        // Compute variable-width buttons matching the layout measurement so every
-        // item has the same horizontal padding regardless of label length. Must match
-        // MeasureToggleGroup's paddingH or the buttons rescale and lose the padding.
-        float paddingH = 24f;
+        // Button geometry shared with MeasureToggleGroup and the click hit test.
         float[] buttonLefts = new float[count];
         float[] buttonWidths = new float[count];
-        float measuredTotal = 0f;
         for (int i = 0; i < count; i++)
         {
-            string label = tg.GetOptionLabel(i);
-            float textW = label.Length * fontSize * 0.55f;
-            float w = textW + paddingH * 2f;
-            buttonWidths[i] = w;
-            measuredTotal += w;
+            buttonWidths[i] = SegmentLayout.NaturalWidth(tg.GetOptionLabel(i), SegmentLayout.ToggleGroupPaddingH);
         }
 
-        float scale = measuredTotal > 0f ? bounds.Width / measuredTotal : 1f;
-        if (MathF.Abs(scale - 1f) > 0.001f)
-        {
-            for (int i = 0; i < count; i++)
-            {
-                buttonWidths[i] *= scale;
-            }
-        }
+        SegmentLayout.ScaleToFit(buttonWidths, bounds.Width);
 
         float xAcc = 0f;
         for (int i = 0; i < count; i++)
@@ -12321,11 +12380,7 @@ internal sealed partial class NodePainter
                 }
             }
 
-            var measuredText = ctx.MeasureText(label, fontSize);
-            float textX = buttonLefts[i] + (buttonWidths[i] - measuredText.Width) / 2f;
-            float textY = (bounds.Height - fontSize * 1.3f) / 2f;
-            var textBounds = new Rect(textX, textY, measuredText.Width, fontSize * 1.3f);
-            PaintText(label, textBounds, 0, textColor, fontSize: fontSize);
+            PaintSegmentLabel(label, buttonLefts[i], buttonWidths[i], bounds.Height, SegmentLayout.ToggleGroupPaddingH, fontSize, textColor);
 
             // Dividers between non-selected buttons — fade near animated indicator
             if (i > 0 && i != selectedIdx && i - 1 != selectedIdx)
@@ -12348,6 +12403,21 @@ internal sealed partial class NodePainter
                     new Stroke(borderColor.Opacity(divOpacity), 1f));
             }
         }
+    }
+
+    /// <summary>
+    /// Draws a segment's label centred in the segment [<paramref name="left"/>, +<paramref name="width"/>),
+    /// inset by up to <paramref name="paddingH"/> on each side and ellipsized when it does not fit.
+    /// A squeezed segment gives up padding before the label gives up characters.
+    /// </summary>
+    private void PaintSegmentLabel(string label, float left, float width, float height, float paddingH, float fontSize, ColorValue color)
+    {
+        float labelWidth = ctx.MeasureText(label, fontSize).Width;
+        float inset = Math.Clamp((width - labelWidth) / 2f, 4f, paddingH);
+        PaintText(label, new Rect(left, 0f, width, height), inset, color,
+            fontSize: fontSize,
+            alignment: TextAlignment.Center,
+            overflow: TextOverflow.Ellipsis);
     }
 
     private void PaintModifierBorder(LayoutNodeData data, Rect bounds)
@@ -12709,6 +12779,23 @@ internal sealed partial class NodePainter
         // Snap to pixel grid for crisp rendering, especially at small sizes
         x = MathF.Round(x);
         y = MathF.Round(y);
+
+        // The text layout does not cut a line that is wider than maxWidth when the overflow mode is
+        // Clip, so a label wider than its box drew straight past the control's edge (a button
+        // narrower than its caption painted the caption over its neighbours). Clip it to the
+        // content box; Ellipsis already truncates to fit.
+        if (singleLine && overflow == TextOverflow.Clip && singleLineSize.Width > availableWidth)
+        {
+            using var clip = ctx.PushClip(new Rect(bounds.X + horizontalPadding, bounds.Y, availableWidth, bounds.Height));
+            ctx.DrawText(text, x, y, effectiveFontSize, color,
+                fontPath: fontPath,
+                alignment: alignment,
+                overflow: overflow,
+                maxWidth: availableWidth,
+                maxLines: maxLines,
+                noWrap: noWrap);
+            return;
+        }
 
         ctx.DrawText(text, x, y, effectiveFontSize, color,
             fontPath: fontPath,

@@ -338,6 +338,8 @@ internal static class LayoutSolver
 
             ISegmentedControl sc => MeasureSegmentedControl(sc, constraints),
 
+            TabBar tabBar => TabStripLayout.Measure(tabBar, constraints),
+
             Breadcrumb bc => MeasureBreadcrumb(bc, constraints),
 
             INumberInput ni => MeasureNumberInput(ni, constraints),

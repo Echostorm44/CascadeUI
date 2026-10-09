@@ -157,6 +157,13 @@ internal sealed class Reconciler
             newLv.LastScrolledIntoView = oldLv.LastScrolledIntoView;
         }
 
+        // A tab bar's hover, keyboard cursor, scroll offset, animations and cached geometry follow
+        // it across renders; without this every Invalidate() would snap the strip back to the start.
+        if (from is TabBar oldTabBar && to is TabBar newTabBar)
+        {
+            newTabBar.State = oldTabBar.State;
+        }
+
         if (from is HotkeyPicker oldPicker && to is HotkeyPicker newPicker)
         {
             newPicker.IsRecording = oldPicker.IsRecording;

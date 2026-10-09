@@ -863,6 +863,9 @@ internal sealed partial class InputDispatcher
         // Inline row actions are painted inside the table node; their hover is tracked per action.
         UpdateRowActionHover(hitNode, hoveredNode, evt.X, evt.Y);
 
+        // Tabs, close buttons and overflow buttons are parts of one TabBar node: tracked per part.
+        UpdateTabBarHover(hitNode, evt.X, evt.Y);
+
         // Track enter/leave for hover
         if (!ReferenceEquals(hitNode, hoveredNode))
         {
@@ -1998,6 +2001,10 @@ internal sealed partial class InputDispatcher
             {
                 PressRowAction(tdnPress, evt.X, evt.Y);
             }
+            if (hitNode is TabBar tabBarPress)
+            {
+                PressTabBar(tabBarPress, evt);
+            }
             RequestRepaint?.Invoke();
         }
 
@@ -2467,11 +2474,21 @@ internal sealed partial class InputDispatcher
                 niPrev.PressedStepperButton = -1;
             }
             ReleaseRowAction(previousPressed);
+            if (previousPressed is TabBar tabBarPrev)
+            {
+                ReleaseTabBar(tabBarPrev);
+            }
             RequestRepaint?.Invoke();
         }
 
         if (hitNode == null)
         {
+            return;
+        }
+
+        if (TryMiddleClickTabBar(hitNode, evt))
+        {
+            RequestRepaint?.Invoke();
             return;
         }
 
@@ -2522,6 +2539,11 @@ internal sealed partial class InputDispatcher
     private void HandleMouseLeave()
     {
         UpdateTreeViewHover(null);
+        if (hoveredTabBar is { } leftTabBar)
+        {
+            ClearTabBarHover(leftTabBar);
+            hoveredTabBar = null;
+        }
 
         if (hoveredNode != null)
         {
@@ -2777,6 +2799,12 @@ internal sealed partial class InputDispatcher
             }
         }
 
+        // A tab bar whose tabs overflow scrolls its strip under the wheel.
+        if (hitForGrid is TabBar tabBarScroll && TryScrollTabBar(tabBarScroll, evt))
+        {
+            return;
+        }
+
         // Virtualized ListView — a list that owns its own scroll offset (builds only
         // the visible slice). Takes priority over an enclosing ScrollView.
         var virtualList = HitTester.FindScrollableListViewAt(rootNode, evt.X, evt.Y);
@@ -2953,6 +2981,15 @@ internal sealed partial class InputDispatcher
             return;
         }
 
+        // Tab shortcuts (Ctrl+Tab, Ctrl+W, Ctrl+1…9) for the focused or nearest TabBar — before
+        // Tab-key traversal, so Ctrl+Tab switches tabs rather than moving focus.
+        if (TryHandleTabShortcut(evt))
+        {
+            suppressNextCharacter = true;
+            RequestRepaint?.Invoke();
+            return;
+        }
+
         // Tab key → focus traversal
         if (evt.Key == Key.Tab)
         {
@@ -2969,6 +3006,7 @@ internal sealed partial class InputDispatcher
             var newFocus = FindNextTabStop(previousFocus, backward);
             if (newFocus != null && !ReferenceEquals(newFocus, previousFocus))
             {
+
                 FocusManager.RequestFocus(newFocus);
                 // RequestFocus clears the keyboard-focus flag (it assumes a mouse
                 // origin); this traversal is keyboard-driven, so the focus ring
@@ -3129,6 +3167,14 @@ internal sealed partial class InputDispatcher
             {
                 return;
             }
+        }
+
+        // A focused tab bar: arrows, Home/End, Enter/Space, Delete.
+        if (focusedNode is TabBar focusedTabBar && HandleTabBarKey(focusedTabBar, evt))
+        {
+            suppressNextCharacter = true;
+            RequestRepaint?.Invoke();
+            return;
         }
 
         // Enter/Space on focused button → invoke click
@@ -3396,7 +3442,7 @@ internal sealed partial class InputDispatcher
         if (node is Button or LinkButton or IconButton
             or TextInput or TextArea or PasswordInput or PinInput
             or MentionInput or TagInput or ColorPicker
-            or Checkbox or Toggle or Slider or HotkeyPicker
+            or Checkbox or Toggle or Slider or HotkeyPicker or TabBar
             || IsNumberInput(node))
         {
             return true;
@@ -3429,6 +3475,7 @@ internal sealed partial class InputDispatcher
             Toggle tog => tog.IsDisabled,
             Slider sl => sl.IsDisabled,
             HotkeyPicker hp => hp.IsDisabled,
+            TabBar tabBar => tabBar.IsDisabled,
             _ => false
         };
     }
@@ -3446,6 +3493,13 @@ internal sealed partial class InputDispatcher
     /// </summary>
     internal static void NotifyFocusMoved(Node? previousFocus, Node? newFocus)
     {
+        // Focus entering a tab bar (by Tab, a click or the app) lands on its selected tab, not
+        // wherever a manual-activation cursor was left last time.
+        if (newFocus is TabBar enteredTabBar && !ReferenceEquals(previousFocus, newFocus))
+        {
+            enteredTabBar.State.FocusPosition = -1;
+        }
+
         current?.SeedEditBuffersForFocus(previousFocus, newFocus);
     }
 
@@ -4543,6 +4597,10 @@ internal sealed partial class InputDispatcher
                 HandleSegmentedControlClick(sc);
                 return;
 
+            case TabBar tabBar when !tabBar.IsDisabled:
+                HandleTabBarClick(tabBar);
+                return;
+
             case IToggleGroup tg when !tg.IsControlDisabled:
                 HandleToggleGroupClick(tg);
                 return;
@@ -4757,7 +4815,7 @@ internal sealed partial class InputDispatcher
     {
         return node is Button or LinkButton or IconButton or Checkbox
             or IRadioButton or Toggle or Rating or Card or Expander
-            or ITreeView or Tag or ISegmentedControl or IToggleGroup
+            or ITreeView or Tag or ISegmentedControl or IToggleGroup or TabBar
             or INumberInput or Breadcrumb or StepIndicator or Banner
             or ColorPicker or PinInput or ToolBar or PasswordInput
             or ISelectNode or IMultiSelectNode or IComboboxNode
@@ -7980,6 +8038,7 @@ internal sealed partial class InputDispatcher
             Checkbox or Toggle or Slider or
             LinkButton or IconButton ||
             node is HotkeyPicker { IsDisabled: false } ||
+            node is TabBar { IsDisabled: false } ||
             IsNumberInput(node))
         {
             return node;

@@ -545,7 +545,8 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
 
     TabularRowActions? ITabularDataNode.RowActionStrip => rowActions;
 
-    bool ITabularDataNode.HasRowContextMenu => rowContextMenuFactory is not null || batchActionsFactory is not null;
+    bool ITabularDataNode.HasRowContextMenu =>
+        rowContextMenuFactory is not null || batchActionsFactory is not null || batchEditEnabled;
 
     int ITabularDataNode.SelectedRowCount => selectedRows.Count;
 
@@ -556,9 +557,9 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
             return [];
         }
 
-        if (batchActionsFactory is { } batch && selectedRows.Count > 1 && selectedRows.Contains(row))
+        if (selectedRows.Count > 1 && selectedRows.Contains(row) && (batchActionsFactory is not null || batchEditEnabled))
         {
-            return batch(SelectedItemsInDisplayOrder()) ?? [];
+            return BatchMenu();
         }
 
         T item = Items.Value[MapRow(row)];
@@ -573,6 +574,20 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
     /// <summary>The selected items in display (sort/filter) order.</summary>
     private T[] SelectedItemsInDisplayOrder()
     {
+        var rows = SelectedRowsInDisplayOrder();
+        var items = Items.Value;
+        var result = new T[rows.Length];
+        for (int i = 0; i < rows.Length; i++)
+        {
+            result[i] = items[MapRow(rows[i])];
+        }
+
+        return result;
+    }
+
+    /// <summary>The selected display rows, in display (sort/filter) order.</summary>
+    private int[] SelectedRowsInDisplayOrder()
+    {
         int rowCount = ((ITabularDataNode)this).RowCount;
         var rows = new List<int>(selectedRows.Count);
         foreach (int row in selectedRows)
@@ -584,16 +599,292 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
         }
 
         rows.Sort();
-        var items = Items.Value;
-        var result = new T[rows.Count];
-        for (int i = 0; i < rows.Count; i++)
-        {
-            result[i] = items[MapRow(rows[i])];
-        }
-
-        return result;
+        return [.. rows];
     }
 
+    /// <summary>
+    /// The menu for a multi-row selection: the app's <see cref="BatchActions"/>, then — with
+    /// <see cref="BatchEdit"/> on — one "Set [Column] for selected rows…" item per visible
+    /// editable column, separated from them.
+    /// </summary>
+    private IReadOnlyList<ContextMenuItem> BatchMenu()
+    {
+        var rows = SelectedRowsInDisplayOrder();
+        var items = Items.Value;
+        var targets = new T[rows.Length];
+        for (int i = 0; i < rows.Length; i++)
+        {
+            targets[i] = items[MapRow(rows[i])];
+        }
+
+        var menu = new List<ContextMenuItem>();
+        if (batchActionsFactory is { } batch && batch(targets) is { } custom)
+        {
+            menu.AddRange(custom);
+        }
+
+        if (!batchEditEnabled)
+        {
+            return menu;
+        }
+
+        var tdn = (ITabularDataNode)this;
+        bool separated = menu.Count == 0;
+        for (int col = 0; col < Columns.Count; col++)
+        {
+            var column = Columns[col];
+            if (!tdn.IsColumnEditable(col) || !tdn.GetColumnVisible(col) || column.kind == DataColumnKind.Custom)
+            {
+                continue;
+            }
+
+            if (!separated)
+            {
+                menu.Add(ContextMenuItem.Separator());
+                separated = true;
+            }
+
+            int capturedCol = col;
+            menu.Add(ContextMenuItem.Action(
+                BatchEditLabel(column.Header),
+                () => { _ = ShowBatchEditorAsync(capturedCol, rows, targets); }));
+        }
+
+        return menu;
+    }
+
+    /// <summary>The built-in batch item's label: "Set Genre for selected rows…".</summary>
+    internal static string BatchEditLabel(string header) => $"Set {header} for selected rows…";
+
+    /// <summary>
+    /// Opens the batch editor for column <paramref name="col"/> over the rows that were selected
+    /// when the menu opened, and applies the chosen value to all of them as one undo step.
+    /// Cancelling changes nothing.
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Reliability",
+        "CA2000:Dispose objects before losing scope",
+        Justification = "Dialog.ShowAsync hands the view to the overlay, which unmounts it when the dialog closes.")]
+    internal async Task ShowBatchEditorAsync(int col, int[] displayRows, T[] targets)
+    {
+        if (col < 0 || col >= Columns.Count || targets.Length == 0)
+        {
+            return;
+        }
+
+        var column = Columns[col];
+        var value = await Dialog.ShowAsync<BatchEditValue>(new BatchEditDialogView(BatchEditorFor(column, targets)));
+        if (value is null)
+        {
+            return;
+        }
+
+        ApplyBatchValue(column, displayRows, targets, value);
+        InputDispatcher.Active?.RequestRepaint?.Invoke();
+    }
+
+    private static BatchEditorSpec BatchEditorFor(DataGridColumn<T> column, T[] targets)
+    {
+        var kind = column.kind switch
+        {
+            DataColumnKind.Number => BatchEditorKind.Number,
+            DataColumnKind.Date => BatchEditorKind.Date,
+            DataColumnKind.Select => BatchEditorKind.Select,
+            DataColumnKind.Bool => BatchEditorKind.Bool,
+            _ => column.isMultiLine ? BatchEditorKind.MultiLine : BatchEditorKind.Text,
+        };
+
+        string text = CommonValue(targets, item => column.textGetter?.Invoke(item) ?? column.objectGetter?.Invoke(item)?.ToString() ?? "") ?? "";
+        bool flag = column.boolGetter is { } getBool && CommonValue(targets, item => getBool(item) ? "1" : "0") == "1";
+        DateOnly? date = kind == BatchEditorKind.Date ? CommonDate(column, targets) : null;
+
+        var options = column.selectOptions ?? [];
+        var labels = new string[options.Count];
+        for (int i = 0; i < options.Count; i++)
+        {
+            labels[i] = options[i]?.ToString() ?? "";
+        }
+
+        int option = -1;
+        if (kind == BatchEditorKind.Select && column.objectGetter is { } getOption)
+        {
+            string? shared = CommonValue(targets, item => getOption(item)?.ToString() ?? "");
+            option = shared is null ? -1 : Array.IndexOf(labels, shared);
+        }
+
+        Func<string, bool> isValid = kind == BatchEditorKind.Number
+            ? value => ParseEditValue(value, column) is not string
+            : static _ => true;
+
+        return new BatchEditorSpec(column.Header, targets.Length, kind, text, flag, date, labels, option, isValid);
+    }
+
+    /// <summary>The text every target shares, or null when they differ.</summary>
+    private static string? CommonValue(T[] targets, Func<T, string> read)
+    {
+        string? shared = null;
+        foreach (var item in targets)
+        {
+            string value = read(item);
+            if (shared is null)
+            {
+                shared = value;
+            }
+            else if (!string.Equals(shared, value, StringComparison.Ordinal))
+            {
+                return null;
+            }
+        }
+
+        return shared;
+    }
+
+    private static DateOnly? CommonDate(DataGridColumn<T> column, T[] targets)
+    {
+        if (column.objectGetter is not { } get)
+        {
+            return null;
+        }
+
+        DateOnly? shared = null;
+        foreach (var item in targets)
+        {
+            DateOnly? value = get(item) switch
+            {
+                DateOnly d => d,
+                DateTime dt => DateOnly.FromDateTime(dt),
+                DateTimeOffset dto => DateOnly.FromDateTime(dto.DateTime),
+                _ => null,
+            };
+
+            if (value is null || (shared is not null && shared != value))
+            {
+                return null;
+            }
+
+            shared = value;
+        }
+
+        return shared;
+    }
+
+    /// <summary>
+    /// Writes <paramref name="value"/> into <paramref name="column"/> of every target (one undo
+    /// step when undo is on), then raises <c>OnChange</c> per row, refreshes the cell text and
+    /// re-validates the rows.
+    /// </summary>
+    private void ApplyBatchValue(DataGridColumn<T> column, int[] displayRows, T[] targets, BatchEditValue value)
+    {
+        Action<T> write;
+        if (column.boolSetter is { } setBool)
+        {
+            write = item => { setBool(item, value.Bool); };
+        }
+        else if (column.textSetter is { } setText)
+        {
+            write = item => { setText(item, value.Text); };
+        }
+        else if (column.objectSetter is { } setObject)
+        {
+            object? newValue = column.kind switch
+            {
+                DataColumnKind.Date => value.Date,
+                DataColumnKind.Select when column.selectOptions is { } options
+                    && value.OptionIndex >= 0 && value.OptionIndex < options.Count => options[value.OptionIndex],
+                DataColumnKind.Select => null,
+                _ => ParseEditValue(value.Text, column),
+            };
+
+            if (newValue is null)
+            {
+                return;
+            }
+
+            write = item => { setObject(item, newValue); };
+        }
+        else
+        {
+            return;
+        }
+
+        if (undoEnabledValue)
+        {
+            EnsureUndoStack();
+            var saved = CaptureValues(column, targets);
+            undoStack!.Execute(UndoCommand.Create(
+                $"Set {column.Header} on {targets.Length} rows",
+                () => { WriteAll(targets, write); },
+                () => { RestoreValues(column, targets, saved); }));
+        }
+        else
+        {
+            WriteAll(targets, write);
+        }
+
+        foreach (var item in targets)
+        {
+            onChangeHandler?.Invoke(item);
+        }
+
+        var tdn = (ITabularDataNode)this;
+        foreach (int row in displayRows)
+        {
+            if (row < tdn.RowCount)
+            {
+                tdn.ValidateRow(row);
+            }
+        }
+    }
+
+    private void WriteAll(T[] targets, Action<T> write)
+    {
+        foreach (var item in targets)
+        {
+            write(item);
+        }
+
+        // The whole cache, in place: the array is shared with the node that replaced this one
+        // across a re-render (same data source), so this refreshes what is on screen too.
+        InvalidateCellCache();
+    }
+
+    /// <summary>Each target's current value in <paramref name="column"/>, by position (the undo half).</summary>
+    private static object?[] CaptureValues(DataGridColumn<T> column, T[] targets)
+    {
+        var saved = new object?[targets.Length];
+        for (int i = 0; i < targets.Length; i++)
+        {
+            var item = targets[i];
+            saved[i] = column.boolGetter is { } getBool ? getBool(item)
+                : column.textGetter is { } getText ? getText(item)
+                : column.objectGetter?.Invoke(item);
+        }
+
+        return saved;
+    }
+
+    private void RestoreValues(DataGridColumn<T> column, T[] targets, object?[] saved)
+    {
+        for (int i = 0; i < targets.Length; i++)
+        {
+            var item = targets[i];
+            object? old = saved[i];
+            if (column.boolSetter is { } setBool && old is bool b)
+            {
+                setBool(item, b);
+            }
+            else if (column.textSetter is { } setText)
+            {
+                setText(item, old as string ?? "");
+            }
+            else if (column.objectSetter is { } setObject && old is not null)
+            {
+                setObject(item, old);
+            }
+        }
+
+        InvalidateCellCache();
+    }
     // ── Runtime interaction state ────────────────────────────────────
 
     internal int sortColumnIdx = -1;

@@ -434,6 +434,10 @@ public class Material3Theme : CascadeTheme
         BorderWidth     = 1,
 
         Transition = Motion.Default,
+
+        // Material 3 tabs: the state layer fills the whole tab, no rounding.
+        ItemRadius = 0,
+        ItemInset  = 0,
     };
 
     /// <inheritdoc />

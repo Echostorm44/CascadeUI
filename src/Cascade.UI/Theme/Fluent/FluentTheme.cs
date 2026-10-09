@@ -462,6 +462,10 @@ public class FluentTheme : CascadeTheme
         BorderWidth     = 1,
 
         Transition = Motion.Subtle,
+
+        // Fluent tab list: subtle rounded hover fill inside the strip.
+        ItemRadius = Radius.Sm,
+        ItemInset  = 4,
     };
 
     /// <inheritdoc />

@@ -164,6 +164,23 @@ internal static class NodeTreeWalker
                 });
                 return true;
 
+            case "middle_click":
+                inputDispatcher.HandleMouseEvent(new NativeMouseEvent
+                {
+                    Type = NativeMouseEventType.MouseDown,
+                    X = centerX, Y = centerY,
+                    Button = NativeMouseButton.Middle,
+                    Modifiers = modifiers,
+                });
+                inputDispatcher.HandleMouseEvent(new NativeMouseEvent
+                {
+                    Type = NativeMouseEventType.MouseUp,
+                    X = centerX, Y = centerY,
+                    Button = NativeMouseButton.Middle,
+                    Modifiers = modifiers,
+                });
+                return true;
+
             case "focus":
                 FocusManager.RequestFocus(uiNode);
                 return true;
@@ -1717,6 +1734,11 @@ internal static class NodeTreeWalker
             AddRowActionAccessibilityNodes(table, actions, info.id, children);
         }
 
+        if (node is TabBar tabBar)
+        {
+            return BuildTabBarAccessibilityNode(tabBar, info.id, info.role ?? AccessibleRole.TabList, info.accessibleLabel);
+        }
+
         // An open dialog, sheet or popover: say whether it is modal, and give its window bounds
         // (the panel is laid out in window coordinates, unlike nodes in the page).
         if (node is Node panel && inputDispatcher?.Overlays?.FindByTree(panel) is { } overlay)
@@ -1749,6 +1771,131 @@ internal static class NodeTreeWalker
             Label = info.accessibleLabel,
             Children = children,
         };
+    }
+
+    /// <summary>
+    /// A tab bar's tabs are painted inside the bar node, not nodes of the tree: expose the bar as
+    /// a tab list (with its orientation) holding one tab element per tab — name, selected,
+    /// disabled and keyboard-focused state, position in the set, window bounds — followed by
+    /// its overflow buttons when the tabs do not fit. Same treatment as the context menu.
+    /// </summary>
+    private static AccessibleNode BuildTabBarAccessibilityNode(TabBar bar, string barId, AccessibleRole role, string? label)
+    {
+        var children = new List<AccessibleNode>(bar.AccessibleTabCount + 2);
+        Rect content = default;
+        bool laidOut = inputDispatcher is not null && inputDispatcher.TryGetAbsoluteBounds(bar, out content);
+        if (laidOut)
+        {
+            var padding = bar.LayoutData.Padding;
+            content = new Rect(
+                content.X + padding.Left,
+                content.Y + padding.Top,
+                MathF.Max(0f, content.Width - padding.Horizontal),
+                MathF.Max(0f, content.Height - padding.Vertical));
+        }
+        else
+        {
+            content = bar.State.PaintedBounds;
+        }
+
+        for (int i = 0; i < bar.AccessibleTabCount; i++)
+        {
+            var tab = bar.GetAccessibleTab(i, content);
+            var states = new Dictionary<string, string>
+            {
+                ["selected"] = tab.Selected ? "true" : "false",
+                ["pos_in_set"] = tab.PositionInSet.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["set_size"] = tab.SetSize.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            };
+            if (tab.Closable)
+            {
+                states["closable"] = "true";
+            }
+
+            if (tab.Badge is { } badge)
+            {
+                states["badge"] = badge;
+            }
+
+            if (tab.IsOffscreen)
+            {
+                states["offscreen"] = "true";
+            }
+
+            children.Add(new AccessibleNode
+            {
+                NodeId = $"{barId}/tab-{i}",
+                Role = AccessibleRole.Tab,
+                Label = tab.Label,
+                Focusable = !tab.Disabled,
+                Focused = tab.Focused,
+                Disabled = tab.Disabled,
+                StateProperties = states,
+                Bounds = tab.Bounds,
+            });
+        }
+
+        var geometry = TabStripLayout.Ensure(bar);
+        float scroll = bar.State.ScrollOffset;
+        if (geometry.HasScrollButtons)
+        {
+            children.Add(TabStripButtonNode(barId, "scroll-back", "Scroll tabs back", Offset(geometry.BackButton, content), disabled: bar.IsDisabled || scroll <= 0.5f));
+            children.Add(TabStripButtonNode(barId, "scroll-forward", "Scroll tabs forward", Offset(geometry.ForwardButton, content), disabled: bar.IsDisabled || scroll >= geometry.MaxScroll - 0.5f));
+        }
+
+        if (geometry.HasMenuButton)
+        {
+            bool open = inputDispatcher?.IsMenuOwnedBy(bar) == true;
+            var more = TabStripButtonNode(barId, "more", $"More tabs ({geometry.HiddenCount})", Offset(geometry.MenuButton, content), disabled: bar.IsDisabled);
+            children.Add(new AccessibleNode
+            {
+                NodeId = more.NodeId,
+                Role = more.Role,
+                Label = more.Label,
+                Focusable = more.Focusable,
+                Disabled = more.Disabled,
+                Bounds = more.Bounds,
+                StateProperties = new Dictionary<string, string>
+                {
+                    ["has_popup"] = "menu",
+                    ["expanded"] = open ? "true" : "false",
+                },
+            });
+        }
+
+        return new AccessibleNode
+        {
+            NodeId = barId,
+            Role = role,
+            Label = label,
+            Focusable = !bar.IsDisabled,
+            Focused = ReferenceEquals(FocusManager.FocusedElement, bar),
+            Disabled = bar.IsDisabled,
+            StateProperties = new Dictionary<string, string>
+            {
+                ["orientation"] = bar.IsVertical ? "vertical" : "horizontal",
+            },
+            Bounds = null,
+            Children = children,
+        };
+    }
+
+    private static AccessibleNode TabStripButtonNode(string barId, string part, string label, Rect bounds, bool disabled)
+    {
+        return new AccessibleNode
+        {
+            NodeId = $"{barId}/{part}",
+            Role = AccessibleRole.Button,
+            Label = label,
+            Focusable = false,
+            Disabled = disabled,
+            Bounds = bounds,
+        };
+    }
+
+    private static Rect Offset(Rect local, Rect origin)
+    {
+        return new Rect(origin.X + local.X, origin.Y + local.Y, local.Width, local.Height);
     }
 
     /// <summary>

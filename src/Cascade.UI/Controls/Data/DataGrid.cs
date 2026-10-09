@@ -767,14 +767,27 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
             editBuffer = ((ITabularDataNode)this).GetCellText(row, col);
         }
         editCursorPos = editBuffer.Length;
+        editOriginal = editBuffer;
         return true;
     }
+
+    /// <summary>The text the current edit started from; an edit that ends on it changes nothing.</summary>
+    internal string editOriginal = "";
 
     bool ITabularDataNode.CommitEdit()
     {
         if (editingRow < 0 || editingCol < 0)
         {
             return false;
+        }
+
+        // Nothing was changed: end the edit without writing. Writing anyway re-raised OnChange and,
+        // with BatchEdit on, copied this row's unchanged value into every other selected row —
+        // a click that merely entered edit mode on a multi-selection overwrote the others.
+        if (string.Equals(editBuffer, editOriginal, StringComparison.Ordinal))
+        {
+            ((ITabularDataNode)this).CancelEdit();
+            return true;
         }
 
         int dataRow = MapRow(editingRow);

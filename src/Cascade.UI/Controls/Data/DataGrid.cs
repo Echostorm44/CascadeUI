@@ -234,9 +234,17 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
         return this;
     }
 
-    /// <summary>Adds custom batch actions to the context menu.</summary>
+    /// <summary>
+    /// The context menu for a multi-row selection. Right-clicking any row of a selection of two or
+    /// more rows keeps the selection and opens the menu <paramref name="factory"/> builds for the
+    /// selected items, in display (sort/filter) order; the context-menu key, Shift+F10 and
+    /// <see cref="ShowContextMenu"/> do the same when the selected row belongs to such a
+    /// selection. A single row gets its <see cref="RowContextMenu"/>, or — when the grid has none
+    /// — this menu over that one item. Return an empty list to show nothing.
+    /// </summary>
     public DataGrid<T> BatchActions(Func<IReadOnlyList<T>, IReadOnlyList<ContextMenuItem>> factory)
     {
+        ArgumentNullException.ThrowIfNull(factory);
         batchActionsFactory = factory;
         return this;
     }
@@ -486,11 +494,84 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
         return this;
     }
 
-    /// <summary>Configures a right-click context menu per row.</summary>
+    /// <summary>
+    /// Gives every row a context menu, built by <paramref name="factory"/> for the row's item when
+    /// the menu opens. Right-clicking a row commits any cell edit, selects the row and opens the
+    /// menu at the pointer; a right-click on a row that is already selected keeps the selection.
+    /// With the grid focused, the context-menu key or Shift+F10 opens the selected row's menu
+    /// below the row, and <see cref="ShowContextMenu"/> opens it from the app's own shortcut. A
+    /// multi-row selection shows <see cref="BatchActions"/> instead, when configured. Right-clicks
+    /// on the header, filter row, group headers, detail panels, aggregate row or empty space open
+    /// nothing. Return an empty list for an item that has no menu.
+    /// </summary>
     public DataGrid<T> RowContextMenu(Func<T, IReadOnlyList<ContextMenuItem>> factory)
     {
+        ArgumentNullException.ThrowIfNull(factory);
         rowContextMenuFactory = factory;
         return this;
+    }
+
+    /// <summary>
+    /// Opens the context menu of the selected row (its <see cref="RowContextMenu"/>, or the
+    /// <see cref="BatchActions"/> when it is part of a multi-row selection), below the row,
+    /// scrolling it into view first — for an app that handles the shortcut itself. Keep a
+    /// <see cref="NodeRef{T}"/> to the grid to call it. Returns false when nothing is selected, no
+    /// menu is configured, the menu is empty, the row is in a collapsed group, or no window is
+    /// running.
+    /// </summary>
+    public bool ShowContextMenu()
+    {
+        ITabularDataNode self = this;
+        return InputDispatcher.Active?.OpenTabularContextMenu(self, self.SelectedRowIndex, pointer: null) == true;
+    }
+
+    bool ITabularDataNode.HasRowContextMenu => rowContextMenuFactory is not null || batchActionsFactory is not null;
+
+    int ITabularDataNode.SelectedRowCount => selectedRows.Count;
+
+    IReadOnlyList<ContextMenuItem> ITabularDataNode.GetRowContextMenu(int row)
+    {
+        if (row < 0 || row >= ((ITabularDataNode)this).RowCount)
+        {
+            return [];
+        }
+
+        if (batchActionsFactory is { } batch && selectedRows.Count > 1 && selectedRows.Contains(row))
+        {
+            return batch(SelectedItemsInDisplayOrder()) ?? [];
+        }
+
+        T item = Items.Value[MapRow(row)];
+        if (rowContextMenuFactory is { } factory)
+        {
+            return factory(item) ?? [];
+        }
+
+        return batchActionsFactory is { } single ? single([item]) ?? [] : [];
+    }
+
+    /// <summary>The selected items in display (sort/filter) order.</summary>
+    private T[] SelectedItemsInDisplayOrder()
+    {
+        int rowCount = ((ITabularDataNode)this).RowCount;
+        var rows = new List<int>(selectedRows.Count);
+        foreach (int row in selectedRows)
+        {
+            if ((uint)row < (uint)rowCount)
+            {
+                rows.Add(row);
+            }
+        }
+
+        rows.Sort();
+        var items = Items.Value;
+        var result = new T[rows.Count];
+        for (int i = 0; i < rows.Count; i++)
+        {
+            result[i] = items[MapRow(rows[i])];
+        }
+
+        return result;
     }
 
     // ── Runtime interaction state ────────────────────────────────────

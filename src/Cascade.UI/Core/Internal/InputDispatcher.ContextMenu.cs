@@ -181,6 +181,124 @@ internal sealed partial class InputDispatcher
     }
 
     /// <summary>
+    /// Opens a DataTable/DataGrid row's context menu (<see cref="ITabularDataNode.GetRowContextMenu"/>):
+    /// at <paramref name="pointer"/> for a right-click, or below the row — scrolled into view
+    /// first — when opened from the keyboard or app code. Returns false when the row is out of
+    /// range or in a collapsed group, the table has no menu, the menu is empty, or the table has
+    /// not been painted yet.
+    /// </summary>
+    internal bool OpenTabularContextMenu(ITabularDataNode table, int row, Point? pointer)
+    {
+        var tableBounds = table.AbsoluteBounds;
+        if (!table.HasRowContextMenu || row < 0 || row >= table.RowCount
+            || tableBounds.Width <= 0f || tableBounds.Height <= 0f)
+        {
+            return false;
+        }
+
+        FinishTabularInteraction(table);
+        MenuPlacement placement;
+        if (pointer is { } p)
+        {
+            placement = MenuPlacement.AtPoint(p);
+        }
+        else
+        {
+            table.ScrollIntoView(row);
+            if (!TabularRowGeometry.TryGetVisibleRowBounds(table, row, out var rowBounds))
+            {
+                return false;
+            }
+
+            placement = MenuPlacement.Below(rowBounds);
+        }
+
+        var items = table.GetRowContextMenu(row);
+        if (items.Count == 0)
+        {
+            return false;
+        }
+
+        OpenMenu(items, placement, highlightFirst: pointer is null, owner: null);
+        if (rootNode is not null && table is Node tableNode)
+        {
+            // The scroll and selection changed under a possibly layer-cached ScrollView.
+            MarkScrollViewLayersDirty(rootNode, tableNode);
+        }
+
+        return IsMenuOpen;
+    }
+
+    /// <summary>
+    /// Right-click on a row of a DataTable/DataGrid with a row menu: a row outside the selection
+    /// becomes the selection (a row inside it keeps a multi-selection intact), the table takes
+    /// focus, and the row's menu opens at the pointer. Header, filter row, group headers, detail
+    /// panels, aggregate rows and empty space are not rows: the press carries on as before.
+    /// </summary>
+    private bool TryOpenTabularContextMenuAt(Node? hitNode, NativeMouseEvent evt)
+    {
+        if (hitNode is not ITabularDataNode table || !table.HasRowContextMenu)
+        {
+            return false;
+        }
+
+        var bounds = table.AbsoluteBounds;
+        if (evt.X < bounds.X || evt.X >= bounds.Right)
+        {
+            return false;
+        }
+
+        var hit = TabularRowGeometry.HitTest(table, evt.Y - bounds.Y, bounds.Height);
+        if (hit.Kind != TabularHitKind.Row)
+        {
+            return false;
+        }
+
+        FinishTabularInteraction(table);
+        if (!table.IsRowSelected(hit.Index))
+        {
+            table.SelectRow(hit.Index, ctrl: false, shift: false);
+        }
+
+        if (table is Node tableNode)
+        {
+            FocusManager.RequestFocus(tableNode);
+        }
+
+        OpenTabularContextMenu(table, hit.Index, new Point(evt.X, evt.Y));
+        RequestRepaint?.Invoke();
+        return true;
+    }
+
+    /// <summary>
+    /// Before a table's menu opens: commit a cell edit, close the grid's own select/date popup
+    /// and column chooser, and leave the filter row — the same as a left click on a row does.
+    /// </summary>
+    private void FinishTabularInteraction(ITabularDataNode table)
+    {
+        if (table.IsEditing)
+        {
+            table.CommitEdit();
+        }
+
+        if (openGridOverlay is not null)
+        {
+            openGridOverlay.CloseOverlay();
+            openGridOverlay = null;
+        }
+
+        if (table.IsColumnChooserOpen)
+        {
+            table.ToggleColumnChooser();
+        }
+
+        if (table.ActiveFilterCol >= 0)
+        {
+            table.ActiveFilterCol = -1;
+        }
+    }
+
+    /// <summary>
     /// Runs a node's context-menu handler (<c>.OnContextMenu()</c>, <c>Button.OnContextMenu</c>)
     /// with <paramref name="placement"/> as the place a position-less
     /// <see cref="ContextMenu.Show(IReadOnlyList{ContextMenuItem})"/> opens the menu.
@@ -218,7 +336,7 @@ internal sealed partial class InputDispatcher
     }
 
     /// <summary>
-    /// The context-menu key for the focused control: a list opens its selected row's menu, a
+    /// The context-menu key for the focused control: a list or table opens its selected row's menu, a
     /// split button its dropdown, any other node with a context-menu handler runs it (a
     /// position-less ContextMenu.Show then opens below the control).
     /// </summary>
@@ -233,6 +351,11 @@ internal sealed partial class InputDispatcher
         if (focused is IListViewNode list && list.HasItemContextMenu)
         {
             return OpenListViewContextMenu(list, list.SelectedIndex, pointer: null);
+        }
+
+        if (focused is ITabularDataNode table && table.HasRowContextMenu)
+        {
+            return OpenTabularContextMenu(table, table.SelectedRowIndex, pointer: null);
         }
 
         if (focused is SplitButton splitButton && !splitButton.IsDisabled)

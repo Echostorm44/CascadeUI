@@ -4,7 +4,8 @@ namespace Cascade.UI.CliFixture;
 /// Fixture for control sizing (CASCADE_FIXTURE_VIEW=controls): text-bearing controls squeezed
 /// narrower than their labels (a fixed width, Expand in a tight row) — each label must stay inside
 /// its control, ellipsized — and icon buttons at several footprints, in a short row and stretched,
-/// which must stay round with a glyph that scales with the footprint.
+/// which must stay round with a glyph that scales with the footprint. A <c>.FocusTrap()</c> row
+/// at the bottom keeps Tab inside its two buttons once focus is there.
 /// </summary>
 internal sealed class ControlsView : Component
 {
@@ -72,6 +73,17 @@ internal sealed class ControlsView : Component
                 new IconButton(TrashIcon, () => { }).Size(24).Tooltip("Delete in row"),
             ]).Height(28).Width(260).Background(RowBackground),
             new IconButton(TrashIcon, () => { }).Width(120).Tooltip("Stretched"),
+            new Label("Focus trap: Tab cycles Trap A / Trap B"),
+            new Row(spacing: 8, children:
+            [
+                new Button("Before trap", () => { }),
+                new Row(spacing: 8, children:
+                [
+                    new Button("Trap A", () => { }),
+                    new Button("Trap B", () => { }),
+                ]).FocusTrap(),
+                new Button("After trap", () => { }),
+            ]),
         ]).Padding(EdgeInsets.All(12));
     }
 }

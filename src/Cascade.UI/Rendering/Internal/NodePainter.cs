@@ -306,6 +306,8 @@ internal sealed partial class NodePainter
         // Overlays are painted last, so they composite over the tree: the GPU presenter draws
         // shapes, text and images in paint order.
         PaintDeferredOverlays();
+        // Dialogs, sheets and popovers sit above the page; the context menu and toasts above them.
+        PaintOverlayLayer();
         if (CommandPalette.IsOpen)
         {
             PaintCommandPaletteOverlay();

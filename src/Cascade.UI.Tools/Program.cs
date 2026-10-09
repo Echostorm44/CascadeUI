@@ -12,6 +12,8 @@ internal static class Program
 
     private static int Main(string[] args)
     {
+        UseUtf8WhenRedirected();
+
         if (args.Length == 0)
         {
             PrintBanner();
@@ -50,6 +52,28 @@ internal static class Program
             "mcp" => McpCommand.Execute(rest),
             _ => UnknownCommand(command),
         };
+    }
+
+    /// <summary>
+    /// The verbs' JSON goes to whatever reads the pipe — agents, scripts, the test harness — and must
+    /// be UTF-8. Redirected, Console otherwise encodes with the system code page, which turns "…",
+    /// accents and emoji in node labels into '?' (seen on CI). A console keeps its own encoding.
+    /// </summary>
+    private static void UseUtf8WhenRedirected()
+    {
+        var utf8 = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        // Console owns the writers for the rest of the process (flushed on every write). Setting
+        // Console.OutputEncoding instead would also switch an attached terminal's code page.
+#pragma warning disable CA2000
+        if (Console.IsOutputRedirected)
+        {
+            Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), utf8) { AutoFlush = true });
+        }
+        if (Console.IsErrorRedirected)
+        {
+            Console.SetError(new StreamWriter(Console.OpenStandardError(), utf8) { AutoFlush = true });
+        }
+#pragma warning restore CA2000
     }
 
     private static void PrintBanner()

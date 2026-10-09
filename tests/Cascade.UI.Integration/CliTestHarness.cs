@@ -94,6 +94,9 @@ internal static class CliTestHarness
             WorkingDirectory = RepoRoot,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            // The CLI writes UTF-8 when redirected; read it as such, whatever the system code page.
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardErrorEncoding = System.Text.Encoding.UTF8,
             UseShellExecute = false,
             CreateNoWindow = true,
         };

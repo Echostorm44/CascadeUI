@@ -37,7 +37,8 @@ public class InstanceSelectionCliTests
             await Assert.That(inDialogs.StdOut).Contains("\"total_matches\":1");
             await Assert.That(inMenus.ExitCode).IsEqualTo(0);
             await Assert.That(inMenus.StdOut).Contains("\"total_matches\":0");
-            await Assert.That(byBarePid.StdOut).Contains("\"total_matches\":1");
+            await Assert.That(byBarePid.StdOut).Contains("\"total_matches\":1")
+                .Because($"--app #{dialogs.Id} printed [{byBarePid.StdOut}] [{byBarePid.StdErr}]");
 
             // A pid that is not one of the app's instances is not silently replaced by another.
             var wrong = await CliTestHarness.RunCliAsync("mcp", "find", "Delete clip", "--app", $"{appId}#{int.MaxValue}");

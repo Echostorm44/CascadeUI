@@ -2767,6 +2767,8 @@ internal sealed partial class InputDispatcher
                 bool moved = Math.Abs(tdnScroll.ScrollOffsetY - oldOffset) > 0.001f;
                 if (moved)
                 {
+                    // The rows moved under a pointer that did not: what it hovers changed.
+                    RefreshTabularHover(tdnScroll, evt.X, evt.Y);
                     RequestRepaint?.Invoke();
                 }
 

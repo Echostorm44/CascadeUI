@@ -4795,9 +4795,8 @@ internal sealed partial class InputDispatcher
             return;
         }
 
-        float rowHeight = tdn.GetRowHeight();
-        float headerHeight = rowHeight + 4f;
-        const float filterRowHeight = 28f;
+        float headerHeight = TabularRowGeometry.HeaderHeight(tdn);
+        const float filterRowHeight = TabularRowGeometry.FilterRowHeight;
         float relX = lastMousePosition.X - bounds.X;
         float relY = lastMousePosition.Y - bounds.Y;
 
@@ -4877,7 +4876,6 @@ internal sealed partial class InputDispatcher
         }
 
         // Click in filter row area → activate filter cell
-        float dataAreaTop = headerHeight;
         if (tdn.HasFilterRow)
         {
             if (relY >= headerHeight && relY < headerHeight + filterRowHeight)
@@ -4923,7 +4921,6 @@ internal sealed partial class InputDispatcher
                 RequestRepaint?.Invoke();
                 return;
             }
-            dataAreaTop += filterRowHeight;
         }
 
         // Click below filter row → deactivate filter input
@@ -4932,112 +4929,31 @@ internal sealed partial class InputDispatcher
             tdn.ActiveFilterCol = -1;
         }
 
-        // Skip top aggregate row (not interactive)
-        if (tdn.HasAggregateRow && tdn.AggregatePos == AggregatePosition.Top)
+        // Rows, group headers and detail panels: the shared geometry applies the vertical scroll,
+        // which the walk that used to live here did not — a click on a scrolled table selected
+        // the row that would have been there at offset zero.
+        var hit = TabularRowGeometry.HitTest(tdn, relY, bounds.Height);
+        switch (hit.Kind)
         {
-            float aggH = tdn.GetAggregateRowHeight();
-            if (relY >= dataAreaTop && relY < dataAreaTop + aggH)
-            {
-                return; // Click on aggregate row — no action
-            }
-            dataAreaTop += aggH;
-        }
+            case TabularHitKind.GroupHeader:
+                tdn.ToggleGroupCollapse(hit.Index);
+                RequestRepaint?.Invoke();
+                return;
 
-        // ── Grouped mode: hit-test group headers vs data rows ────────
-        if (tdn.IsGrouped)
-        {
-            const float groupHeaderHeight = 32f;
-            float currentY = dataAreaTop;
-            for (int g = 0; g < tdn.GroupCount; g++)
-            {
-                // Group header
-                if (relY >= currentY && relY < currentY + groupHeaderHeight)
+            case TabularHitKind.Row:
+                if (tdn.HasRowDetail && relX < ExpandIndicatorWidth)
                 {
-                    tdn.ToggleGroupCollapse(g);
+                    tdn.ToggleRowDetail(hit.Index);
                     RequestRepaint?.Invoke();
                     return;
                 }
-                currentY += groupHeaderHeight;
 
-                if (!tdn.IsGroupCollapsed(g))
-                {
-                    int groupRowCount = tdn.GetGroupRowCount(g);
-                    for (int rowInGroup = 0; rowInGroup < groupRowCount; rowInGroup++)
-                    {
-                        int row = tdn.GetGroupDataRowIndex(g, rowInGroup);
+                HandleTabularDataRowClick(tdn, hit.Index, relX, bounds.Width);
+                return;
 
-                        // Check if click is in this row
-                        if (relY >= currentY && relY < currentY + rowHeight)
-                        {
-                            // Check expand indicator click
-                            if (tdn.HasRowDetail && relX < ExpandIndicatorWidth)
-                            {
-                                tdn.ToggleRowDetail(row);
-                                RequestRepaint?.Invoke();
-                                return;
-                            }
-                            HandleTabularDataRowClick(tdn, row, relX, bounds.Width);
-                            return;
-                        }
-                        currentY += rowHeight;
-
-                        // Skip detail panel if expanded
-                        if (tdn.HasRowDetail && tdn.IsRowExpanded(row))
-                        {
-                            float detailH = tdn.GetRowDetailHeight(row);
-                            if (relY >= currentY && relY < currentY + detailH)
-                            {
-                                return; // Click in detail panel — no action
-                            }
-                            currentY += detailH;
-                        }
-                    }
-                }
-            }
-            return;
-        }
-
-        // ── Flat (ungrouped) mode: click in data rows ────────────────
-        if (tdn.HasRowDetail)
-        {
-            // Walk rows with variable heights when detail panels are open
-            float currentY = dataAreaTop;
-            for (int r = 0; r < tdn.RowCount; r++)
-            {
-                if (relY >= currentY && relY < currentY + rowHeight)
-                {
-                    // Check expand indicator click
-                    if (relX < ExpandIndicatorWidth)
-                    {
-                        tdn.ToggleRowDetail(r);
-                        RequestRepaint?.Invoke();
-                        return;
-                    }
-                    HandleTabularDataRowClick(tdn, r, relX, bounds.Width);
-                    return;
-                }
-                currentY += rowHeight;
-
-                // Skip detail panel if expanded
-                if (tdn.IsRowExpanded(r))
-                {
-                    float detailH = tdn.GetRowDetailHeight(r);
-                    if (relY >= currentY && relY < currentY + detailH)
-                    {
-                        return; // Click in detail panel — no action
-                    }
-                    currentY += detailH;
-                }
-            }
-        }
-        else
-        {
-            float rowAreaY = relY - dataAreaTop;
-            int flatRow = (int)(rowAreaY / rowHeight);
-            if (flatRow >= 0 && flatRow < tdn.RowCount)
-            {
-                HandleTabularDataRowClick(tdn, flatRow, relX, bounds.Width);
-            }
+            default:
+                // Aggregate rows and detail panels are not interactive.
+                return;
         }
     }
 
@@ -5798,76 +5714,8 @@ internal sealed partial class InputDispatcher
             return -1;
         }
 
-        float rowHeight = tdn.GetRowHeight();
-        float headerHeight = rowHeight + 4f;
-        const float filterRowHeight = 28f;
-        float dataAreaTop = headerHeight + (tdn.HasFilterRow ? filterRowHeight : 0f);
-        if (tdn.HasAggregateRow && tdn.AggregatePos == AggregatePosition.Top)
-        {
-            dataAreaTop += tdn.GetAggregateRowHeight();
-        }
-        float relY = mouseY - bounds.Y;
-
-        if (relY < dataAreaTop)
-        {
-            return -1;
-        }
-
-        if (tdn.IsGrouped)
-        {
-            const float groupHeaderHeight = 32f;
-            float currentY = dataAreaTop;
-            for (int g = 0; g < tdn.GroupCount; g++)
-            {
-                currentY += groupHeaderHeight;
-                if (tdn.IsGroupCollapsed(g))
-                {
-                    continue;
-                }
-                int groupRowCount = tdn.GetGroupRowCount(g);
-                for (int rowInGroup = 0; rowInGroup < groupRowCount; rowInGroup++)
-                {
-                    int row = tdn.GetGroupDataRowIndex(g, rowInGroup);
-                    if (relY >= currentY && relY < currentY + rowHeight)
-                    {
-                        return row;
-                    }
-                    currentY += rowHeight;
-
-                    if (tdn.HasRowDetail && tdn.IsRowExpanded(row))
-                    {
-                        currentY += tdn.GetRowDetailHeight(row);
-                    }
-                }
-            }
-            return -1;
-        }
-
-        if (tdn.HasRowDetail)
-        {
-            float currentY = dataAreaTop;
-            for (int r = 0; r < tdn.RowCount; r++)
-            {
-                if (relY >= currentY && relY < currentY + rowHeight)
-                {
-                    return r;
-                }
-                currentY += rowHeight;
-
-                if (tdn.IsRowExpanded(r))
-                {
-                    currentY += tdn.GetRowDetailHeight(r);
-                }
-            }
-            return -1;
-        }
-
-        int row2 = (int)((relY - dataAreaTop) / rowHeight);
-        if (row2 >= 0 && row2 < tdn.RowCount)
-        {
-            return row2;
-        }
-        return -1;
+        var hit = TabularRowGeometry.HitTest(tdn, mouseY - bounds.Y, bounds.Height);
+        return hit.Kind == TabularHitKind.Row ? hit.Index : -1;
     }
 
     // ── SegmentedControl helpers ─────────────────────────────────────

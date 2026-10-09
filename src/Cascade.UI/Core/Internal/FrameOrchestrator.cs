@@ -498,13 +498,7 @@ internal sealed class FrameOrchestrator : IDisposable
             // Pass theme button metrics for accurate measurement
             if (Theme != null)
             {
-                var bt = Theme.Button;
-                LayoutSolver.ButtonPaddingH = bt.PaddingH;
-                LayoutSolver.ButtonMinHeight = bt.Height;
-                bool isSemiBold = bt.TextStyle.Weight is FontWeight.SemiBold or FontWeight.Bold
-                    or FontWeight.ExtraBold or FontWeight.Black or FontWeight.Medium;
-                LayoutSolver.ButtonUseSemiBold = isSemiBold;
-                LayoutSolver.ButtonFontSize = bt.TextStyle.Size;
+                LayoutSolver.ButtonTokens = Theme.Button;
                 LayoutSolver.BodyFontSize = Theme.Typography.Scale.Body.Size;
                 LayoutSolver.H1FontSize = Theme.Typography.Scale.H1.Size;
                 LayoutSolver.H2FontSize = Theme.Typography.Scale.H2.Size;

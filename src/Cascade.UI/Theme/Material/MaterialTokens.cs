@@ -134,6 +134,13 @@ public static class MaterialTokens
         }
     };
 
+    /// <summary>
+    /// M3 "Label Large" (14sp, Medium, 20sp line): the type role Material 3 assigns to button
+    /// labels. The button tokens used Heading3 (16sp), which the painter never actually drew
+    /// (it drew Body size), so buttons were measured 2px larger than their text.
+    /// </summary>
+    public static readonly TextStyle LabelLarge = new(14, FontWeight.Medium, 1.43f);
+
     // ── Spacing ────────────────────────────────────────────────────────
 
     public const float SpacingBase = 4f;

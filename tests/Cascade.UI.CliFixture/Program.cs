@@ -11,11 +11,29 @@ using Cascade.UI.CliFixture;
 // FixtureView the bulk of the integration suite asserts against; "parity" selects
 // the RENDER-001 compositor characterization card. Keeping them in one fixture exe
 // means the same launch/cleanup harness covers both.
+// CASCADE_FIXTURE_THEME (apple | fluent | material, default apple; always dark) lets a view be
+// compared across the built-in themes.
 static void Configure(AppConfig config)
 {
     config.UseEtch();
-    config.Theme = new AppleTheme(ThemeMode.Dark);
+    config.Theme = FixtureTheme();
     config.WindowSize = new Size(640, 480);
+}
+
+static CascadeTheme FixtureTheme()
+{
+    string name = Environment.GetEnvironmentVariable("CASCADE_FIXTURE_THEME") ?? "apple";
+    if (string.Equals(name, "fluent", StringComparison.OrdinalIgnoreCase))
+    {
+        return new FluentTheme(ThemeMode.Dark);
+    }
+
+    if (string.Equals(name, "material", StringComparison.OrdinalIgnoreCase))
+    {
+        return new Material3Theme(ThemeMode.Dark);
+    }
+
+    return new AppleTheme(ThemeMode.Dark);
 }
 
 string view = Environment.GetEnvironmentVariable("CASCADE_FIXTURE_VIEW") ?? "default";
@@ -73,6 +91,14 @@ else if (string.Equals(view, "controls", StringComparison.OrdinalIgnoreCase))
     {
         Configure(config);
         config.WindowSize = new Size(560, 660);
+    });
+}
+else if (string.Equals(view, "buttons", StringComparison.OrdinalIgnoreCase))
+{
+    App.Run<ButtonsView>(config =>
+    {
+        Configure(config);
+        config.WindowSize = new Size(680, 300);
     });
 }
 else if (string.Equals(view, "shell", StringComparison.OrdinalIgnoreCase))

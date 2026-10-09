@@ -13,16 +13,19 @@ public class DialogOptions
     public DialogPosition Position { get; init; } = DialogPosition.Center;
 
     /// <summary>
-    /// Whether tapping the backdrop or pressing Escape dismisses the dialog.
-    /// Default: true.
+    /// Whether clicking the backdrop or pressing Escape dismisses the dialog (the awaiting
+    /// call then receives null / false). Default: true.
     /// </summary>
     public bool Dismissable { get; init; } = true;
 
     /// <summary>Whether to show a backdrop behind the dialog. Default: true.</summary>
     public bool ShowBackdrop { get; init; } = true;
 
-    /// <summary>Opacity of the backdrop layer (0.0–1.0). Default: 0.5.</summary>
-    public float BackdropOpacity { get; init; } = 0.5f;
+    /// <summary>
+    /// Opacity of the backdrop layer (0.0–1.0). Default: null, which uses the theme's
+    /// <see cref="DialogTheme.BackdropColor"/> as it is (Apple 40%, Material 32%, …).
+    /// </summary>
+    public float? BackdropOpacity { get; init; }
 
     /// <summary>Enter/exit animation. Default: <see cref="DialogAnimation.Fade"/>.</summary>
     public DialogAnimation Animation { get; init; } = DialogAnimation.Fade;

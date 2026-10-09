@@ -41,6 +41,9 @@ internal sealed class ComponentHost
         this.parentHost = parentHost;
         TreeDepth = treeDepth;
         onSignalChanged = OnSignalChanged;
+
+        // Components rendered inside an overlay share its DialogContext.
+        component.OverlayEntry ??= parentHost?.Component.OverlayEntry;
     }
 
     /// <summary>

@@ -156,6 +156,22 @@ public abstract class Component : Node, IDisposable
         return Task.Delay(duration.ToTimeSpan(), ct);
     }
 
+    // ── Overlays ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The dialog, bottom sheet or popover this component is rendered in. Close it with
+    /// <c>DialogContext.Close(value)</c> (the awaiting <c>ShowAsync</c> call receives
+    /// <c>value</c>) or <c>DialogContext.Close()</c> (it receives null). Outside an overlay
+    /// the context is not open and <c>Close</c> throws.
+    /// </summary>
+    protected DialogContext DialogContext => OverlayEntry?.Context ?? DialogContext.None;
+
+    /// <summary>
+    /// The overlay this component belongs to: set on an overlay's chrome before it mounts and
+    /// inherited by every component mounted under it (see <see cref="ComponentHost"/>).
+    /// </summary>
+    internal OverlayEntry? OverlayEntry { get; set; }
+
     // ── Internal framework hooks ──────────────────────────────────────
 
     /// <summary>

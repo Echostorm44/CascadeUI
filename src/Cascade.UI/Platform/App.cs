@@ -379,7 +379,7 @@ public static class App
                 if (!active)
                 {
                     // Menus close when the window loses activation, as native menus do.
-                    orchestrator.Input.HandleWindowDeactivated();
+                    orchestrator.Input.HandleWindowDeactivation();
                 }
             }
             else if (msg == Win32.WM_TRAYICON)

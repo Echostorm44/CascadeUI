@@ -1279,6 +1279,13 @@ internal sealed partial class InputDispatcher
             return;
         }
 
+        // Right-click on a DataTable/DataGrid row with a row menu: select it, open its menu.
+        if (evt.Button == NativeMouseButton.Right && TryOpenTabularContextMenuAt(hitNode, evt))
+        {
+            ResetPressState();
+            return;
+        }
+
         // Check if the click is on an active toast notification
         if (evt.Button == NativeMouseButton.Left && Toast.HitZones.Count > 0)
         {

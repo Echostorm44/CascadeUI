@@ -111,6 +111,25 @@ internal interface ITabularDataNode
     /// <summary>Selects the last row.</summary>
     void SelectLast();
 
+    // ── Row context menu ──────────────────────────────────────────────
+
+    /// <summary>
+    /// Whether rows have a context menu: <c>RowContextMenu</c> on either control, or
+    /// <c>BatchActions</c> on the grid.
+    /// </summary>
+    bool HasRowContextMenu { get; }
+
+    /// <summary>Number of selected rows.</summary>
+    int SelectedRowCount { get; }
+
+    /// <summary>
+    /// The context menu for display row <paramref name="row"/>, built when the menu opens: the
+    /// grid's batch actions over every selected row when <paramref name="row"/> is part of a
+    /// multi-row selection, otherwise the row's own menu (or, on a grid with batch actions and no
+    /// row menu, the batch actions over that one row). Empty when there is nothing to show.
+    /// </summary>
+    IReadOnlyList<ContextMenuItem> GetRowContextMenu(int row);
+
     /// <summary>Whether hover highlighting is enabled.</summary>
     bool IsHoverHighlightEnabled { get; }
 
@@ -643,11 +662,46 @@ public sealed class DataTable<T> : Node, ITabularDataNode
 
     // ── Row actions ───────────────────────────────────────────────────
 
-    /// <summary>Configures a right-click context menu per row.</summary>
+    /// <summary>
+    /// Gives every row a context menu, built by <paramref name="factory"/> for the row's item when
+    /// the menu opens. Right-clicking a row selects it and opens the menu at the pointer; a
+    /// right-click on a row that is already selected keeps the selection (so a multi-selection
+    /// survives). With the table focused, the context-menu key or Shift+F10 opens the selected
+    /// row's menu below the row, and <see cref="ShowContextMenu"/> opens it from the app's own
+    /// shortcut. Right-clicks on the header, filter row, aggregate row or empty space open
+    /// nothing. Return an empty list for an item that has no menu.
+    /// </summary>
     public DataTable<T> RowContextMenu(Func<T, IReadOnlyList<ContextMenuItem>> factory)
     {
+        ArgumentNullException.ThrowIfNull(factory);
         rowContextMenuFactory = factory;
         return this;
+    }
+
+    /// <summary>
+    /// Opens the <see cref="RowContextMenu"/> of the selected row, below the row (scrolling it into
+    /// view first) — for an app that handles the shortcut itself. Keep a <see cref="NodeRef{T}"/>
+    /// to the table to call it. Returns false when nothing is selected, no menu is configured, the
+    /// row's menu is empty, or no window is running.
+    /// </summary>
+    public bool ShowContextMenu()
+    {
+        ITabularDataNode self = this;
+        return InputDispatcher.Active?.OpenTabularContextMenu(self, self.SelectedRowIndex, pointer: null) == true;
+    }
+
+    bool ITabularDataNode.HasRowContextMenu => rowContextMenuFactory is not null;
+
+    int ITabularDataNode.SelectedRowCount => selectedRows.Count;
+
+    IReadOnlyList<ContextMenuItem> ITabularDataNode.GetRowContextMenu(int row)
+    {
+        if (rowContextMenuFactory is not { } factory || row < 0 || row >= Items.Count)
+        {
+            return [];
+        }
+
+        return factory(Items[MapRow(row)]) ?? [];
     }
 
     /// <summary>Configures inline action buttons in the last column.</summary>

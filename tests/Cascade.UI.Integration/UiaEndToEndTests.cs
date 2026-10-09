@@ -128,6 +128,57 @@ public class UiaEndToEndTests
         }
     }
 
+    [Test]
+    public async Task ScreenReaderClient_ReadsAndSelectsTabs()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        string appId = CliTestHarness.NewFixtureAppId();
+        using var fixture = CliTestHarness.StartFixture(appId, new Dictionary<string, string> { ["CASCADE_FIXTURE_VIEW"] = "tabs" });
+        try
+        {
+            await CliTestHarness.WaitForFixtureRegistrationAsync(appId, TimeSpan.FromSeconds(30), fixture.Id);
+            nint hwnd = await WindowOf(fixture);
+            Foreground.Activate(hwnd);
+
+            var uia = UiaClient.Create();
+            var window = uia.ElementFromHandle(hwnd);
+            var recorder = new UiaEventRecorder();
+            state = () => $"focus events: [{string.Join(", ", recorder.Focus())}]";
+            UiaClient.Check(uia.Automation.AddFocusChangedEventHandler(null, recorder));
+
+            // The bar is a Tab control; its tabs are TabItems with the selected one in its Selection.
+            var sections = uia.FindByName(window, "Sections");
+            await Assert.That(sections).IsNotNull().Because("the tab bar is exposed by its accessible label");
+            await Assert.That(UiaClient.ControlType(sections!)).IsEqualTo(UiaClient.TabControl);
+            var selection = UiaClient.Pattern<IUIAutomationSelectionPattern>(sections!, UiaClient.SelectionPattern);
+            await Assert.That(string.Join("|", UiaClient.SelectionNames(selection))).IsEqualTo("Overview");
+
+            var activity = uia.FindByName(sections!, "Activity");
+            await Assert.That(activity).IsNotNull();
+            await Assert.That(UiaClient.ControlType(activity!)).IsEqualTo(UiaClient.TabItemControl);
+            UiaClient.Check(UiaClient.Pattern<IUIAutomationSelectionItemPattern>(activity!, UiaClient.SelectionItemPattern).Select());
+            await Eventually(() => uia.FindByName(window, "Section: 1") is not null, "SelectionItem.Select selected the tab");
+            await Assert.That(string.Join("|", UiaClient.SelectionNames(selection))).IsEqualTo("Activity");
+
+            // Keyboard: focus on the bar is focus on its selected tab; the arrows move it.
+            UiaClient.Check(activity!.SetFocus());
+            await Eventually(() => recorder.Focus().Contains("TabItem:Activity"), "focus lands on the selected tab");
+            await Cli(appId, "type", "--key", "Right");
+            await Eventually(() => recorder.Focus().Contains("TabItem:Settings"), "Right moves focus to the next enabled tab");
+            await Eventually(() => uia.FindByName(window, "Section: 2") is not null, "automatic activation selected it");
+
+            UiaClient.Check(uia.Automation.RemoveAllEventHandlers());
+        }
+        finally
+        {
+            fixture.Kill();
+        }
+    }
+
     private static async Task<nint> WindowOf(Process process)
     {
         var deadline = DateTime.UtcNow + Patience;

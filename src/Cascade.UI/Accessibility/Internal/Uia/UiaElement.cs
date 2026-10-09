@@ -17,11 +17,14 @@ internal enum UiaElementKind : byte
 
     /// <summary>A context-menu item.</summary>
     MenuItem,
+
+    /// <summary>A tab of a <see cref="TabBar"/>, by display position.</summary>
+    Tab,
 }
 
 /// <summary>
 /// One UI Automation element below the window. A node element follows its node across
-/// re-renders (<see cref="Rebind"/>); list rows and menu items are addressed by index. Every
+/// re-renders (<see cref="Rebind"/>); list rows, tabs and menu items are addressed by index. Every
 /// property is read live from the control when UIA asks — nothing is cached per frame — and every
 /// action goes through <see cref="InputDispatcher"/> so it behaves like the gesture it stands for.
 /// </summary>
@@ -46,6 +49,7 @@ internal sealed partial class UiaElement : UiaFragment,
     private readonly int runtimeId;
     private Node? node;
     private Dictionary<int, UiaElement>? rows;
+    private Dictionary<int, UiaElement>? tabs;
     private IListViewNode? rowNameSource;
     private string? rowName;
 
@@ -78,8 +82,8 @@ internal sealed partial class UiaElement : UiaFragment,
 
     internal UiaElementKind Kind => kind;
 
-    /// <summary>The node this element speaks for (the list, for a row).</summary>
-    internal Node? Node => kind == UiaElementKind.Row ? list!.node : node;
+    /// <summary>The node this element speaks for (the list, for a row; the tab bar, for a tab).</summary>
+    internal Node? Node => kind is UiaElementKind.Row or UiaElementKind.Tab ? list!.node : node;
 
     /// <summary>Row index for a row element.</summary>
     internal int RowIndex => index;
@@ -94,6 +98,18 @@ internal sealed partial class UiaElement : UiaFragment,
         {
             element = new UiaElement(Context, UiaElementKind.Row, null, this, row, null, -1);
             rows[row] = element;
+        }
+        return element;
+    }
+
+    /// <summary>The element for the tab at display position <paramref name="position"/> of this tab bar element.</summary>
+    internal UiaElement Tab(int position)
+    {
+        tabs ??= [];
+        if (!tabs.TryGetValue(position, out var element))
+        {
+            element = new UiaElement(Context, UiaElementKind.Tab, null, this, position, null, -1);
+            tabs[position] = element;
         }
         return element;
     }
@@ -117,6 +133,12 @@ internal sealed partial class UiaElement : UiaFragment,
                     ? listIndex
                     : AccessibleTree.None;
 
+            case UiaElementKind.Tab:
+                int barIndex = list!.Resolve(tree);
+                return barIndex != AccessibleTree.None && list.node is TabBar bar && index < bar.Tabs.Count
+                    ? barIndex
+                    : AccessibleTree.None;
+
             case UiaElementKind.Menu:
                 return tree.IndexOfMenu(menuLevel!, -1);
 
@@ -138,6 +160,22 @@ internal sealed partial class UiaElement : UiaFragment,
 
     private IListViewNode ListNode => (IListViewNode)list!.node!;
 
+    private TabBar TabBarNode => (TabBar)list!.node!;
+
+    /// <summary>This tab as the bar describes it (name, state, window bounds), given the bar's entry.</summary>
+    private TabAccessibleInfo TabInfo(AccessibleTree tree, int barEntry)
+    {
+        var bar = TabBarNode;
+        var bounds = tree[barEntry].Bounds;
+        var padding = bar.LayoutData.Padding;
+        var content = new Rect(
+            bounds.X + padding.Left,
+            bounds.Y + padding.Top,
+            MathF.Max(0f, bounds.Width - padding.Horizontal),
+            MathF.Max(0f, bounds.Height - padding.Vertical));
+        return bar.GetAccessibleTab(index, content);
+    }
+
     private InputDispatcher Input => Context.Input
         ?? throw new UiaException("No input dispatcher.", UiaIds.UIA_E_ELEMENTNOTAVAILABLE);
 
@@ -158,6 +196,28 @@ internal sealed partial class UiaElement : UiaFragment,
             };
         }
 
+        if (kind == UiaElementKind.Tab)
+        {
+            int tabCount = TabBarNode.AccessibleTabCount;
+            return direction switch
+            {
+                UiaIds.NavigateDirection_Parent => list,
+                UiaIds.NavigateDirection_NextSibling => index + 1 < tabCount ? list!.Tab(index + 1) : null,
+                UiaIds.NavigateDirection_PreviousSibling => index > 0 ? list!.Tab(index - 1) : null,
+                _ => null,
+            };
+        }
+
+        if (node is TabBar tabsOf
+            && direction is UiaIds.NavigateDirection_FirstChild or UiaIds.NavigateDirection_LastChild)
+        {
+            if (tabsOf.AccessibleTabCount == 0)
+            {
+                return null;
+            }
+            return Tab(direction == UiaIds.NavigateDirection_FirstChild ? 0 : tabsOf.AccessibleTabCount - 1);
+        }
+
         if (node is IListViewNode { SectionCount: 0 } rowsOf
             && direction is UiaIds.NavigateDirection_FirstChild or UiaIds.NavigateDirection_LastChild)
         {
@@ -174,6 +234,11 @@ internal sealed partial class UiaElement : UiaFragment,
     internal override Rect LogicalBounds()
     {
         int self = ResolveOrThrow(out var tree);
+        if (kind == UiaElementKind.Tab)
+        {
+            return TabInfo(tree, self).Bounds;
+        }
+
         if (kind != UiaElementKind.Row)
         {
             return tree[self].Bounds;
@@ -198,6 +263,14 @@ internal sealed partial class UiaElement : UiaFragment,
     private Rect VisibleBounds()
     {
         int self = ResolveOrThrow(out var tree);
+        if (kind == UiaElementKind.Tab)
+        {
+            // Scrolled out of the strip or moved into its overflow menu: offscreen.
+            var tab = TabInfo(tree, self);
+            var shown = tab.IsOffscreen ? default : tree[self].Visible.Intersect(tab.VisibleBounds);
+            return shown.Width > 0 && shown.Height > 0 ? shown : default;
+        }
+
         if (kind != UiaElementKind.Row)
         {
             return tree[self].Visible;
@@ -217,6 +290,7 @@ internal sealed partial class UiaElement : UiaFragment,
         return kind switch
         {
             UiaElementKind.Row => AccessibleRole.ListItem,
+            UiaElementKind.Tab => AccessibleRole.Tab,
             _ => tree[self].Role,
         };
     }
@@ -227,6 +301,7 @@ internal sealed partial class UiaElement : UiaFragment,
         return kind switch
         {
             UiaElementKind.Row => UiaIds.ListItemControl,
+            UiaElementKind.Tab => UiaIds.TabItemControl,
             UiaElementKind.Menu => UiaIds.MenuControl,
             UiaElementKind.MenuItem => UiaIds.MenuItemControl,
             _ => UiaProvider.MapRoleToUiaControlType(tree[self].Role),
@@ -246,6 +321,9 @@ internal sealed partial class UiaElement : UiaFragment,
                     rowName = ListNode.GetItemAccessibleName(index);
                 }
                 return rowName;
+
+            case UiaElementKind.Tab:
+                return TabInfo(tree, self).Label;
 
             case UiaElementKind.Menu:
                 return MenuName(tree[self].Level);
@@ -273,10 +351,11 @@ internal sealed partial class UiaElement : UiaFragment,
 
     internal bool IsEnabled()
     {
-        ResolveOrThrow(out _);
+        int self = ResolveOrThrow(out var tree);
         return kind switch
         {
             UiaElementKind.Row => !AccessibilityTreeBuilder.IsDisabled(list!.node!),
+            UiaElementKind.Tab => !TabInfo(tree, self).Disabled,
             UiaElementKind.Menu => true,
             UiaElementKind.MenuItem => !menuLevel!.Items[menuItem].Disabled,
             _ => !AccessibilityTreeBuilder.IsDisabled(node!),
@@ -297,6 +376,7 @@ internal sealed partial class UiaElement : UiaFragment,
             case UiaElementKind.Menu:
                 return false;
             case UiaElementKind.MenuItem:
+            case UiaElementKind.Tab:
                 return true;
         }
 
@@ -370,6 +450,9 @@ internal sealed partial class UiaElement : UiaFragment,
             case UiaElementKind.Menu:
                 return false;
 
+            case UiaElementKind.Tab:
+                return patternId is UiaIds.SelectionItemPattern or UiaIds.ScrollItemPattern;
+
             case UiaElementKind.MenuItem:
                 return patternId switch
                 {
@@ -387,7 +470,7 @@ internal sealed partial class UiaElement : UiaFragment,
             UiaIds.TogglePattern => target is Checkbox or Cascade.UI.Toggle,
             UiaIds.ValuePattern => target is TextInput or TextArea or PasswordInput or ISelectNode or IComboboxNode or INumberInput,
             UiaIds.RangeValuePattern => target is Slider || target is ProgressBar { Mode: ProgressMode.Determinate },
-            UiaIds.SelectionPattern => target is IListViewNode { SectionCount: 0, IsSelectable: true },
+            UiaIds.SelectionPattern => target is IListViewNode { SectionCount: 0, IsSelectable: true } or TabBar,
             UiaIds.SelectionItemPattern => target is IRadioButton,
             UiaIds.ExpandCollapsePattern => target is ISelectNode or IComboboxNode or IMultiSelectNode or Expander,
             _ => false,
@@ -465,6 +548,7 @@ internal sealed partial class UiaElement : UiaFragment,
         string name = kind switch
         {
             UiaElementKind.Row => "ListViewItem",
+            UiaElementKind.Tab => "TabItem",
             UiaElementKind.Menu => "ContextMenu",
             UiaElementKind.MenuItem => "ContextMenuItem",
             _ => node!.GetType().Name,
@@ -478,6 +562,11 @@ internal sealed partial class UiaElement : UiaFragment,
         if (kind == UiaElementKind.Row)
         {
             return (index + 1, ListNode.ItemCount);
+        }
+
+        if (kind == UiaElementKind.Tab)
+        {
+            return (index + 1, TabBarNode.AccessibleTabCount);
         }
 
         if (kind != UiaElementKind.MenuItem)
@@ -677,7 +766,12 @@ internal sealed partial class UiaElement : UiaFragment,
 
     internal bool IsSelected()
     {
-        return kind == UiaElementKind.Row ? IsListRowSelected() : node is IRadioButton { IsSelected: true };
+        return kind switch
+        {
+            UiaElementKind.Row => IsListRowSelected(),
+            UiaElementKind.Tab => TabBarNode.Tabs[index].Index == TabBarNode.Selected,
+            _ => node is IRadioButton { IsSelected: true },
+        };
     }
 
     internal void SelectCore()
@@ -690,6 +784,16 @@ internal sealed partial class UiaElement : UiaFragment,
         if (kind == UiaElementKind.Row)
         {
             Input.AutomationSelectRow(ListNode, index);
+            return;
+        }
+
+        if (kind == UiaElementKind.Tab)
+        {
+            if (!IsEnabled())
+            {
+                throw new UiaException("The tab is disabled.", UiaIds.UIA_E_ELEMENTNOTENABLED);
+            }
+            Input.AutomationSelectTab(TabBarNode, index);
             return;
         }
 
@@ -714,7 +818,7 @@ internal sealed partial class UiaElement : UiaFragment,
 
     internal UiaFragment? SelectionContainer()
     {
-        if (kind == UiaElementKind.Row)
+        if (kind is UiaElementKind.Row or UiaElementKind.Tab)
         {
             return list;
         }
@@ -725,6 +829,16 @@ internal sealed partial class UiaElement : UiaFragment,
     internal List<object> Selection()
     {
         var result = new List<object>();
+        if (node is TabBar bar)
+        {
+            int selected = bar.SelectedPosition;
+            if (selected >= 0)
+            {
+                result.Add(Tab(selected));
+            }
+            return result;
+        }
+
         if (node is not IListViewNode { SectionCount: 0 } rowsOf)
         {
             return result;
@@ -763,6 +877,10 @@ internal sealed partial class UiaElement : UiaFragment,
                 {
                     Input.AutomationSelectRow(ListNode, index);
                 }
+                return;
+
+            case UiaElementKind.Tab:
+                Input.AutomationFocusTab(TabBarNode, index);
                 return;
 
             case UiaElementKind.MenuItem:
@@ -1056,8 +1174,16 @@ internal sealed partial class UiaElement : UiaFragment,
 
     public int GetIsSelectionRequired(out int value)
     {
-        value = 0;
-        return UiaIds.S_OK;
+        bool result = false;
+        int hr = UiaContext.Run(() =>
+        {
+            ResolveOrThrow(out _);
+            // A tab bar always has its selected tab; a list may have none.
+            result = node is TabBar;
+            return UiaIds.S_OK;
+        });
+        value = result ? 1 : 0;
+        return hr;
     }
 
     public int Select()
@@ -1163,6 +1289,11 @@ internal sealed partial class UiaElement : UiaFragment,
         return UiaContext.Run(() =>
         {
             ResolveOrThrow(out _);
+            if (kind == UiaElementKind.Tab)
+            {
+                Input.AutomationScrollTabIntoView(TabBarNode, index);
+                return UiaIds.S_OK;
+            }
             if (kind != UiaElementKind.Row)
             {
                 throw new UiaException("ScrollItem is not supported.", UiaIds.UIA_E_INVALIDOPERATION);

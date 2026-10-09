@@ -9,7 +9,7 @@ namespace Cascade.UI.Tests.Controls;
 /// <see cref="IconButton.GlyphSizeFor"/>, the footprint shrinks to stay square in the room it is
 /// given, and the circle is drawn in the largest square of the laid-out bounds.
 /// </summary>
-[NotInParallel(nameof(IconButtonSizingTests))]
+[NotInParallel(["FocusManager", nameof(LayoutSolver.DefaultFontPath)])]
 public class IconButtonSizingTests
 {
     private static readonly Icon PinIcon = new("M12 17v5M9 3h6l-1 7 4 4H6l4-4z", new Size(24, 24), 24f, "Pin");

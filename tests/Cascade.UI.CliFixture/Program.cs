@@ -43,6 +43,10 @@ else if (string.Equals(view, "gridmenus", StringComparison.OrdinalIgnoreCase))
 {
     App.Run<GridMenusView>(Configure);
 }
+else if (string.Equals(view, "dialogs", StringComparison.OrdinalIgnoreCase))
+{
+    App.Run<DialogsView>(Configure);
+}
 else if (string.Equals(view, "shell", StringComparison.OrdinalIgnoreCase))
 {
     App.Run<ShellView>(config =>

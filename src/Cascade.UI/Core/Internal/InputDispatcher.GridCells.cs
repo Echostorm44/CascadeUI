@@ -381,7 +381,7 @@ internal sealed partial class InputDispatcher
     /// cell is selected through the cell blocks (Shift extends, Ctrl adds in MultiRange); otherwise
     /// the row selection works as before. Returns false when the grid has no cell navigation.
     /// </summary>
-    private bool SelectClickedGridCell(ITabularDataNode tdn, int row, int col, bool ctrl, bool shift)
+    private static bool SelectClickedGridCell(ITabularDataNode tdn, int row, int col, bool ctrl, bool shift)
     {
         if (tdn is not ITabularCellGrid { CellNavigationEnabled: true } cells || col < 0)
         {

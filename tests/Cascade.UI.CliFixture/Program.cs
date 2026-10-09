@@ -51,6 +51,10 @@ else if (string.Equals(view, "gridkeys", StringComparison.OrdinalIgnoreCase))
 {
     App.Run<GridKeysView>(Configure);
 }
+else if (string.Equals(view, "menubar", StringComparison.OrdinalIgnoreCase))
+{
+    App.Run<MenuBarView>(Configure);
+}
 else if (string.Equals(view, "dialogs", StringComparison.OrdinalIgnoreCase))
 {
     App.Run<DialogsView>(Configure);

@@ -74,6 +74,11 @@ internal sealed partial class InputDispatcher
 
         var owner = menu.Owner;
         menu.Close();
+        if (owner is MenuBar bar)
+        {
+            OnMenuBarMenuClosed(bar);
+        }
+
         RefreshOwner(owner);
         RequestRepaint?.Invoke();
     }
@@ -82,6 +87,8 @@ internal sealed partial class InputDispatcher
     internal void HandleWindowDeactivated()
     {
         CloseMenu();
+        DeactivateMenuBar();
+        altTapArmed = false;
     }
 
     /// <summary>
@@ -416,6 +423,12 @@ internal sealed partial class InputDispatcher
         lastMousePosition = point;
         CurrentMousePosition = point;
 
+        // A menu bar's menu: the bar's labels switch or close it.
+        if (open.Owner is MenuBar ownerBar && HandleMenuBarPointer(ownerBar, evt, point))
+        {
+            return true;
+        }
+
         switch (evt.Type)
         {
             case NativeMouseEventType.MouseMove:
@@ -466,6 +479,12 @@ internal sealed partial class InputDispatcher
                 var (level, item) = open.HitTest(point);
                 if (!armed || level < 0 || item < 0)
                 {
+                    return true;
+                }
+
+                if (open.TryHitCustom(point, out int contentLevel, out int contentItem, out var local))
+                {
+                    ActivateMenuContent(open.Levels[contentLevel].Items[contentItem].Content, local);
                     return true;
                 }
 
@@ -523,6 +542,12 @@ internal sealed partial class InputDispatcher
         if (!typesCharacter)
         {
             suppressNextCharacter = evt.Key != Key.None;
+        }
+
+        // A menu bar's menu: Left/Right between menus, Escape back to the bar, Alt, F10, access keys.
+        if (open.Owner is MenuBar ownerBar && HandleMenuBarMenuKey(ownerBar, open, evt))
+        {
+            return true;
         }
 
         int top = open.Levels.Count - 1;
@@ -609,6 +634,48 @@ internal sealed partial class InputDispatcher
         return true;
     }
 
+    /// <summary>
+    /// A click on a custom content row: the button (or link) under the pointer runs and the menu
+    /// closes; a click anywhere else in the row does nothing.
+    /// </summary>
+    private void ActivateMenuContent(Node content, Point local)
+    {
+        var bounds = content.LayoutData.Bounds;
+        if (FindInteractiveAt(content, local.X + bounds.X, local.Y + bounds.Y) is not { } target)
+        {
+            return;
+        }
+
+        CloseMenu();
+        InvokeTap(target);
+        RequestRepaint?.Invoke();
+    }
+
+    /// <summary>The deepest enabled button, icon button or link containing a point in <paramref name="node"/>'s parent space.</summary>
+    private static Node? FindInteractiveAt(Node node, float x, float y)
+    {
+        var bounds = node.LayoutData.Bounds;
+        if (!bounds.Contains(new Point(x, y)))
+        {
+            return null;
+        }
+
+        var children = NodeDiffer.GetChildren(node);
+        for (int i = children.Count - 1; i >= 0; i--)
+        {
+            if (children[i] is { } child && FindInteractiveAt(child, x - bounds.X, y - bounds.Y) is { } found)
+            {
+                return found;
+            }
+        }
+
+        return node switch
+        {
+            Button { IsDisabled: false } or IconButton { IsDisabled: false } or LinkButton { IsDisabled: false } => node,
+            _ => null,
+        };
+    }
+
     private void ActivateMenuItem(int level, int item, bool fromKeyboard)
     {
         var open = menu;
@@ -685,10 +752,9 @@ internal sealed partial class InputDispatcher
             openCombobox = null;
         }
 
-        if (openMenuBar is not null)
+        if (activeMenuBar is not null)
         {
-            openMenuBar.Close();
-            openMenuBar = null;
+            DeactivateMenuBar();
         }
 
         if (openNotificationBell is not null)

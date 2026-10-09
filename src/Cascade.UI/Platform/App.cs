@@ -333,6 +333,7 @@ public static class App
                 secondInstanceHandler?.Invoke(args);
             }));
 
+        window.SystemKeyHandled = () => orchestrator.Input.TakeSystemKeyHandled();
         window.MessageReceived = (msg, wParam, lParam) =>
         {
             if (msg == Win32.WM_PAINT)

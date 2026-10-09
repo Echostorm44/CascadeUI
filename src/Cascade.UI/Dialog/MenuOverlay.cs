@@ -38,7 +38,10 @@ internal readonly record struct MenuMetrics(
     float IconColumn,
     float ShortcutGap,
     float SubmenuArrowWidth,
-    float MinWidth)
+    float MinWidth,
+    float HeaderHeight = 24f,
+    float HeaderFontSize = 12f,
+    float CheckColumn = 22f)
 {
     internal static MenuMetrics FromTheme(CascadeTheme theme)
     {
@@ -54,7 +57,10 @@ internal readonly record struct MenuMetrics(
             IconColumn:        24f,
             ShortcutGap:       24f,
             SubmenuArrowWidth: 16f,
-            MinWidth:          160f);
+            MinWidth:          160f,
+            HeaderHeight:      Math.Max(20f, MathF.Round(select.ItemHeight * 0.75f)),
+            HeaderFontSize:    12f,
+            CheckColumn:       22f);
     }
 
     /// <summary>Space between the panel edge and an item's text (highlight inset + item padding).</summary>
@@ -104,6 +110,12 @@ internal sealed class MenuLevel
 
     /// <summary>Whether any item has an icon (the panel then reserves an icon column).</summary>
     internal bool HasIcons { get; set; }
+
+    /// <summary>Whether any item is a toggle or a radio choice (the panel then reserves a check column).</summary>
+    internal bool HasChecks { get; set; }
+
+    /// <summary>Set by the painter once custom content rows have been laid out at the panel width.</summary>
+    internal bool ContentLaidOut { get; set; }
 
     /// <summary>Whether any item opens a submenu (the panel then reserves an arrow column).</summary>
     internal bool HasSubmenus { get; set; }
@@ -217,6 +229,47 @@ internal sealed class MenuOverlay
 
     private readonly List<MenuLevel> levels = new(capacity: 2);
     private Func<string, float, float> measure = MeasureText;
+    private Func<Node, float, Size> measureNode = MeasureNode;
+
+    // Lays out custom content rows to measure them (only when a menu with one opens).
+    private static LayoutEngine? contentLayout;
+
+    /// <summary>Replaces the custom-content measurer (tests use a deterministic one).</summary>
+    internal void SetNodeMeasurer(Func<Node, float, Size> measurer)
+    {
+        measureNode = measurer;
+    }
+
+    /// <summary>Default custom-content measurer: lays the node out loosely within <paramref name="maxWidth"/>.</summary>
+    internal static Size MeasureNode(Node node, float maxWidth)
+    {
+        contentLayout ??= new LayoutEngine();
+        contentLayout.Layout(node, LayoutConstraints.Loose(new Size(maxWidth, float.PositiveInfinity)));
+        return node.LayoutData.Bounds.Size;
+    }
+
+    /// <summary>
+    /// The custom-content row under <paramref name="point"/>: its panel, item and the point
+    /// relative to the row's top-left corner. False when the point is not over a custom row.
+    /// </summary>
+    internal bool TryHitCustom(Point point, out int levelIndex, out int itemIndex, out Point local)
+    {
+        local = default;
+        (levelIndex, itemIndex) = HitTest(point);
+        if (levelIndex < 0 || itemIndex < 0)
+        {
+            return false;
+        }
+
+        var level = levels[levelIndex];
+        if (level.Items[itemIndex].Kind != MenuItemKind.Custom)
+        {
+            return false;
+        }
+
+        local = new Point(point.X - (level.Bounds.X + Metrics.InsetH), point.Y - level.ItemTop(itemIndex));
+        return true;
+    }
 
     /// <summary>The open panels, root first. Empty when the menu is closed.</summary>
     internal IReadOnlyList<MenuLevel> Levels => levels;
@@ -256,7 +309,7 @@ internal sealed class MenuOverlay
 
     /// <summary>
     /// Opens a menu with <paramref name="items"/>, replacing any menu already open. Returns false
-    /// (and leaves the menu closed) when there is nothing to show — no item with a label.
+    /// (and leaves the menu closed) when there is nothing to show — only separators.
     /// </summary>
     internal bool Open(
         IReadOnlyList<ContextMenuItem> items,
@@ -275,7 +328,7 @@ internal sealed class MenuOverlay
         PressStartedInside = false;
         PointerTravelled = false;
 
-        if (!HasLabelledItem(items))
+        if (!HasVisibleItem(items))
         {
             return false;
         }
@@ -355,7 +408,7 @@ internal sealed class MenuOverlay
         }
 
         var children = ToArray(item.Items);
-        if (!HasLabelledItem(children))
+        if (!HasVisibleItem(children))
         {
             return false;
         }
@@ -581,7 +634,9 @@ internal sealed class MenuOverlay
     /// <summary>Whether <paramref name="item"/> can be highlighted and activated.</summary>
     internal static bool IsActionable(ContextMenuItem item)
     {
-        return item.Label is not null && !item.Disabled;
+        return item.Kind is MenuItemKind.Action or MenuItemKind.Submenu or MenuItemKind.Toggle or MenuItemKind.Radio
+            && item.Label is not null
+            && !item.Disabled;
     }
 
     /// <summary>
@@ -725,35 +780,59 @@ internal sealed class MenuOverlay
             PaddingV = m.PaddingV,
         };
 
+        float maxContentWidth = Viewport.Width > 0f ? Viewport.Width - (EdgeMargin * 2f) - (m.InsetH * 2f) : float.PositiveInfinity;
         float y = 0f;
         float labelWidth = 0f;
         float shortcutWidth = 0f;
+        float contentWidth = 0f;
         for (int i = 0; i < items.Length; i++)
         {
             var item = items[i];
-            float height = item.Label is null ? m.SeparatorHeight : m.ItemHeight;
+            float height;
+            switch (item.Kind)
+            {
+                case MenuItemKind.Separator:
+                    height = m.SeparatorHeight;
+                    break;
+
+                case MenuItemKind.Header:
+                    height = m.HeaderHeight;
+                    labelWidth = Math.Max(labelWidth, measure(item.Label ?? "", m.HeaderFontSize));
+                    break;
+
+                case MenuItemKind.Custom:
+                {
+                    var size = measureNode(item.Content, maxContentWidth);
+                    height = Math.Max(1f, MathF.Ceiling(size.Height));
+                    contentWidth = Math.Max(contentWidth, size.Width);
+                    break;
+                }
+
+                default:
+                    height = m.ItemHeight;
+                    labelWidth = Math.Max(labelWidth, measure(item.Label ?? "", m.FontSize));
+                    if (!string.IsNullOrEmpty(item.Shortcut))
+                    {
+                        shortcutWidth = Math.Max(shortcutWidth, measure(item.Shortcut, m.ShortcutFontSize));
+                    }
+                    if (item.Icon is { IsLayoutEmpty: false })
+                    {
+                        level.HasIcons = true;
+                    }
+                    if (item.Items is not null)
+                    {
+                        level.HasSubmenus = true;
+                    }
+                    if (item.Kind is MenuItemKind.Toggle or MenuItemKind.Radio)
+                    {
+                        level.HasChecks = true;
+                    }
+                    break;
+            }
+
             level.ItemTops[i] = y;
             level.ItemHeights[i] = height;
             y += height;
-
-            if (item.Label is null)
-            {
-                continue;
-            }
-
-            labelWidth = Math.Max(labelWidth, measure(item.Label, m.FontSize));
-            if (!string.IsNullOrEmpty(item.Shortcut))
-            {
-                shortcutWidth = Math.Max(shortcutWidth, measure(item.Shortcut, m.ShortcutFontSize));
-            }
-            if (item.Icon is { IsLayoutEmpty: false })
-            {
-                level.HasIcons = true;
-            }
-            if (item.Items is not null)
-            {
-                level.HasSubmenus = true;
-            }
         }
 
         level.ContentHeight = y;
@@ -762,10 +841,12 @@ internal sealed class MenuOverlay
         // LabelSlack absorbs the difference between this measurement and the painter's shaped
         // run (hinting, weight), so the widest label never ellipsizes in its own menu.
         float width = (m.TextInset * 2f)
+            + (level.HasChecks ? m.CheckColumn : 0f)
             + (level.HasIcons ? m.IconColumn : 0f)
             + labelWidth + LabelSlack
             + (shortcutWidth > 0f ? m.ShortcutGap + shortcutWidth : 0f)
             + (level.HasSubmenus ? m.SubmenuArrowWidth : 0f);
+        width = Math.Max(width, contentWidth + (m.InsetH * 2f));
         width = MathF.Ceiling(Math.Max(width, m.MinWidth));
         if (Viewport.Width > 0f)
         {
@@ -824,11 +905,11 @@ internal sealed class MenuOverlay
         return new Rect(x, y, w, h);
     }
 
-    private static bool HasLabelledItem(IReadOnlyList<ContextMenuItem> items)
+    private static bool HasVisibleItem(IReadOnlyList<ContextMenuItem> items)
     {
         for (int i = 0; i < items.Count; i++)
         {
-            if (items[i].Label is not null)
+            if (!items[i].IsSeparator)
             {
                 return true;
             }

@@ -646,6 +646,7 @@ internal static class McpTools
             sb.Append($",\"toasts_active\":{BoolStr(s.ToastsActive)}");
             sb.Append($",\"continuous_canvases_active\":{BoolStr(s.ContinuousCanvasesActive)}");
             sb.Append($",\"state_transitions_active\":{BoolStr(s.StateTransitionsActive)}");
+            sb.Append($",\"overlay_animations_active\":{BoolStr(s.OverlayAnimationsActive)}");
 
 #if CASCADE_DEVTOOLS
             // DevTools: per-callsite tally of SignalActiveTransition() calls in

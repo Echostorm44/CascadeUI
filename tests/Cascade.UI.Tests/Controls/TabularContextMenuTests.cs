@@ -15,7 +15,7 @@ namespace Cascade.UI.Tests.Controls;
 /// below the row. Geometry the painter normally stamps (absolute bounds, viewport height) is set
 /// directly, as in <see cref="ListViewContextMenuTests"/>.
 /// </summary>
-[NotInParallel("ContextMenu")]
+[NotInParallel(["ContextMenu", "FocusManager"])]
 public class TabularContextMenuTests
 {
     private const float RowHeight = 30f;

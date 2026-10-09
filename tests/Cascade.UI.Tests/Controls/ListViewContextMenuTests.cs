@@ -13,7 +13,7 @@ namespace Cascade.UI.Tests.Controls;
 /// painter normally stamps (the list's screen bounds, viewport) is set directly, as in
 /// <see cref="ListViewSelectionTests"/>.
 /// </summary>
-[NotInParallel("ContextMenu")]
+[NotInParallel(["ContextMenu", "FocusManager"])]
 public class ListViewContextMenuTests
 {
     private const float RowHeight = 30f;

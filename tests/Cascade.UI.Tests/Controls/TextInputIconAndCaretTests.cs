@@ -4,7 +4,7 @@ namespace Cascade.UI.Tests.Controls;
 /// TextInput's leading icon moves where text starts, and a click places the caret by measuring the
 /// text as painted (it used to assume a fixed padding and an average glyph width, ignoring icons).
 /// </summary>
-[NotInParallel(nameof(LayoutSolver.DefaultFontPath))]
+[NotInParallel([nameof(LayoutSolver.DefaultFontPath), "FocusManager"])]
 public class TextInputIconAndCaretTests
 {
     private static readonly Icon Search = new(["M11 17a6 6 0 1 0 0-12 6 6 0 0 0 0 12z"], new Size(24, 24), 16f, "Search");

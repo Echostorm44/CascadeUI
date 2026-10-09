@@ -4,6 +4,8 @@ namespace Cascade.UI.Tests.Core;
 // Cross-test isolation is handled suite-wide by the serial ParallelLimiter
 // (see ParallelLimit.cs, WP-3516); the [Before(Test)] FocusManager.Reset below
 // gives each test a clean focus baseline.
+// FocusManager and the input dispatcher's hover/press state are process-wide.
+[NotInParallel("FocusManager")]
 public class InputDispatcherTests
 {
     private InputDispatcher dispatcher = null!;

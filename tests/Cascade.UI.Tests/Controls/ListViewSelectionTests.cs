@@ -5,6 +5,8 @@ namespace Cascade.UI.Tests.Controls;
 /// view, Enter and double-click activate. Geometry that layout and paint normally provide (the
 /// list's screen bounds, viewport) is set directly.
 /// </summary>
+// FocusManager and the input dispatcher's hover/press state are process-wide.
+[NotInParallel("FocusManager")]
 public class ListViewSelectionTests
 {
     private const float RowHeight = 30f;

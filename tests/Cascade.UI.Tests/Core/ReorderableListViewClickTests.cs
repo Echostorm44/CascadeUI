@@ -11,6 +11,8 @@ namespace Cascade.UI.Tests.Core;
 /// Regression: a per-row IconButton inside a reorderable ListView must still receive taps.
 /// (QuickFixMyPics2's "X to remove" stopped working once the file list became a reorderable list.)
 /// </summary>
+// FocusManager and the input dispatcher's hover/press state are process-wide.
+[NotInParallel("FocusManager")]
 public class ReorderableListViewClickTests
 {
     // Mirrors QuickFixMyPics2's FileList: a reorderable ListView nested inside a Column (with a

@@ -1250,13 +1250,16 @@ internal static class McpTools
             ? (float)(GetDouble(parameters, "y", 0) * scrollCoordScale)
             : clientBounds.Height / 2;
 
-        (bool scrollSuccess, float finalOffsetY, float finalMaxY) = (false, 0, 0);
+        bool scrollSuccess = false;
+        string scrollResult = "";
         long deltaBaseline = Diagnostics.PresentMonitor.PresentedFrames;
         try
         {
             Dispatcher.InvokeAsync(() =>
             {
-                (scrollSuccess, finalOffsetY, finalMaxY) = DevTools.NodeTreeWalker.SimulateScroll(x, y, deltaX, deltaY);
+                (scrollSuccess, var outcome) = DevTools.NodeTreeWalker.SimulateScroll(x, y, deltaX, deltaY);
+                // Built on the UI thread: the target's DevTools id is read from the live index.
+                scrollResult = BuildScrollResult(scrollSuccess, outcome);
             }).Wait();
         }
         catch (Exception ex)
@@ -1264,13 +1267,61 @@ internal static class McpTools
             return ErrorJson($"Scroll failed: {ex.Message}", null);
         }
 
-        return WithPresentation(
-            $"{{\"success\":{BoolStr(scrollSuccess)},\"scroll_offset_y\":{finalOffsetY:F1},\"max_scroll_y\":{finalMaxY:F1},\"mode\":\"delta\"}}",
-            deltaBaseline, GetWaitFrames(parameters));
+        return WithPresentation(scrollResult, deltaBaseline, GetWaitFrames(parameters));
 #else
         return DebugOnlyError();
 #endif
     }
+
+#if CASCADE_DEVTOOLS
+    /// <summary>
+    /// The delta-scroll response: <c>scroll_offset_y</c> / <c>max_scroll_y</c> are those of the view
+    /// that took the wheel event (a DataGrid, DataTable or virtualized ListView owns its own offset;
+    /// only a ScrollView's is the page's), <c>target</c> names it, <c>scrolled</c> says whether its
+    /// offset moved, and <c>unit</c> is <c>px</c>, or <c>items</c> for an open dropdown.
+    /// </summary>
+    private static string BuildScrollResult(bool success, ScrollOutcome outcome)
+    {
+        string kind = outcome.Kind switch
+        {
+            ScrollTargetKind.Menu => "menu",
+            ScrollTargetKind.Dropdown => "dropdown",
+            ScrollTargetKind.Calendar => "calendar",
+            ScrollTargetKind.TextArea => "text_area",
+            ScrollTargetKind.Table => "table",
+            ScrollTargetKind.ListView => "list_view",
+            ScrollTargetKind.ScrollView => "scroll_view",
+            ScrollTargetKind.Gesture => "gesture",
+            _ => "none",
+        };
+
+        var sb = new StringBuilder();
+        sb.Append($"{{\"success\":{BoolStr(success)}");
+        sb.Append($",\"scroll_offset_y\":{outcome.OffsetY.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)}");
+        sb.Append($",\"max_scroll_y\":{outcome.MaxY.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)}");
+        sb.Append($",\"scrolled\":{BoolStr(outcome.Moved)}");
+        sb.Append($",\"unit\":\"{(outcome.Kind == ScrollTargetKind.Dropdown ? "items" : "px")}\"");
+        sb.Append($",\"target\":{{\"kind\":\"{kind}\"");
+        if (outcome.Target is { } target)
+        {
+            string type = target.GetType().Name;
+            int tick = type.IndexOf('`', StringComparison.Ordinal);
+            if (tick > 0)
+            {
+                type = type[..tick];
+            }
+
+            sb.Append($",\"type\":\"{EscapeJson(type)}\"");
+            if (DevTools.NodeTreeWalker.GetStableId(target) is { } id)
+            {
+                sb.Append($",\"node_id\":\"{EscapeJson(id)}\"");
+            }
+        }
+
+        sb.Append("},\"mode\":\"delta\"}");
+        return sb.ToString();
+    }
+#endif
 
     private static string HandleCascadeSendKeys(JsonObject parameters)
     {

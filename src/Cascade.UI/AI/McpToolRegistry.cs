@@ -446,6 +446,11 @@ internal static class McpToolRegistry
                          "positive scrolls down (offset increases), negative scrolls up. An explicit x/y picks " +
                          "which view to scroll and is in the returned screenshot's pixel space by default " +
                          "(coord_space=\"logical\" for raw logical coordinates); omit x/y to scroll the center. " +
+                         "A delta scroll goes to whatever is under the point, as the mouse wheel would, and reports that " +
+                         "view: target.kind (table, list_view, scroll_view, text_area, dropdown, menu, calendar, gesture, none), " +
+                         "target.type and target.node_id, with scroll_offset_y/max_scroll_y being that view's own offset " +
+                         "(a DataGrid, DataTable or virtualized ListView scrolls itself, not the page), scrolled=true when it moved, " +
+                         "and unit (px, or items for an open dropdown). " +
                          "Frame-synchronous: mutating calls include presented_frame and timed_out in the response " +
                          "(timed_out=true means nothing repainted within ~2s); pure queries (no delta, no node_id) do not wait.",
             InputSchemaJson: """{"type":"object","properties":{"delta_x":{"type":"number","default":0,"description":"Positive scrolls right, negative scrolls left"},"delta_y":{"type":"number","default":0,"description":"Positive scrolls down, negative scrolls up"},"x":{"type":"number"},"y":{"type":"number"},"coord_space":{"type":"string","enum":["screenshot","logical"],"default":"screenshot","description":"Coordinate space for x/y: returned-screenshot pixels (default) or raw logical/input pixels"},"node_id":{"type":"string","description":"Scroll to make this node visible"},"wait_frames":{"type":"integer","default":1,"description":"How many new presented frames to wait for before responding (1-240)"}},"required":[]}""",

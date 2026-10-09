@@ -2535,10 +2535,18 @@ internal sealed partial class InputDispatcher
     // ── Scroll events ─────────────────────────────────────────────────
 
     /// <summary>
+    /// What the most recent wheel event scrolled (or <see cref="ScrollOutcome.Nothing"/>), for the
+    /// DevTools <c>scroll</c> verb: lists, grids and tables own their offsets, so the page's
+    /// ScrollView offset says nothing about them.
+    /// </summary>
+    internal ScrollOutcome LastScroll { get; private set; } = ScrollOutcome.Nothing;
+
+    /// <summary>
     /// Handles a scroll event from the platform layer.
     /// </summary>
     internal void HandleScrollEvent(NativeScrollEvent evt)
     {
+        LastScroll = ScrollOutcome.Nothing;
         if (rootNode == null)
         {
             return;
@@ -2546,6 +2554,7 @@ internal sealed partial class InputDispatcher
 
         if (HandleMenuScroll(evt))
         {
+            LastScroll = new ScrollOutcome(ScrollTargetKind.Menu, null, 0f, 0f, false);
             return;
         }
 
@@ -2582,11 +2591,14 @@ internal sealed partial class InputDispatcher
                     int scrollDelta = evt.DeltaY > 0 ? -1 : evt.DeltaY < 0 ? 1 : 0;
                     int newOffset = Math.Clamp(openSelect.ScrollOffset + scrollDelta, 0, maxScrollOffset);
 
-                    if (newOffset != openSelect.ScrollOffset)
+                    bool moved = newOffset != openSelect.ScrollOffset;
+                    if (moved)
                     {
                         openSelect.ScrollOffset = newOffset;
                         RequestRepaint?.Invoke();
                     }
+
+                    LastScroll = new ScrollOutcome(ScrollTargetKind.Dropdown, openSelect as Node, newOffset, maxScrollOffset, moved);
                 }
 
                 return;
@@ -2608,11 +2620,14 @@ internal sealed partial class InputDispatcher
                     int scrollDelta = evt.DeltaY > 0 ? -1 : evt.DeltaY < 0 ? 1 : 0;
                     int newOffset = Math.Clamp(openMultiSelect.ScrollOffset + scrollDelta, 0, maxScrollOffset);
 
-                    if (newOffset != openMultiSelect.ScrollOffset)
+                    bool moved = newOffset != openMultiSelect.ScrollOffset;
+                    if (moved)
                     {
                         openMultiSelect.ScrollOffset = newOffset;
                         RequestRepaint?.Invoke();
                     }
+
+                    LastScroll = new ScrollOutcome(ScrollTargetKind.Dropdown, openMultiSelect as Node, newOffset, maxScrollOffset, moved);
                 }
 
                 return;
@@ -2634,11 +2649,14 @@ internal sealed partial class InputDispatcher
                     int scrollDelta = evt.DeltaY > 0 ? -1 : evt.DeltaY < 0 ? 1 : 0;
                     int newOffset = Math.Clamp(openCombobox.ScrollOffset + scrollDelta, 0, maxScrollOffset);
 
-                    if (newOffset != openCombobox.ScrollOffset)
+                    bool moved = newOffset != openCombobox.ScrollOffset;
+                    if (moved)
                     {
                         openCombobox.ScrollOffset = newOffset;
                         RequestRepaint?.Invoke();
                     }
+
+                    LastScroll = new ScrollOutcome(ScrollTargetKind.Dropdown, openCombobox as Node, newOffset, maxScrollOffset, moved);
                 }
 
                 return;
@@ -2671,6 +2689,7 @@ internal sealed partial class InputDispatcher
                     RequestRepaint?.Invoke();
                 }
 
+                LastScroll = new ScrollOutcome(ScrollTargetKind.Calendar, openDatePicker, 0f, 0f, delta != 0);
                 return;
             }
         }
@@ -2704,6 +2723,7 @@ internal sealed partial class InputDispatcher
                         RequestRepaint?.Invoke();
                     }
 
+                    LastScroll = new ScrollOutcome(ScrollTargetKind.Calendar, openGridOverlay as Node, 0f, 0f, delta != 0);
                     return;
                 }
             }
@@ -2720,13 +2740,15 @@ internal sealed partial class InputDispatcher
                 const float pixelsPerNotch = 48f;
                 float delta = -evt.DeltaY * pixelsPerNotch;
                 float newOffset = Math.Clamp(TextAreaScrollOffsetY + delta, 0f, TextAreaMaxScrollY);
-                if (Math.Abs(newOffset - TextAreaScrollOffsetY) > 0.001f)
+                bool moved = Math.Abs(newOffset - TextAreaScrollOffsetY) > 0.001f;
+                if (moved)
                 {
                     TextAreaScrollOffsetY = newOffset;
                     CaretResetTimestamp = Stopwatch.GetTimestamp();
                     RequestRepaint?.Invoke();
                 }
 
+                LastScroll = new ScrollOutcome(ScrollTargetKind.TextArea, FocusManager.FocusedElement, newOffset, TextAreaMaxScrollY, moved);
                 return;
             }
         }
@@ -2742,11 +2764,13 @@ internal sealed partial class InputDispatcher
                 float delta = -evt.DeltaY * pixelsPerNotch;
                 float oldOffset = tdnScroll.ScrollOffsetY;
                 tdnScroll.ScrollOffsetY = oldOffset + delta;
-                if (Math.Abs(tdnScroll.ScrollOffsetY - oldOffset) > 0.001f)
+                bool moved = Math.Abs(tdnScroll.ScrollOffsetY - oldOffset) > 0.001f;
+                if (moved)
                 {
                     RequestRepaint?.Invoke();
                 }
 
+                LastScroll = new ScrollOutcome(ScrollTargetKind.Table, hitForGrid, tdnScroll.ScrollOffsetY, tdnScroll.MaxScrollOffsetY, moved);
                 return;
             }
         }
@@ -2759,12 +2783,14 @@ internal sealed partial class InputDispatcher
             const float pixelsPerNotch = 48f;
             float delta = -evt.DeltaY * pixelsPerNotch;
             float newOffset = Math.Clamp(virtualList.OffsetY + delta, 0f, virtualList.MaxY);
-            if (Math.Abs(newOffset - virtualList.OffsetY) > 0.001f)
+            bool moved = Math.Abs(newOffset - virtualList.OffsetY) > 0.001f;
+            if (moved)
             {
                 virtualList.OffsetY = newOffset;
                 RequestRepaint?.Invoke();
             }
 
+            LastScroll = new ScrollOutcome(ScrollTargetKind.ListView, virtualList as Node, virtualList.OffsetY, virtualList.MaxY, moved);
             return;
         }
 
@@ -2776,7 +2802,8 @@ internal sealed partial class InputDispatcher
             const float pixelsPerNotch = 48f;
             float delta = -evt.DeltaY * pixelsPerNotch;
             float newOffset = Math.Clamp(scrollView.OffsetY + delta, 0f, scrollView.MaxY);
-            if (Math.Abs(newOffset - scrollView.OffsetY) > 0.001f)
+            bool moved = Math.Abs(newOffset - scrollView.OffsetY) > 0.001f;
+            if (moved)
             {
                 scrollView.OffsetY = newOffset;
                 // Keep globals in sync for DevTools backward compatibility
@@ -2785,6 +2812,7 @@ internal sealed partial class InputDispatcher
                 RequestRepaint?.Invoke();
             }
 
+            LastScroll = new ScrollOutcome(ScrollTargetKind.ScrollView, scrollView, scrollView.OffsetY, scrollView.MaxY, moved);
             return;
         }
 
@@ -2795,6 +2823,11 @@ internal sealed partial class InputDispatcher
         }
 
         var gestDelta = new Point(evt.DeltaX, evt.DeltaY);
+        if (hitNode.LayoutData.GestureData?.Scroll is not null)
+        {
+            LastScroll = new ScrollOutcome(ScrollTargetKind.Gesture, hitNode, 0f, 0f, false);
+        }
+
         InvokeGesture(hitNode, g => g.Scroll, gestDelta);
     }
 

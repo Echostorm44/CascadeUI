@@ -148,46 +148,49 @@ internal sealed class AtSpiBridge : IPlatformAccessibilityBridge
     }
 
     /// <summary>
-    /// Maps a Cascade AccessibleRole to the AT-SPI2 role constant.
+    /// Maps a Cascade AccessibleRole to the AT-SPI2 role constant. The numbers are the
+    /// <c>AtspiRole</c> enum values from at-spi2-core's <c>atspi/atspi-constants.h</c> (an
+    /// implicit sequence starting at ATSPI_ROLE_INVALID = 0); an earlier table used values that
+    /// were off by up to 40 (Button was TOGGLE_BUTTON, Slider was PARAGRAPH).
     /// </summary>
     internal static int MapRoleToAtSpiRole(AccessibleRole role)
     {
         return role switch
         {
-            AccessibleRole.Button => 62,        // ATSPI_ROLE_PUSH_BUTTON
-            AccessibleRole.Checkbox => 12,      // ATSPI_ROLE_CHECK_BOX
-            AccessibleRole.Link => 101,         // ATSPI_ROLE_LINK
-            AccessibleRole.Heading => 81,       // ATSPI_ROLE_HEADING
-            AccessibleRole.Text => 60,          // ATSPI_ROLE_LABEL
-            AccessibleRole.TextBox => 78,       // ATSPI_ROLE_TEXT
-            AccessibleRole.Radio => 63,         // ATSPI_ROLE_RADIO_BUTTON
-            AccessibleRole.RadioGroup => 64,    // ATSPI_ROLE_RADIO_MENU_ITEM
-            AccessibleRole.ComboBox => 14,      // ATSPI_ROLE_COMBO_BOX
-            AccessibleRole.Slider => 73,        // ATSPI_ROLE_SLIDER
-            AccessibleRole.Switch => 122,       // ATSPI_ROLE_TOGGLE_BUTTON
-            AccessibleRole.List => 34,          // ATSPI_ROLE_LIST
-            AccessibleRole.ListItem => 35,      // ATSPI_ROLE_LIST_ITEM
-            AccessibleRole.Table => 75,         // ATSPI_ROLE_TABLE
-            AccessibleRole.Row => 76,           // ATSPI_ROLE_TABLE_ROW
-            AccessibleRole.ColumnHeader => 18,  // ATSPI_ROLE_COLUMN_HEADER
-            AccessibleRole.Cell => 77,          // ATSPI_ROLE_TABLE_CELL
-            AccessibleRole.TabList => 59,       // ATSPI_ROLE_PAGE_TAB_LIST
-            AccessibleRole.Tab => 58,           // ATSPI_ROLE_PAGE_TAB
-            AccessibleRole.TabPanel => 57,      // ATSPI_ROLE_PAGE
-            AccessibleRole.MenuBar => 41,       // ATSPI_ROLE_MENU_BAR
-            AccessibleRole.MenuItem => 42,      // ATSPI_ROLE_MENU_ITEM
-            AccessibleRole.Menu => 33,          // ATSPI_ROLE_MENU (atspi-constants.h)
+            AccessibleRole.Button => 43,        // ATSPI_ROLE_BUTTON (= ATSPI_ROLE_PUSH_BUTTON)
+            AccessibleRole.Checkbox => 7,       // ATSPI_ROLE_CHECK_BOX
+            AccessibleRole.Link => 88,          // ATSPI_ROLE_LINK
+            AccessibleRole.Heading => 83,       // ATSPI_ROLE_HEADING
+            AccessibleRole.Text => 29,          // ATSPI_ROLE_LABEL
+            AccessibleRole.TextBox => 79,       // ATSPI_ROLE_ENTRY
+            AccessibleRole.Radio => 44,         // ATSPI_ROLE_RADIO_BUTTON
+            AccessibleRole.RadioGroup => 99,    // ATSPI_ROLE_GROUPING
+            AccessibleRole.ComboBox => 11,      // ATSPI_ROLE_COMBO_BOX
+            AccessibleRole.Slider => 51,        // ATSPI_ROLE_SLIDER
+            AccessibleRole.Switch => 130,       // ATSPI_ROLE_SWITCH
+            AccessibleRole.List => 98,          // ATSPI_ROLE_LIST_BOX
+            AccessibleRole.ListItem => 32,      // ATSPI_ROLE_LIST_ITEM
+            AccessibleRole.Table => 55,         // ATSPI_ROLE_TABLE
+            AccessibleRole.Row => 90,           // ATSPI_ROLE_TABLE_ROW
+            AccessibleRole.ColumnHeader => 10,  // ATSPI_ROLE_COLUMN_HEADER
+            AccessibleRole.Cell => 56,          // ATSPI_ROLE_TABLE_CELL
+            AccessibleRole.TabList => 38,       // ATSPI_ROLE_PAGE_TAB_LIST
+            AccessibleRole.Tab => 37,           // ATSPI_ROLE_PAGE_TAB
+            AccessibleRole.TabPanel => 39,      // ATSPI_ROLE_PANEL
+            AccessibleRole.MenuBar => 34,       // ATSPI_ROLE_MENU_BAR
+            AccessibleRole.MenuItem => 35,      // ATSPI_ROLE_MENU_ITEM
+            AccessibleRole.Menu => 33,          // ATSPI_ROLE_MENU
             AccessibleRole.Dialog => 16,        // ATSPI_ROLE_DIALOG
-            AccessibleRole.AlertDialog => 1,    // ATSPI_ROLE_ALERT
-            AccessibleRole.ProgressBar => 61,   // ATSPI_ROLE_PROGRESS_BAR
-            AccessibleRole.ScrollBar => 69,     // ATSPI_ROLE_SCROLL_BAR
+            AccessibleRole.AlertDialog => 2,    // ATSPI_ROLE_ALERT
+            AccessibleRole.ProgressBar => 42,   // ATSPI_ROLE_PROGRESS_BAR
+            AccessibleRole.ScrollBar => 48,     // ATSPI_ROLE_SCROLL_BAR
             AccessibleRole.Image => 27,         // ATSPI_ROLE_IMAGE
             AccessibleRole.Navigation => 110,   // ATSPI_ROLE_LANDMARK
             AccessibleRole.Main => 110,         // ATSPI_ROLE_LANDMARK
-            AccessibleRole.Tree => 83,          // ATSPI_ROLE_TREE
-            AccessibleRole.TreeItem => 84,      // ATSPI_ROLE_TREE_ITEM
+            AccessibleRole.Tree => 65,          // ATSPI_ROLE_TREE
+            AccessibleRole.TreeItem => 91,      // ATSPI_ROLE_TREE_ITEM
             AccessibleRole.Region => 110,       // ATSPI_ROLE_LANDMARK
-            AccessibleRole.Presentation => 119, // ATSPI_ROLE_REDUNDANT_OBJECT
+            AccessibleRole.Presentation => 86,  // ATSPI_ROLE_REDUNDANT_OBJECT
             _ => 20,                            // ATSPI_ROLE_FILLER
         };
     }

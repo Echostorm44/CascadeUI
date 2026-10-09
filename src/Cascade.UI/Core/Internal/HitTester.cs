@@ -198,7 +198,7 @@ internal static class HitTester
         return null;
     }
 
-    private static bool IsInteractive(Node node)
+    internal static bool IsInteractive(Node node)
     {
         // Nodes with gesture handlers are interactive
         if (node.LayoutData.GestureData != null)

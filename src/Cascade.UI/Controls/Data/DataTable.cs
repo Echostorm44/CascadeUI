@@ -133,6 +133,14 @@ internal interface ITabularDataNode
     /// <summary>Whether hover highlighting is enabled.</summary>
     bool IsHoverHighlightEnabled { get; }
 
+    // ── Inline row actions ────────────────────────────────────────────
+
+    /// <summary>
+    /// The inline action buttons configured with <c>RowActions</c>, painted in a strip after the
+    /// last column, or null when the control has none.
+    /// </summary>
+    TabularRowActions? RowActionStrip { get; }
+
     /// <summary>Number of visible rows in the current viewport, set by the painter.</summary>
     int VisibleRowCount { get; set; }
 
@@ -704,12 +712,28 @@ public sealed class DataTable<T> : Node, ITabularDataNode
         return factory(Items[MapRow(row)]) ?? [];
     }
 
-    /// <summary>Configures inline action buttons in the last column.</summary>
+    /// <summary>
+    /// Gives every row inline action buttons, built by <paramref name="factory"/> for the row's
+    /// item and shown right-aligned in a column after the last data column. The column is as wide
+    /// as the widest of the first 50 rows' actions; the data columns share what is left. Each node
+    /// in the list is one action — usually an <see cref="IconButton"/> (give it a
+    /// <c>Tooltip</c> or <c>AccessibleLabel</c> so it has a name) or a <see cref="Button"/>.
+    /// Clicking an action runs it without changing the selection. From the keyboard, with the
+    /// table focused and a row selected, Right/Left move through the selected row's actions,
+    /// Enter or Space runs the focused one, and Escape returns to the row. Return an empty list
+    /// for an item that has no actions.
+    /// </summary>
     public DataTable<T> RowActions(Func<T, IReadOnlyList<Node>> factory)
     {
+        ArgumentNullException.ThrowIfNull(factory);
         rowActionsFactory = factory;
+        rowActions = new TabularRowActions<T>(factory, () => Items, MapRow);
         return this;
     }
+
+    internal TabularRowActions? rowActions;
+
+    TabularRowActions? ITabularDataNode.RowActionStrip => rowActions;
 
     // ── Appearance ────────────────────────────────────────────────────
 

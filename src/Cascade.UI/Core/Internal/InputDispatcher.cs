@@ -860,6 +860,9 @@ internal sealed partial class InputDispatcher
         // the resize cursor could never appear for a table border.
         UpdateHoverCursor(hitNode, evt.X, evt.Y);
 
+        // Inline row actions are painted inside the table node; their hover is tracked per action.
+        UpdateRowActionHover(hitNode, hoveredNode, evt.X, evt.Y);
+
         // Track enter/leave for hover
         if (!ReferenceEquals(hitNode, hoveredNode))
         {
@@ -1865,7 +1868,8 @@ internal sealed partial class InputDispatcher
                 {
                     // Start column resize
                     tdnResize.ResizingColumnIndex = borderCol;
-                    tdnResize.ResizeStartWidth = tdnResize.GetColumnWidth(borderCol, tdnBounds.Width);
+                    tdnResize.ResizeStartWidth = tdnResize.GetColumnWidth(
+                        borderCol, tdnBounds.Width - TabularRowGeometry.ActionStripWidth(tdnResize, tdnBounds.Width));
                     tdnResize.ResizeStartMouseX = evt.X;
                     columnResizeTdn = tdnResize;
                     return;
@@ -1989,6 +1993,10 @@ internal sealed partial class InputDispatcher
             if (hitNode is INumberInput niPress && !niPress.IsDisabled)
             {
                 niPress.PressedStepperButton = ComputeNumberInputHoveredButton(niPress, evt.X, evt.Y);
+            }
+            if (hitNode is ITabularDataNode tdnPress && evt.Button == NativeMouseButton.Left)
+            {
+                PressRowAction(tdnPress, evt.X, evt.Y);
             }
             RequestRepaint?.Invoke();
         }
@@ -2458,6 +2466,7 @@ internal sealed partial class InputDispatcher
             {
                 niPrev.PressedStepperButton = -1;
             }
+            ReleaseRowAction(previousPressed);
             RequestRepaint?.Invoke();
         }
 
@@ -4998,6 +5007,12 @@ internal sealed partial class InputDispatcher
             tdn.ActiveFilterCol = -1;
         }
 
+        // An inline row action takes the click before the row does.
+        if (TryClickRowAction(tdn, relX, relY, bounds.Height))
+        {
+            return;
+        }
+
         // Rows, group headers and detail panels: the shared geometry applies the vertical scroll,
         // which the walk that used to live here did not — a click on a scrolled table selected
         // the row that would have been there at offset zero.
@@ -5083,6 +5098,12 @@ internal sealed partial class InputDispatcher
                 openGridOverlay = null;
             }
             tdn.SelectRow(row, ctrl, shift);
+        }
+
+        // A click puts keyboard focus on the row, not on one of its actions.
+        if (tdn.RowActionStrip is { } clickedActions)
+        {
+            clickedActions.FocusedIndex = -1;
         }
 
         // Give focus to the tabular data node for keyboard navigation
@@ -5177,6 +5198,12 @@ internal sealed partial class InputDispatcher
             }
         }
 
+        // The selected row's inline actions: Right/Left/Enter/Space/Escape when they apply.
+        if (HandleRowActionKey(tdn, evt))
+        {
+            return true;
+        }
+
         // Row movement follows the on-screen order (TabularNavigation): a grouped grid shows its
         // rows group by group with collapsed groups hidden, so "down" is not display row + 1.
         switch (evt.Key)
@@ -5236,7 +5263,10 @@ internal sealed partial class InputDispatcher
         }
     }
 
-    /// <summary>After a keyboard move: bring the selected row into view and repaint.</summary>
+    /// <summary>
+    /// After a keyboard move: bring the selected row into view, keep a focused row action inside
+    /// the new row's actions, and repaint.
+    /// </summary>
     private void AfterTabularNavigation(ITabularDataNode tdn)
     {
         if (tdn.SelectedRowIndex >= 0)
@@ -5244,6 +5274,7 @@ internal sealed partial class InputDispatcher
             tdn.ScrollIntoView(tdn.SelectedRowIndex);
         }
 
+        ClampRowActionFocus(tdn);
         RequestRepaint?.Invoke();
     }
 
@@ -5648,8 +5679,11 @@ internal sealed partial class InputDispatcher
     /// When columns exceed available width (minus chooser reserve), they scale down to fit.
     /// Includes sort indicator reserve only on the currently-sorted column.
     /// </summary>
-    private static float[] GetScaledColumnWidths(ITabularDataNode tdn, float availableWidth)
+    private static float[] GetScaledColumnWidths(ITabularDataNode tdn, float tableWidth)
     {
+        // The row-action strip sits after the last column; columns resolve in what is left, as
+        // the painter does.
+        float availableWidth = tableWidth - TabularRowGeometry.ActionStripWidth(tdn, tableWidth);
         float[] widths = new float[tdn.ColumnCount];
         float total = 0f;
         const float sortIndicatorReserve = 5f + 3f; // arrowW + arrowGap

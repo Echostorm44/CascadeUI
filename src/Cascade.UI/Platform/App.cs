@@ -404,6 +404,25 @@ public static class App
         // Wire cursor change callback so InputDispatcher can request resize cursors
         orchestrator.Input.RequestCursorChange = kind => window.SetCursorOverride(kind);
 
+        // Screen readers: answer WM_GETOBJECT with the window's UI Automation tree. Nothing is
+        // built until assistive technology first asks; see UiaProvider.
+        var accessibility = new UiaProvider();
+        accessibility.Initialize(window.Handle);
+        accessibility.Attach(new UiaContext(
+            new Win32UiaHost(window),
+            page:     () => orchestrator.RootHost?.RenderedTree,
+            input:    () => orchestrator.Input,
+            viewport: () => new Size(orchestrator.WindowWidth, orchestrator.WindowHeight)));
+        AccessibilityTreeBuilder.SetPlatformBridge(accessibility);
+        window.GetObjectRequested = accessibility.HandleGetObject;
+        var onDestroyed = window.Destroyed;
+        window.Destroyed = () =>
+        {
+            AccessibilityTreeBuilder.SetPlatformBridge(null);
+            accessibility.Shutdown();
+            onDestroyed?.Invoke();
+        };
+
         // Start MCP server — every Cascade app is an MCP server.
         // AI agents and DevTools connect via TCP loopback.
         var mcpHost = new DevTools.McpHost(title);
@@ -435,6 +454,9 @@ public static class App
         loop.Run();
 
         RunShutdownHandlers();
+
+        AccessibilityTreeBuilder.SetPlatformBridge(null);
+        accessibility.Shutdown();
 
         mcpHost.Dispose();
 

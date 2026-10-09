@@ -45,6 +45,8 @@ public sealed class DataGridBatchEditTests
         internal static readonly List<string> Changes = [];
         internal static bool WithBatchActions;
         internal static bool HideGenre;
+        internal static bool? Confirm;
+        internal static int? ConfirmFrom;
 
         internal DataGrid<Track>? Grid;
 
@@ -70,6 +72,16 @@ public sealed class DataGridBatchEditTests
                 .BatchEdit(true)
                 .UndoEnabled(true)
                 .OnChange(t => { Changes.Add(t.Title); });
+            if (Confirm is { } confirm)
+            {
+                grid.BatchEditConfirmation(confirm);
+            }
+
+            if (ConfirmFrom is { } from)
+            {
+                grid.BatchEditConfirmation(from);
+            }
+
             if (HideGenre)
             {
                 grid.ColumnVisibility(new Dictionary<string, bool> { ["Genre"] = false });
@@ -98,6 +110,8 @@ public sealed class DataGridBatchEditTests
         Page.Changes.Clear();
         Page.WithBatchActions = false;
         Page.HideGenre = false;
+        Page.Confirm = null;
+        Page.ConfirmFrom = null;
     }
 
     private static (FrameOrchestrator Orch, DataGrid<Track> Grid) MountWithSelection(params int[] rows)
@@ -218,6 +232,7 @@ public sealed class DataGridBatchEditTests
     [Test]
     public async Task InlineEdit_CommittedUnchanged_DoesNotCopyIntoTheOtherSelectedRows()
     {
+        Page.Confirm = false;
         var (orch, grid) = MountWithSelection(0, 1);
         using var _ = orch;
         ITabularDataNode tdn = grid;
@@ -236,6 +251,106 @@ public sealed class DataGridBatchEditTests
         tdn.HandleEditChar('!');
         tdn.CommitEdit();
         await Assert.That(string.Join(",", Page.Tracks.Select(t => t.Genre))).IsEqualTo("Jazz!,Jazz!,Rock");
+    }
+
+    /// <summary>Edits row 0's Genre to "Jazz!" inline with rows 0 and 1 selected.</summary>
+    private static void EditGenreInline(ITabularDataNode tdn)
+    {
+        tdn.BeginEdit(0, 1);
+        tdn.HandleEditChar('!');
+        tdn.CommitEdit();
+    }
+
+    private static string Genres() => string.Join(",", Page.Tracks.Select(t => t.Genre));
+
+    [Test]
+    public async Task InlineBatchEdit_AsksFirst_ApplyToAllWritesEverySelectedRow_AsOneUndoStep()
+    {
+        var (orch, grid) = MountWithSelection(0, 1);
+        using var _ = orch;
+        ITabularDataNode tdn = grid;
+
+        EditGenreInline(tdn);
+        Settle(orch);
+
+        // Edit mode is over, nothing is written yet, and the question is on screen.
+        await Assert.That(tdn.IsEditing).IsFalse();
+        await Assert.That(Genres()).IsEqualTo("Jazz,Jazz,Rock");
+        var tree = Top(orch).Tree!;
+        await Assert.That(TryFind<Label>(tree, l => l.Text == "Apply to all 2 selected rows?")).IsNotNull();
+
+        ClickInTop(orch, "Apply to all");
+        await WaitUntil(() => Page.Changes.Count == 2);
+        Settle(orch);
+
+        await Assert.That(orch.Overlays.Topmost).IsNull();
+        await Assert.That(Genres()).IsEqualTo("Jazz!,Jazz!,Rock");
+        await Assert.That(tdn.GetCellText(1, 1)).IsEqualTo("Jazz!");
+
+        // One undo step puts back every row (it used to undo the edited cell only).
+        await Assert.That(tdn.UndoEdit()).IsTrue();
+        await Assert.That(Genres()).IsEqualTo("Jazz,Jazz,Rock");
+    }
+
+    [Test]
+    public async Task InlineBatchEdit_OnlyThisRow_KeepsTheEditOnTheEditedRow()
+    {
+        var (orch, grid) = MountWithSelection(0, 1);
+        using var _ = orch;
+
+        EditGenreInline(grid);
+        Settle(orch);
+        ClickInTop(orch, "Only this row");
+        await WaitUntil(() => Page.Changes.Count == 1);
+        Settle(orch);
+
+        await Assert.That(Genres()).IsEqualTo("Jazz!,Jazz,Rock");
+        await Assert.That(string.Join(",", Page.Changes)).IsEqualTo("One");
+    }
+
+    [Test]
+    public async Task InlineBatchEdit_EscapeDeclines_LikeOnlyThisRow()
+    {
+        var (orch, grid) = MountWithSelection(0, 1);
+        using var _ = orch;
+
+        EditGenreInline(grid);
+        Settle(orch);
+        Key(orch, Cascade.UI.Key.Escape);
+        await WaitUntil(() => Page.Changes.Count == 1);
+        Settle(orch);
+
+        await Assert.That(orch.Overlays.Topmost).IsNull();
+        await Assert.That(Genres()).IsEqualTo("Jazz!,Jazz,Rock");
+    }
+
+    [Test]
+    public async Task InlineBatchEdit_BelowTheThreshold_OrWithConfirmationOff_AppliesWithoutAsking()
+    {
+        Page.ConfirmFrom = 3;
+        var (orch, grid) = MountWithSelection(0, 1);
+        using (orch)
+        {
+            EditGenreInline(grid);
+            orch.Tick();
+
+            await Assert.That(orch.Overlays.Topmost).IsNull();
+            await Assert.That(Genres()).IsEqualTo("Jazz!,Jazz!,Rock");
+        }
+
+        // Three selected rows reach the threshold: it asks.
+        SetUp();
+        Page.ConfirmFrom = 3;
+        var (orch3, grid3) = MountWithSelection(0, 1, 2);
+        using (orch3)
+        {
+            EditGenreInline(grid3);
+            Settle(orch3);
+            await Assert.That(TryFind<Label>(Top(orch3).Tree!, l => l.Text == "Apply to all 3 selected rows?")).IsNotNull();
+            ClickInTop(orch3, "Apply to all");
+            await WaitUntil(() => Page.Changes.Count == 3);
+            await Assert.That(Genres()).IsEqualTo("Jazz!,Jazz!,Jazz!");
+        }
     }
 
     [Test]

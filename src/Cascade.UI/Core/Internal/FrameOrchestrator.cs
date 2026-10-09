@@ -514,6 +514,9 @@ internal sealed class FrameOrchestrator : IDisposable
                 LayoutSolver.CheckboxLabelGap = Theme.Checkbox.LabelGap;
                 LayoutSolver.RadioSize = Theme.Radio.Size;
                 LayoutSolver.RadioLabelGap = Theme.Radio.LabelGap;
+                LayoutSolver.ToggleTrackWidth = Theme.Toggle.TrackWidth;
+                LayoutSolver.ToggleTrackHeight = Theme.Toggle.TrackHeight;
+                LayoutSolver.ToggleLabelGap = Theme.Spacing.Sm;
             }
 
             DiagnosticsHub.MarkPhase("layout.engine");

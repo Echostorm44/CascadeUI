@@ -1052,10 +1052,23 @@ public static class TextLayoutEngine
             }
         }
 
-        // Append ellipsis glyph(s)
-        float ellipsisX = truncateAt > textStart && truncateAt < xAtOffset.Length
-            ? xAtOffset[truncateAt] - lineStartX
-            : targetLine.Width;
+        // Append ellipsis glyph(s): after the kept text, at the start of the line when not even
+        // one character fits beside it. (Both "nothing kept" and "no offset table" used to fall
+        // back to the full line width, which put a lone ellipsis far past MaxWidth — a button
+        // narrower than its first letter plus "…" painted no caption at all.)
+        float ellipsisX;
+        if (truncateAt <= textStart)
+        {
+            ellipsisX = 0f;
+        }
+        else if (truncateAt < xAtOffset.Length)
+        {
+            ellipsisX = xAtOffset[truncateAt] - lineStartX;
+        }
+        else
+        {
+            ellipsisX = targetLine.Width;
+        }
 
         foreach (var eg in ellipsisShaped.Glyphs)
         {

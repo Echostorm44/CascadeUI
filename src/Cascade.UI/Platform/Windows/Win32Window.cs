@@ -67,6 +67,12 @@ internal sealed class Win32Window : IDisposable
     internal Action<bool>? VisibilityChanged;
     internal Action<string[]>? FilesDropped;
 
+    /// <summary>
+    /// WM_GETOBJECT: returns the LRESULT for an accessibility request this window answers (the UI
+    /// Automation root provider), or null to let DefWindowProc answer.
+    /// </summary>
+    internal Func<nuint, nint, nint?>? GetObjectRequested;
+
     internal nint Handle => handle;
 
     internal uint Dpi => currentDpi;
@@ -1020,6 +1026,15 @@ internal sealed class Win32Window : IDisposable
 
                 Win32.DestroyWindow(handle);
                 return 0;
+            }
+
+            case Win32.WM_GETOBJECT:
+            {
+                if (GetObjectRequested?.Invoke(wParam, lParam) is { } accessibilityResult)
+                {
+                    return accessibilityResult;
+                }
+                break;
             }
 
             case Win32.WM_DESTROY:

@@ -128,6 +128,7 @@ internal sealed class Reconciler
         to.IsPressed = from.IsPressed;
         FocusManager.NotifyNodeReplaced(from, to);
         InputDispatcher.NotifyNodeReplaced(from, to);
+        AccessibilityTreeBuilder.NotifyNodeReplaced(from, to);
         ControlStateAnimator.TransferState(from, to);
         // Carry a chart's entrance-animation slot to its replacement so an in-place
         // re-render reads as the same slot (data change) rather than a fresh entrance.

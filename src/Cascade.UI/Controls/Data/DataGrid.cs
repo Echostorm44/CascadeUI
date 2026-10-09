@@ -1420,6 +1420,12 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
 
     void ITabularDataNode.ToggleGroupCollapse(int groupIndex)
     {
+        // Sections are built lazily on first use; a toggle before anything else asked must not be lost.
+        if (groupedSections == null && groupKeySelector != null)
+        {
+            RebuildGroupedRows();
+        }
+
         if (groupedSections == null || groupIndex < 0 || groupIndex >= groupedSections.Length)
         {
             return;
@@ -2371,15 +2377,12 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
         var tdn = (ITabularDataNode)this;
         float rowHeight = tdn.GetRowHeight();
 
-        // Compute the Y offset of this row within the data content area
-        float rowTop;
-        if (tdn.IsGrouped)
+        // The row's top in the data content, from the same geometry the painter and the hit tests
+        // use. A row in a collapsed group is not on screen, so there is nothing to scroll to (this
+        // used to scroll to the end of the content instead).
+        if (!TabularRowGeometry.TryGetRowContentTop(tdn, displayRow, out float rowTop))
         {
-            rowTop = ComputeGroupedRowOffset(displayRow, rowHeight);
-        }
-        else
-        {
-            rowTop = ComputeFlatRowOffset(displayRow, rowHeight);
+            return;
         }
 
         float rowBottom = rowTop + rowHeight;
@@ -2442,56 +2445,6 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
         }
 
         return total;
-    }
-
-    private float ComputeFlatRowOffset(int displayRow, float rowHeight)
-    {
-        var tdn = (ITabularDataNode)this;
-        float offset = displayRow * rowHeight;
-
-        if (tdn.HasRowDetail)
-        {
-            for (int r = 0; r < displayRow; r++)
-            {
-                if (tdn.IsRowExpanded(r))
-                {
-                    offset += tdn.GetRowDetailHeight(r);
-                }
-            }
-        }
-
-        return offset;
-    }
-
-    private float ComputeGroupedRowOffset(int displayRow, float rowHeight)
-    {
-        var tdn = (ITabularDataNode)this;
-        const float groupHeaderHeight = 32f;
-        float offset = 0;
-
-        for (int g = 0; g < tdn.GroupCount; g++)
-        {
-            offset += groupHeaderHeight;
-            if (!tdn.IsGroupCollapsed(g))
-            {
-                int groupRowCount = tdn.GetGroupRowCount(g);
-                for (int r = 0; r < groupRowCount; r++)
-                {
-                    int dataRow = tdn.GetGroupDataRowIndex(g, r);
-                    if (dataRow == displayRow)
-                    {
-                        return offset;
-                    }
-                    offset += rowHeight;
-                    if (tdn.HasRowDetail && tdn.IsRowExpanded(dataRow))
-                    {
-                        offset += tdn.GetRowDetailHeight(dataRow);
-                    }
-                }
-            }
-        }
-
-        return offset;
     }
 
     /// <summary>
@@ -2810,20 +2763,18 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
     void ITabularDataNode.SelectRow(int row, bool ctrl, bool shift)
     {
         var items = Items.Value;
-        if (row < 0 || row >= items.Count)
+        // Display rows index the filtered order; past its end MapRow would read out of range.
+        if (row < 0 || row >= ((ITabularDataNode)this).RowCount)
         {
             return;
         }
 
         if (shift && anchorRow >= 0)
         {
+            // The rows between anchor and row as they appear on screen: grouped, that is not the
+            // display-index range (groups interleave display rows), and collapsed rows are skipped.
             selectedRows.Clear();
-            int lo = Math.Min(anchorRow, row);
-            int hi = Math.Max(anchorRow, row);
-            for (int i = lo; i <= hi; i++)
-            {
-                selectedRows.Add(i);
-            }
+            TabularNavigation.AddVisualRange(this, anchorRow, row, selectedRows);
             selectedRowIdx = row;
         }
         else if (ctrl)
@@ -2925,26 +2876,37 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
         anchorRow = displayRow;
     }
 
+    /// <summary>
+    /// Moves the selection <paramref name="delta"/> rows in the order they appear on screen —
+    /// grouped, that is group by group with collapsed groups skipped, not display index + delta.
+    /// </summary>
     void ITabularDataNode.MoveSelection(int delta)
     {
-        int newRow = Math.Clamp(selectedRowIdx + delta, 0, Items.Value.Count - 1);
-        ((ITabularDataNode)this).SelectRow(newRow, false, false);
+        SelectForNavigation(TabularNavigation.Step(this, selectedRowIdx, delta));
     }
 
     void ITabularDataNode.SelectFirst()
     {
-        if (Items.Value.Count > 0)
-        {
-            ((ITabularDataNode)this).SelectRow(0, false, false);
-        }
+        SelectForNavigation(TabularNavigation.First(this));
     }
 
     void ITabularDataNode.SelectLast()
     {
-        if (Items.Value.Count > 0)
+        SelectForNavigation(TabularNavigation.Last(this));
+    }
+
+    /// <summary>
+    /// Makes <paramref name="row"/> the single selection unless it already is, so a key that
+    /// cannot move (Down on the last row) does not fire <c>OnSelect</c> again.
+    /// </summary>
+    private void SelectForNavigation(int row)
+    {
+        if (row < 0 || (row == selectedRowIdx && selectedRows.Count == 1))
         {
-            ((ITabularDataNode)this).SelectRow(Items.Value.Count - 1, false, false);
+            return;
         }
+
+        ((ITabularDataNode)this).SelectRow(row, false, false);
     }
 
     ColumnAlignment ITabularDataNode.GetColumnAlignment(int col)

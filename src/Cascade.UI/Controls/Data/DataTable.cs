@@ -1255,24 +1255,31 @@ public sealed class DataTable<T> : Node, ITabularDataNode
 
     void ITabularDataNode.MoveSelection(int delta)
     {
-        int newRow = Math.Clamp(selectedRowIdx + delta, 0, Items.Count - 1);
-        ((ITabularDataNode)this).SelectRow(newRow, false, false);
+        SelectForNavigation(TabularNavigation.Step(this, selectedRowIdx, delta));
     }
 
     void ITabularDataNode.SelectFirst()
     {
-        if (Items.Count > 0)
-        {
-            ((ITabularDataNode)this).SelectRow(0, false, false);
-        }
+        SelectForNavigation(TabularNavigation.First(this));
     }
 
     void ITabularDataNode.SelectLast()
     {
-        if (Items.Count > 0)
+        SelectForNavigation(TabularNavigation.Last(this));
+    }
+
+    /// <summary>
+    /// Makes <paramref name="row"/> the single selection unless it already is, so a key that
+    /// cannot move (Down on the last row) does not fire <c>OnSelect</c> again.
+    /// </summary>
+    private void SelectForNavigation(int row)
+    {
+        if (row < 0 || (row == selectedRowIdx && selectedRows.Count == 1))
         {
-            ((ITabularDataNode)this).SelectRow(Items.Count - 1, false, false);
+            return;
         }
+
+        ((ITabularDataNode)this).SelectRow(row, false, false);
     }
 
     ColumnAlignment ITabularDataNode.GetColumnAlignment(int col)

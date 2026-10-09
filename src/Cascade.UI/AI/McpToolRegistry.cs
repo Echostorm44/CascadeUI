@@ -335,7 +335,7 @@ internal static class McpToolRegistry
                          "directly (coord_space=\"logical\" for raw logical coordinates). " +
                          "Frame-synchronous: the response includes presented_frame and timed_out — " +
                          "timed_out=true means nothing repainted within ~2s (no sleep needed before screenshots).",
-            InputSchemaJson: """{"type":"object","properties":{"node_id":{"type":"string"},"interaction":{"type":"string","enum":["hover","click","press","release","focus","blur","right_click","unhover","drag"]},"x":{"type":"number"},"y":{"type":"number"},"coord_space":{"type":"string","enum":["screenshot","logical"],"default":"screenshot","description":"Coordinate space for x/y: returned-screenshot pixels (default) or raw logical/input pixels"},"start_x":{"type":"number"},"start_y":{"type":"number"},"end_x":{"type":"number"},"end_y":{"type":"number"},"delta_x":{"type":"number"},"delta_y":{"type":"number"},"steps":{"type":"integer","default":5},"wait_frames":{"type":"integer","default":1,"description":"How many new presented frames to wait for before responding (1-240)"}},"required":["node_id","interaction"]}""",
+            InputSchemaJson: """{"type":"object","properties":{"node_id":{"type":"string"},"interaction":{"type":"string","enum":["hover","click","press","release","focus","blur","right_click","unhover","drag"]},"x":{"type":"number"},"y":{"type":"number"},"coord_space":{"type":"string","enum":["screenshot","logical"],"default":"screenshot","description":"Coordinate space for x/y: returned-screenshot pixels (default) or raw logical/input pixels"},"start_x":{"type":"number"},"start_y":{"type":"number"},"end_x":{"type":"number"},"end_y":{"type":"number"},"delta_x":{"type":"number"},"delta_y":{"type":"number"},"steps":{"type":"integer","default":5},"ctrl":{"type":"boolean","description":"Hold Ctrl for a click, right_click, press, release or hover (e.g. Ctrl+click to add a row to a selection)"},"shift":{"type":"boolean","description":"Hold Shift for a click, right_click, press, release or hover (e.g. Shift+click to extend a selection)"},"alt":{"type":"boolean","description":"Hold Alt for a click, right_click, press, release or hover"},"wait_frames":{"type":"integer","default":1,"description":"How many new presented frames to wait for before responding (1-240)"}},"required":["node_id","interaction"]}""",
             DebugOnly: true,
             RawResponse: false,
             RequiresLiveInstance: true,
@@ -343,7 +343,7 @@ internal static class McpToolRegistry
             [
                 new McpCliVerbSpec(
                     Verb: "click",
-                    HelpSummary: "Simulate click on a node (use --x/--y to click inside overlay popups)",
+                    HelpSummary: "Simulate click on a node (use --x/--y to click inside overlay popups; --ctrl/--shift/--alt hold a modifier)",
                     Positionals:
                     [
                         new CliPositionalMapping("node_id", CliValueKind.String),
@@ -353,6 +353,9 @@ internal static class McpToolRegistry
                         new CliOptionMapping("--x", "x", CliValueKind.Double),
                         new CliOptionMapping("--y", "y", CliValueKind.Double),
                         new CliOptionMapping("--coord-space", "coord_space", CliValueKind.String),
+                        new CliOptionMapping("--ctrl", "ctrl", CliValueKind.Boolean),
+                        new CliOptionMapping("--shift", "shift", CliValueKind.Boolean),
+                        new CliOptionMapping("--alt", "alt", CliValueKind.Boolean),
                         new CliOptionMapping("--wait-frames", "wait_frames", CliValueKind.Int),
                     ],
                     ConstantArguments: new Dictionary<string, JsonNode>
@@ -361,7 +364,7 @@ internal static class McpToolRegistry
                     }),
                 new McpCliVerbSpec(
                     Verb: "right-click",
-                    HelpSummary: "Simulate a right-click (secondary button) on a node, e.g. to open its context menu (use --x/--y for a point)",
+                    HelpSummary: "Simulate a right-click (secondary button) on a node, e.g. to open its context menu (use --x/--y for a point; --ctrl/--shift/--alt hold a modifier)",
                     Positionals:
                     [
                         new CliPositionalMapping("node_id", CliValueKind.String),
@@ -371,6 +374,9 @@ internal static class McpToolRegistry
                         new CliOptionMapping("--x", "x", CliValueKind.Double),
                         new CliOptionMapping("--y", "y", CliValueKind.Double),
                         new CliOptionMapping("--coord-space", "coord_space", CliValueKind.String),
+                        new CliOptionMapping("--ctrl", "ctrl", CliValueKind.Boolean),
+                        new CliOptionMapping("--shift", "shift", CliValueKind.Boolean),
+                        new CliOptionMapping("--alt", "alt", CliValueKind.Boolean),
                         new CliOptionMapping("--wait-frames", "wait_frames", CliValueKind.Int),
                     ],
                     ConstantArguments: new Dictionary<string, JsonNode>

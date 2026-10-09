@@ -1103,6 +1103,22 @@ internal static class McpTools
             overrideY = (float)(GetDouble(parameters, "y", 0) * coordScale);
         }
 
+        // Modifiers held for the pointer event (Ctrl+click adds a row to a selection, Shift+click
+        // extends it) — the pointer counterpart of cascade_send_keys' modifiers.
+        var modifiers = ModifierKeys.None;
+        if (parameters["ctrl"]?.GetValue<bool>() == true)
+        {
+            modifiers |= ModifierKeys.Ctrl;
+        }
+        if (parameters["shift"]?.GetValue<bool>() == true)
+        {
+            modifiers |= ModifierKeys.Shift;
+        }
+        if (parameters["alt"]?.GetValue<bool>() == true)
+        {
+            modifiers |= ModifierKeys.Alt;
+        }
+
         // SimulateInteraction dispatches input events which call RequestRepaint → SetTimer.
         // SetTimer requires the UI thread, so we must marshal the entire interaction there.
         // InvokeAsync blocks until completion and returns the result.
@@ -1112,7 +1128,7 @@ internal static class McpTools
         {
             Dispatcher.InvokeAsync(() =>
             {
-                success = DevTools.NodeTreeWalker.SimulateInteraction(nodeId, interaction, overrideX, overrideY);
+                success = DevTools.NodeTreeWalker.SimulateInteraction(nodeId, interaction, overrideX, overrideY, modifiers);
             }).Wait();
         }
         catch (Exception ex)

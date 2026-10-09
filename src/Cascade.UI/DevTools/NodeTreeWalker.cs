@@ -61,8 +61,9 @@ internal static class NodeTreeWalker
     /// was dispatched successfully.
     /// When overrideX/overrideY are provided, those viewport coordinates are used
     /// instead of the node center (useful for clicking overlay popups).
+    /// <paramref name="modifiers"/> are held for the pointer events (Ctrl+click, Shift+click).
     /// </summary>
-    internal static bool SimulateInteraction(string nodeId, string interaction, float? overrideX = null, float? overrideY = null)
+    internal static bool SimulateInteraction(string nodeId, string interaction, float? overrideX = null, float? overrideY = null, ModifierKeys modifiers = ModifierKeys.None)
     {
         var node = FindNode(nodeId);
         if (node is null || node is not Node uiNode)
@@ -95,12 +96,14 @@ internal static class NodeTreeWalker
                     Type = NativeMouseEventType.MouseDown,
                     X = centerX, Y = centerY,
                     Button = NativeMouseButton.Left,
+                    Modifiers = modifiers,
                 });
                 inputDispatcher.HandleMouseEvent(new NativeMouseEvent
                 {
                     Type = NativeMouseEventType.MouseUp,
                     X = centerX, Y = centerY,
                     Button = NativeMouseButton.Left,
+                    Modifiers = modifiers,
                 });
                 return true;
 
@@ -110,6 +113,7 @@ internal static class NodeTreeWalker
                     Type = NativeMouseEventType.MouseDown,
                     X = centerX, Y = centerY,
                     Button = NativeMouseButton.Left,
+                    Modifiers = modifiers,
                 });
                 return true;
 
@@ -119,6 +123,7 @@ internal static class NodeTreeWalker
                     Type = NativeMouseEventType.MouseUp,
                     X = centerX, Y = centerY,
                     Button = NativeMouseButton.Left,
+                    Modifiers = modifiers,
                 });
                 return true;
 
@@ -128,6 +133,7 @@ internal static class NodeTreeWalker
                     Type = NativeMouseEventType.MouseMove,
                     X = centerX, Y = centerY,
                     Button = NativeMouseButton.None,
+                    Modifiers = modifiers,
                 });
                 return true;
 
@@ -137,6 +143,7 @@ internal static class NodeTreeWalker
                     Type = NativeMouseEventType.MouseLeave,
                     X = -1, Y = -1,
                     Button = NativeMouseButton.None,
+                    Modifiers = modifiers,
                 });
                 return true;
 
@@ -146,12 +153,14 @@ internal static class NodeTreeWalker
                     Type = NativeMouseEventType.MouseDown,
                     X = centerX, Y = centerY,
                     Button = NativeMouseButton.Right,
+                    Modifiers = modifiers,
                 });
                 inputDispatcher.HandleMouseEvent(new NativeMouseEvent
                 {
                     Type = NativeMouseEventType.MouseUp,
                     X = centerX, Y = centerY,
                     Button = NativeMouseButton.Right,
+                    Modifiers = modifiers,
                 });
                 return true;
 

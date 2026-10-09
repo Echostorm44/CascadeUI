@@ -115,5 +115,11 @@ public enum AccessibleRole
     Presentation,
 
     /// <summary>A popup menu (a context menu or a dropdown menu) containing <see cref="MenuItem"/>s.</summary>
-    Menu
+    Menu,
+
+    /// <summary>A checkable menu item (a toggle); its <c>checked</c> state says whether it is on.</summary>
+    MenuItemCheckbox,
+
+    /// <summary>A menu item that is one choice of a mutually exclusive group; <c>checked</c> marks the selected one.</summary>
+    MenuItemRadio
 }

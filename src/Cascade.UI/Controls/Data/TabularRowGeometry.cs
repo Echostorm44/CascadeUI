@@ -47,6 +47,47 @@ internal static class TabularRowGeometry
     /// <summary>Height of the filter row, as painted.</summary>
     internal const float FilterRowHeight = 28f;
 
+    /// <summary>
+    /// Width of the inline row-action strip at the right end of the rows (0 without
+    /// <c>RowActions</c> or before it is measured), capped at half the table so the data columns
+    /// always keep room. The painter and every column hit test resolve columns in
+    /// <c>tableWidth - ActionStripWidth</c>.
+    /// </summary>
+    internal static float ActionStripWidth(ITabularDataNode tdn, float tableWidth)
+    {
+        if (tdn.RowActionStrip is not { StripWidth: > 0f } actions || tableWidth <= 0f)
+        {
+            return 0f;
+        }
+
+        return Math.Min(actions.StripWidth, MathF.Floor(tableWidth / 2f));
+    }
+
+    /// <summary>
+    /// The row action under a point (relative to the table's top-left corner), and the control
+    /// inside it the point lands on. Uses the painter's last layout of the row's actions and the
+    /// current scroll, like every other row hit test.
+    /// </summary>
+    internal static bool TryHitRowAction(
+        ITabularDataNode tdn, float relX, float relY, float tableHeight, out PaintedRowAction action, out Node target)
+    {
+        action = default;
+        target = null!;
+        if (tdn.RowActionStrip is not { } actions || actions.Painted.Count == 0)
+        {
+            return false;
+        }
+
+        var hit = HitTest(tdn, relY, tableHeight);
+        if (hit.Kind != TabularHitKind.Row || !TryGetRowContentTop(tdn, hit.Index, out float contentTop))
+        {
+            return false;
+        }
+
+        float rowTop = DataTop(tdn) + contentTop - tdn.ScrollOffsetY;
+        return actions.TryHit(hit.Index, relX, relY - rowTop, out action, out target);
+    }
+
     /// <summary>Height of the column header band.</summary>
     internal static float HeaderHeight(ITabularDataNode tdn)
     {

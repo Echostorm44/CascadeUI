@@ -267,6 +267,13 @@ internal sealed class Reconciler
                 {
                     newTab.AutoColumnWidths = autoWidths;
                 }
+
+                // The row-action strip is measured from the rows' actions, so its width carries
+                // over on the same terms; so does the keyboard position inside the selected row.
+                if (oldTab.RowActionStrip is { } oldActions && newTab.RowActionStrip is { } newActions)
+                {
+                    newActions.AdoptFrom(oldActions);
+                }
             }
 
             // Column widths are a property of the columns, not the rows: filtering a list must

@@ -10066,9 +10066,21 @@ internal sealed partial class NodePainter
         // selection before any row decides whether to draw highlighted (CONTROLS-008).
         tdn.SyncSelectionFromBinding();
 
+        // Inline row actions take a strip at the right end of every row; the columns share the
+        // rest. Measured once per data source from the rows' own action nodes.
+        var rowActions = tdn.RowActionStrip;
+        if (rowActions is not null)
+        {
+            rowActions.EnsureMeasured(tdn.RowCount, rowHeight);
+            rowActions.BeginPaint();
+        }
+
+        float actionsWidth = TabularRowGeometry.ActionStripWidth(tdn, bounds.Width);
+        bool tableFocused = ReferenceEquals(FocusManager.FocusedElement, node);
+
         // Compute column widths (hidden columns get 0 from GetColumnWidth)
         float[] colWidths = new float[tdn.ColumnCount];
-        float availWidth = bounds.Width;
+        float availWidth = bounds.Width - actionsWidth;
         float totalColWidth = 0f;
         // Sort indicator reserve: only added to the actually-sorted column.
         // Reserving on ALL columns inflates total width, worsening proportional scaling.
@@ -10580,7 +10592,7 @@ internal sealed partial class NodePainter
                                 pad, cellFontSize, boolCircleRadius, rowInGroup % 2 == 1,
                                 r < tdn.RowCount - 1 || rowInGroup < groupRowCount - 1,
                                 hasRowDetail ? expandIndicatorWidth : 0f,
-                                editOpenT, tabReducedMotion);
+                                editOpenT, tabReducedMotion, rowActions, actionsWidth, tableFocused);
                         }
 
                         currentY += rowHeight;
@@ -10639,7 +10651,7 @@ internal sealed partial class NodePainter
                         selectedBg, hoverBg, stripeBg, stripeAltBg, cellText, borderColor,
                         pad, cellFontSize, boolCircleRadius, r % 2 == 1,
                         r < tdn.RowCount - 1,
-                        leftOffset, editOpenT, tabReducedMotion);
+                        leftOffset, editOpenT, tabReducedMotion, rowActions, actionsWidth, tableFocused);
                 }
 
                 currentY += rowHeight;
@@ -10867,7 +10879,8 @@ internal sealed partial class NodePainter
         ColorValue cellText, ColorValue borderColor,
         float pad, float cellFontSize, float boolCircleRadius,
         bool isAlternateStripe, bool drawSeparator,
-        float leftOffset = 0f, float editOpenT = 1f, bool tabReducedMotion = false)
+        float leftOffset = 0f, float editOpenT = 1f, bool tabReducedMotion = false,
+        TabularRowActions? rowActions = null, float actionsWidth = 0f, bool tableFocused = false)
     {
         // Selection highlight (strongest)
         if (tdn.IsRowSelected(r))
@@ -11035,6 +11048,11 @@ internal sealed partial class NodePainter
             errColX += colWidths[c];
         }
 
+        if (rowActions is not null && actionsWidth > 0f)
+        {
+            PaintRowActions(tdn, rowActions, r, rowY, rowHeight, bounds, actionsWidth, tableFocused);
+        }
+
         // Draw row separator
         if (drawSeparator)
         {
@@ -11044,6 +11062,42 @@ internal sealed partial class NodePainter
                 new Point(bounds.Right, sepY),
                 new Stroke(borderColor, 0.5f));
         }
+    }
+
+    /// <summary>
+    /// Paints one row's inline actions (<c>RowActions</c>) right-aligned in the strip after the
+    /// last column, through the real pipeline (<c>PaintRecursive</c>) so any node and its
+    /// modifiers render, and records where each one went for the input dispatcher. Hover and press
+    /// feedback come from the action nodes' own state, which the dispatcher sets. The selected
+    /// row's keyboard-focused action gets a focus ring while the table has focus.
+    /// </summary>
+    private void PaintRowActions(
+        ITabularDataNode tdn, TabularRowActions actions, int row, float rowY, float rowHeight,
+        Rect bounds, float stripWidth, bool tableFocused)
+    {
+        var nodes = actions.LayoutRow(row, bounds.Width, rowHeight, stripWidth, bounds.X, rowY);
+        if (nodes.Count == 0)
+        {
+            return;
+        }
+
+        using var stripClip = ctx.PushClip(new Rect(bounds.Right - stripWidth, rowY, stripWidth, rowHeight));
+        for (int i = 0; i < nodes.Count; i++)
+        {
+            PaintRecursive(nodes[i]);
+        }
+
+        int focused = actions.FocusedIndex;
+        if (!tableFocused || focused < 0 || focused >= nodes.Count || tdn.SelectedRowIndex != row)
+        {
+            return;
+        }
+
+        // Inset by the stroke so the ring stays inside the row's clip.
+        var target = nodes[focused].LayoutData.Bounds;
+        var ring = new Rect(target.X + 1f, target.Y + 1f, Math.Max(0f, target.Width - 2f), Math.Max(0f, target.Height - 2f));
+        float radius = nodes[focused] is IconButton ? Math.Min(ring.Width, ring.Height) / 2f : 6f;
+        ctx.DrawRect(ring, stroke: new Stroke(theme.Colors.Primary, 2f), radius: radius);
     }
 
     /// <summary>

@@ -90,6 +90,28 @@ internal sealed partial class InputDispatcher
         SetHoveredRowAction(actions, target);
     }
 
+    /// <summary>
+    /// Re-reads the hovered row, cell and row action after the table scrolled under a still
+    /// pointer. Without it the highlight (and a hovered button with its tooltip) stayed on the
+    /// row that had scrolled away until the mouse moved.
+    /// </summary>
+    private void RefreshTabularHover(ITabularDataNode tdn, float x, float y)
+    {
+        if (tdn.IsHoverHighlightEnabled)
+        {
+            int row = HitTestTabularRow(tdn, x, y);
+            float relX = x - tdn.AbsoluteBounds.X;
+            float dataRelX = tdn.HasRowDetail ? relX - ExpandIndicatorWidth : relX;
+            tdn.HoveredRowIndex = row;
+            tdn.HoveredColIndex = row >= 0 ? HitTestTabularColumn(tdn, dataRelX, tdn.AbsoluteBounds.Width) : -1;
+        }
+
+        if (tdn is Node node)
+        {
+            UpdateRowActionHover(node, node, x, y);
+        }
+    }
+
     private void SetHoveredRowAction(TabularRowActions actions, Node? target)
     {
         if (ReferenceEquals(actions.HoveredTarget, target))

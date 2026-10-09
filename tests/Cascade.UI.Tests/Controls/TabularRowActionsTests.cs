@@ -312,6 +312,29 @@ public class TabularRowActionsTests
     }
 
     [Test]
+    public async Task WheelScroll_UnderAStillPointer_MovesTheHoverToWhatIsNowUnderIt()
+    {
+        var table = BuildTable(count: 30);
+        ITabularDataNode tdn = table;
+        table.HoverHighlight(true);
+        var actions = tdn.RowActionStrip!;
+        actions.TryGetPainted(2, 1, out var delete);
+        Mouse(NativeMouseEventType.MouseMove, SecondButtonCenterX, RowCenter(2), NativeMouseButton.None);
+        await Assert.That(tdn.HoveredRowIndex).IsEqualTo(2);
+
+        // One row down: row 3 (which has only "Open", at the right edge) is now under the pointer.
+        dispatcher.HandleScrollEvent(new NativeScrollEvent { X = SecondButtonCenterX, Y = RowCenter(2), DeltaY = -RowHeight / 48f });
+        Paint(table);
+
+        await Assert.That(tdn.ScrollOffsetY).IsEqualTo(RowHeight);
+        await Assert.That(tdn.HoveredRowIndex).IsEqualTo(3);
+        await Assert.That(delete.Node.IsHovered).IsFalse();
+        actions.TryGetPainted(3, 0, out var open);
+        await Assert.That(actions.HoveredTarget).IsSameReferenceAs(open.Node);
+        await Assert.That(open.Node.IsHovered).IsTrue();
+    }
+
+    [Test]
     public async Task Press_MarksTheButtonPressedUntilRelease()
     {
         var table = BuildTable();

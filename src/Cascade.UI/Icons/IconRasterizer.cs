@@ -15,24 +15,41 @@ namespace Cascade.UI;
 internal static class IconRasterizer
 {
     /// <summary>
-    /// Rasterizes <paramref name="paths"/> (view-box <paramref name="viewW"/>×<paramref name="viewH"/>)
-    /// into a straight-alpha RGBA8 bitmap of <paramref name="pxSize"/>² pixels, stroked at
-    /// <paramref name="strokeWidthPx"/> and tinted with <paramref name="color"/>. The art is
-    /// aspect-fit and centered with <paramref name="paddingPx"/> of inset on every edge.
+    /// The margin, in device pixels, a bitmap needs around the icon's box so a stroke on the
+    /// view-box edge (half the stroke outside it) and its 1px anti-aliasing fringe are not cut.
     /// </summary>
+    public static int MarginFor(float strokeWidthPx)
+    {
+        return (int)MathF.Ceiling((strokeWidthPx * 0.5f) + 1f);
+    }
+
+    /// <summary>
+    /// Rasterizes <paramref name="paths"/> (view-box <paramref name="viewW"/>×<paramref name="viewH"/>),
+    /// stroked at <paramref name="strokeWidthPx"/> and tinted with <paramref name="color"/>. The
+    /// view box is aspect-fit into a <paramref name="boxPx"/>² box — the icon's size, as in SVG —
+    /// and the bitmap adds <paramref name="marginPx"/> on every side of that box, so it is
+    /// (<paramref name="boxPx"/> + 2 × <paramref name="marginPx"/>)² straight-alpha RGBA8 pixels.
+    /// </summary>
+    /// <remarks>
+    /// The margin used to be an inset: the art was shrunk into box − 2 × (stroke/2 + 1.5) so a
+    /// stroke on the edge stayed inside. Icon sets already keep their art off the edge (Lucide's
+    /// 24-unit box has a 2-unit margin), so that was a second shrink, worst at small sizes: a 14px
+    /// icon drew its 24-unit box in 9px. The bitmap now grows around the box instead, and the
+    /// caller blits it correspondingly larger, so the art fills its box at every size.
+    /// </remarks>
     public static byte[] Rasterize(
         ReadOnlySpan<string> paths, float viewW, float viewH,
-        int pxSize, float strokeWidthPx, ColorValue color, float paddingPx)
+        int boxPx, float strokeWidthPx, ColorValue color, int marginPx)
     {
+        int pxSize = boxPx + (2 * Math.Max(0, marginPx));
         var rgba = new byte[pxSize * pxSize * 4];
-        if (viewW <= 0 || viewH <= 0 || pxSize <= 0)
+        if (viewW <= 0 || viewH <= 0 || boxPx <= 0)
         {
             return rgba;
         }
 
-        // View-box → pixel space: aspect-fit, centered, inset by padding.
-        float avail = MathF.Max(1f, pxSize - 2f * paddingPx);
-        float scale = MathF.Min(avail / viewW, avail / viewH);
+        // View-box → pixel space: aspect-fit into the box, centered in the bitmap (inside the margin).
+        float scale = MathF.Min(boxPx / viewW, boxPx / viewH);
         float offX = (pxSize - viewW * scale) * 0.5f;
         float offY = (pxSize - viewH * scale) * 0.5f;
 

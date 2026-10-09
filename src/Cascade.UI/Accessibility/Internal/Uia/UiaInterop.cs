@@ -186,6 +186,69 @@ internal partial interface IScrollItemProvider
     int ScrollIntoView();
 }
 
+/// <summary>IGridProvider (UIAutomationCore.idl).</summary>
+[GeneratedComInterface]
+[Guid("b17d6187-0907-464b-a168-0ef17a1572b1")]
+internal partial interface IGridProvider
+{
+    [PreserveSig]
+    int GetItem(int row, int column, out nint provider);
+
+    [PreserveSig]
+    int GetRowCount(out int value);
+
+    [PreserveSig]
+    int GetColumnCount(out int value);
+}
+
+/// <summary>IGridItemProvider (UIAutomationCore.idl).</summary>
+[GeneratedComInterface]
+[Guid("d02541f1-fb81-4d64-ae32-f520f8a6dbd1")]
+internal partial interface IGridItemProvider
+{
+    [PreserveSig]
+    int GetRow(out int value);
+
+    [PreserveSig]
+    int GetColumn(out int value);
+
+    [PreserveSig]
+    int GetRowSpan(out int value);
+
+    [PreserveSig]
+    int GetColumnSpan(out int value);
+
+    [PreserveSig]
+    int GetContainingGrid(out nint provider);
+}
+
+/// <summary>ITableProvider (UIAutomationCore.idl).</summary>
+[GeneratedComInterface]
+[Guid("9c860395-97b3-490a-b52a-858cc22af166")]
+internal partial interface ITableProvider
+{
+    [PreserveSig]
+    int GetRowHeaders(out nint safeArray);
+
+    [PreserveSig]
+    int GetColumnHeaders(out nint safeArray);
+
+    [PreserveSig]
+    int GetRowOrColumnMajor(out int value);
+}
+
+/// <summary>ITableItemProvider (UIAutomationCore.idl).</summary>
+[GeneratedComInterface]
+[Guid("b9734fa6-771f-4d78-9c90-2517999349cd")]
+internal partial interface ITableItemProvider
+{
+    [PreserveSig]
+    int GetRowHeaderItems(out nint safeArray);
+
+    [PreserveSig]
+    int GetColumnHeaderItems(out nint safeArray);
+}
+
 /// <summary>UiaRect: a rectangle in screen (physical pixel) coordinates.</summary>
 [StructLayout(LayoutKind.Sequential)]
 internal struct UiaRect
@@ -226,7 +289,11 @@ internal static class UiaIds
     internal const int ValuePattern = 10002;
     internal const int RangeValuePattern = 10003;
     internal const int ExpandCollapsePattern = 10005;
+    internal const int GridPattern = 10006;
+    internal const int GridItemPattern = 10007;
     internal const int SelectionItemPattern = 10010;
+    internal const int TablePattern = 10012;
+    internal const int TableItemPattern = 10013;
     internal const int TogglePattern = 10015;
     internal const int ScrollItemPattern = 10017;
 
@@ -249,6 +316,13 @@ internal static class UiaIds
     internal const int ValueValueProperty = 30045;
     internal const int ValueIsReadOnlyProperty = 30046;
     internal const int RangeValueValueProperty = 30047;
+    internal const int LocalizedControlTypeProperty = 30004;
+    internal const int GridRowCountProperty = 30062;
+    internal const int GridColumnCountProperty = 30063;
+    internal const int GridItemRowProperty = 30064;
+    internal const int GridItemColumnProperty = 30065;
+    internal const int GridItemRowSpanProperty = 30066;
+    internal const int GridItemColumnSpanProperty = 30067;
     internal const int ExpandCollapseStateProperty = 30070;
     internal const int SelectionItemIsSelectedProperty = 30079;
     internal const int ToggleStateProperty = 30086;
@@ -287,12 +361,17 @@ internal static class UiaIds
     internal const int TextControl = 50020;
     internal const int TreeControl = 50023;
     internal const int TreeItemControl = 50024;
+    internal const int CustomControl = 50025;
     internal const int GroupControl = 50026;
     internal const int DataItemControl = 50029;
     internal const int WindowControl = 50032;
     internal const int PaneControl = 50033;
+    internal const int HeaderControl = 50034;
     internal const int HeaderItemControl = 50035;
     internal const int TableControl = 50036;
+
+    // RowOrColumnMajor
+    internal const int RowOrColumnMajor_RowMajor = 0;
 
     // ToggleState
     internal const int ToggleState_Off = 0;

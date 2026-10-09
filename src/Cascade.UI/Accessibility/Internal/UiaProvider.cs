@@ -179,7 +179,7 @@ internal sealed class UiaProvider : IPlatformAccessibilityBridge
     /// selected row of a focused list, the keyboard tab of a focused tab bar, or the highlighted
     /// item of an open menu.
     /// </summary>
-    private readonly record struct FocusKey(Node? Node, int Row, MenuLevel? MenuLevel, int MenuItem);
+    private readonly record struct FocusKey(Node? Node, int Row, MenuLevel? MenuLevel, int MenuItem, int Column = -1);
 
     private FocusKey CurrentFocus()
     {
@@ -190,6 +190,15 @@ internal sealed class UiaProvider : IPlatformAccessibilityBridge
         }
 
         var focused = FocusManager.FocusedElement;
+        if (focused is ITabularDataNode table)
+        {
+            // The current cell of a grid (or the selected row of a table) has the focus: a move is a focus change.
+            int column = table is ITabularCellGrid { CellNavigationEnabled: true } cells && table.RowActionStrip is not { FocusedIndex: >= 0 }
+                ? cells.CurrentColumn
+                : -1;
+            return new FocusKey(focused, table.SelectedRowIndex, null, -1, column);
+        }
+
         int row = focused switch
         {
             IListViewNode { SectionCount: 0 } list => list.SelectedIndex,

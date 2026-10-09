@@ -178,6 +178,12 @@ internal sealed class UiaContext
             return element.Tab(tab);
         }
 
+        // A focused table: its current cell (a grid) or its selected row.
+        if (focused is ITabularDataNode && element.FocusedTablePart() is { } part)
+        {
+            return part;
+        }
+
         return element;
     }
 

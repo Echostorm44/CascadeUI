@@ -433,4 +433,44 @@ internal sealed partial class InputDispatcher
 
         return true;
     }
+
+    // ── Assistive technology ──────────────────────────────────────────
+
+    /// <summary>
+    /// Selects the cell at display row <paramref name="row"/>, column <paramref name="col"/> (or the
+    /// row, when <paramref name="col"/> is -1 or the table has no cells) and scrolls it into view —
+    /// what a click on it does, without starting an edit. For UI Automation's SelectionItem.Select.
+    /// </summary>
+    internal void AutomationSelectTableCell(ITabularDataNode table, int row, int col)
+    {
+        current = this;
+        if ((uint)row >= (uint)table.RowCount)
+        {
+            return;
+        }
+
+        if (table is ITabularCellGrid { CellNavigationEnabled: true } cells && col >= 0)
+        {
+            cells.SelectCell(row, col, CellSelectKind.Replace);
+        }
+        else if (!(table.SelectedRowIndex == row && table.SelectedRowCount <= 1))
+        {
+            table.SelectRow(row, ctrl: false, shift: false);
+        }
+
+        AutomationScrollTableRowIntoView(table, row);
+    }
+
+    /// <summary>Scrolls display row <paramref name="row"/> of a table into view.</summary>
+    internal void AutomationScrollTableRowIntoView(ITabularDataNode table, int row)
+    {
+        current = this;
+        table.ScrollIntoView(row);
+        if (rootNode is not null && table is Node tableNode)
+        {
+            MarkScrollViewLayersDirty(rootNode, tableNode);
+        }
+
+        RequestRepaint?.Invoke();
+    }
 }

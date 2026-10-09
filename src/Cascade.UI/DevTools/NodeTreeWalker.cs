@@ -279,12 +279,18 @@ internal static class NodeTreeWalker
     /// (positive = away from the user = up), so we negate here at the DevTools
     /// injection boundary. Real OS wheel input does not pass through this method.
     /// </remarks>
-    internal static (bool Success, float OffsetY, float MaxY) SimulateScroll(
+    /// <returns>
+    /// Whether the event was dispatched, and what took it: the list, grid, table, ScrollView,
+    /// dropdown or menu under the point, with its offset and maximum after the event. Lists, grids
+    /// and tables own their scroll offsets, so the page ScrollView's offset — which this used to
+    /// report whatever had scrolled — reads 0/0 while a grid scrolls.
+    /// </returns>
+    internal static (bool Success, ScrollOutcome Outcome) SimulateScroll(
         float x, float y, float deltaX, float deltaY)
     {
         if (inputDispatcher is null)
         {
-            return (false, 0, 0);
+            return (false, ScrollOutcome.Nothing);
         }
 
         const float pixelsPerNotch = 48f;
@@ -296,7 +302,7 @@ internal static class NodeTreeWalker
             DeltaY = -deltaY / pixelsPerNotch,
         });
 
-        return (true, InputDispatcher.ScrollViewOffsetY, InputDispatcher.ScrollViewMaxY);
+        return (true, inputDispatcher.LastScroll);
     }
 
     /// <summary>

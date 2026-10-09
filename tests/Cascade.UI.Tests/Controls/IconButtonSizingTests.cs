@@ -80,7 +80,7 @@ public class IconButtonSizingTests
         var (circle, glyph) = Paint(new IconButton(PinIcon, () => { }).Size(24));
 
         await Assert.That(circle.W).IsEqualTo(24f).Within(0.01f);
-        await Assert.That(glyph.W).IsEqualTo(16f).Within(0.01f);
+        await Assert.That(GlyphBox(glyph)).IsEqualTo(16f).Within(0.01f);
     }
 
     [Test]
@@ -93,8 +93,15 @@ public class IconButtonSizingTests
         await Assert.That(circle.H).IsEqualTo(40f).Within(0.01f);
         await Assert.That(circle.Radius).IsEqualTo(20f).Within(0.01f);
         await Assert.That(circle.X).IsEqualTo(40f).Within(0.01f);
-        await Assert.That(glyph.W).IsEqualTo(20f).Within(0.01f);
+        await Assert.That(GlyphBox(glyph)).IsEqualTo(20f).Within(0.01f);
         await Assert.That(glyph.X + (glyph.W / 2f)).IsEqualTo(60f).Within(0.01f);
+    }
+
+    // The glyph bitmap is the icon's box plus the rasterizer's stroke margin (2px at the default
+    // 2px stroke, 1x) on each side; the box is what GlyphSizeFor sets.
+    private static float GlyphBox(EtchBackend.SceneOp image)
+    {
+        return image.W - (2f * IconRasterizer.MarginFor(2f));
     }
 
     private static Size Measure(IconButton button, Size room)

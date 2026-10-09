@@ -18,7 +18,7 @@ public class IconRasterizerTests
         // near y≈4 and the bottom near y≈20 of a 24-unit box; both must produce ink.
         string[] italic = { "M19 4h-9M14 20H5M15 4L9 20" };
         const int px = 48;
-        byte[] rgba = IconRasterizer.Rasterize(italic, 24, 24, px, 3f, White, paddingPx: 3f);
+        byte[] rgba = IconRasterizer.Rasterize(italic, 24, 24, px, 3f, White, marginPx: 0);
 
         int topCovered = CountCovered(rgba, px, 0, px / 3);
         int bottomCovered = CountCovered(rgba, px, px * 2 / 3, px);
@@ -33,7 +33,7 @@ public class IconRasterizerTests
         // A bold-style curved stroke: must have both a solid core (alpha 255) and an
         // anti-aliased fringe (0 < alpha < 255).
         string[] bold = { "M6 12h9a4 4 0 0 1 0 8H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7a4 4 0 0 1 0 8" };
-        byte[] rgba = IconRasterizer.Rasterize(bold, 24, 24, 64, 3f, White, paddingPx: 3f);
+        byte[] rgba = IconRasterizer.Rasterize(bold, 24, 24, 64, 3f, White, marginPx: 0);
 
         bool hasPartial = false, hasFull = false;
         for (int i = 3; i < rgba.Length; i += 4)
@@ -58,7 +58,7 @@ public class IconRasterizerTests
     {
         var red = new ColorValue("#FF0000");
         string[] line = { "M2 12h20" };
-        byte[] rgba = IconRasterizer.Rasterize(line, 24, 24, 48, 4f, red, paddingPx: 3f);
+        byte[] rgba = IconRasterizer.Rasterize(line, 24, 24, 48, 4f, red, marginPx: 0);
 
         // Find the most-covered pixel; its RGB must be the tint (straight alpha).
         int best = -1; byte bestA = 0;
@@ -124,10 +124,117 @@ public class IconRasterizerTests
             "M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z",
         };
 
-        byte[] rgba = IconRasterizer.Rasterize(gear, 24, 24, 48, 2f, White, paddingPx: 3f);
+        byte[] rgba = IconRasterizer.Rasterize(gear, 24, 24, 48, 2f, White, marginPx: 0);
 
         int covered = CountCovered(rgba, 48, 0, 48);
         await Assert.That(covered).IsGreaterThan(0);
+    }
+
+    // ── The view box fills the icon's box; the stroke margin is outside it ──────────────────
+    //
+    // The rasterizer used to inset the art by stroke/2 + 1.5 px on every side, so a 14px icon
+    // (stroke 2) drew its 24-unit view box in 9px — on top of the icon set's own margin.
+
+    private static readonly string[] LucideLink =
+    [
+        "M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71",
+        "M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71",
+    ];
+
+    [Test]
+    [Arguments(14)]
+    [Arguments(16)]
+    [Arguments(24)]
+    [Arguments(48)]
+    public async Task ViewBox_FillsTheBox_AtEverySize(int box)
+    {
+        // A vertical line from the top of the view box to the bottom: its ink covers every row of
+        // the box (its round caps reach into the margin, which is never exhausted).
+        string[] line = ["M12 0V24"];
+        const float stroke = 2f;
+        int margin = IconRasterizer.MarginFor(stroke);
+        int size = box + (2 * margin);
+        byte[] rgba = IconRasterizer.Rasterize(line, 24, 24, box, stroke, White, margin);
+
+        var (top, bottom) = InkRows(rgba, size);
+
+        await Assert.That(RowCovered(rgba, size, margin)).IsTrue();
+        await Assert.That(RowCovered(rgba, size, margin + box - 1)).IsTrue();
+        await Assert.That(top).IsGreaterThan(0);
+        await Assert.That(bottom).IsLessThan(size - 1);
+    }
+
+    [Test]
+    [Arguments(1f)]
+    [Arguments(2f)]
+    [Arguments(3.5f)]
+    [Arguments(6f)]
+    public async Task StrokeOnTheEdge_IsNotClipped(float stroke)
+    {
+        // A line along the very top of the view box: half its width (and its AA fringe) lies above
+        // the box, inside the margin — never cut by the bitmap edge.
+        string[] edge = ["M0 0H24"];
+        const int box = 24;
+        int margin = IconRasterizer.MarginFor(stroke);
+        int size = box + (2 * margin);
+        byte[] rgba = IconRasterizer.Rasterize(edge, 24, 24, box, stroke, White, margin);
+
+        var (top, _) = InkRows(rgba, size);
+
+        await Assert.That(top).IsGreaterThan(0);              // the bitmap's first row is clear
+        await Assert.That(top).IsLessThan(margin);             // ink reaches above the box
+        await Assert.That(RowCovered(rgba, size, margin)).IsTrue();
+    }
+
+    [Test]
+    public async Task FourteenPixelIcon_InkIsTheIconSetsArt_NotShrunkTwice()
+    {
+        // Lucide's link icon spans y 2..22 of its 24-unit box: at 14px that is 11.7px of art (plus
+        // the stroke). It was drawn about 8px tall.
+        const int box = 14;
+        const float stroke = 1.5f;
+        int margin = IconRasterizer.MarginFor(stroke);
+        int size = box + (2 * margin);
+        byte[] rgba = IconRasterizer.Rasterize(LucideLink, 24, 24, box, stroke, White, margin);
+
+        var (top, bottom) = InkRows(rgba, size);
+
+        await Assert.That(bottom - top + 1).IsGreaterThanOrEqualTo(12);
+    }
+
+    private static (int Top, int Bottom) InkRows(byte[] rgba, int size)
+    {
+        int top = -1;
+        int bottom = -1;
+        for (int y = 0; y < size; y++)
+        {
+            if (!RowCovered(rgba, size, y))
+            {
+                continue;
+            }
+
+            if (top < 0)
+            {
+                top = y;
+            }
+
+            bottom = y;
+        }
+
+        return (top, bottom);
+    }
+
+    private static bool RowCovered(byte[] rgba, int size, int y)
+    {
+        for (int x = 0; x < size; x++)
+        {
+            if (rgba[((y * size) + x) * 4 + 3] > 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static int CountCovered(byte[] rgba, int px, int y0, int y1)

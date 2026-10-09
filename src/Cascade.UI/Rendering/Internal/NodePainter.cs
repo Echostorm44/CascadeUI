@@ -6434,14 +6434,18 @@ internal sealed partial class NodePainter
         int devicePx = Math.Clamp((int)MathF.Round(baseDrawSize * ratio), 1, 1024);
         float strokeDevice = MathF.Max(0.75f, strokeWidthLogical * ratio);
 
-        var image = GetOrCreateIconImage(icon, devicePx, strokeDevice, color);
+        var image = GetOrCreateIconImage(icon, devicePx, strokeDevice, color, out int margin);
 
-        float drawn = baseDrawSize * renderScale;
+        // The bitmap is the icon's box plus a stroke margin on each side; blit it that much larger
+        // so the box itself lands at baseDrawSize.
+        float drawn = baseDrawSize * renderScale * (devicePx + (2f * margin)) / devicePx;
         ctx.DrawImage(image, new Rect(centerX - drawn * 0.5f, centerY - drawn * 0.5f, drawn, drawn));
     }
 
-    private static ImageSource GetOrCreateIconImage(Icon icon, int devicePx, float strokeDevice, ColorValue color)
+    private static ImageSource GetOrCreateIconImage(Icon icon, int devicePx, float strokeDevice, ColorValue color, out int margin)
     {
+        // Half the stroke plus a pixel of AA fringe around the box (not inside it).
+        margin = IconRasterizer.MarginFor(strokeDevice);
         int strokeKey = (int)MathF.Round(strokeDevice * 4f);
         int colorKey = HashCode.Combine(color.R, color.G, color.B, color.A);
         var key = (icon.GetHashCode(), devicePx, strokeKey, colorKey);
@@ -6452,10 +6456,9 @@ internal sealed partial class NodePainter
 
         float viewW = icon.ViewBox.Width > 0 ? icon.ViewBox.Width : 24f;
         float viewH = icon.ViewBox.Height > 0 ? icon.ViewBox.Height : 24f;
-        // Half the stroke plus a pixel of AA fringe must stay inside the bitmap.
-        float padding = strokeDevice * 0.5f + 1.5f;
-        byte[] rgba = IconRasterizer.Rasterize(icon.Paths, viewW, viewH, devicePx, strokeDevice, color, padding);
-        var image = ImageSource.FromBytes(rgba, devicePx, devicePx);
+        byte[] rgba = IconRasterizer.Rasterize(icon.Paths, viewW, viewH, devicePx, strokeDevice, color, margin);
+        int size = devicePx + (2 * margin);
+        var image = ImageSource.FromBytes(rgba, size, size);
         iconImageCache[key] = image;
         return image;
     }

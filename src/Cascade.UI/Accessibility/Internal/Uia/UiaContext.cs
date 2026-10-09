@@ -172,6 +172,12 @@ internal sealed class UiaContext
             return element.Row(list.SelectedIndex);
         }
 
+        // A focused tab bar: focus is on the tab the keyboard is on.
+        if (focused is TabBar bar && TabStripLayout.KeyboardPosition(bar) is var tab && tab >= 0)
+        {
+            return element.Tab(tab);
+        }
+
         return element;
     }
 

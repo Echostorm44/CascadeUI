@@ -237,6 +237,9 @@ public sealed class TabBar : Node
             Closable: tab.CloseHandler is not null,
             Badge: tab.BadgeText,
             Bounds: window,
+            VisibleBounds: offscreen
+                ? default
+                : new Rect(barWindowBounds.X + visible.X, barWindowBounds.Y + visible.Y, visible.Width, visible.Height),
             IsOffscreen: offscreen,
             PositionInSet: position + 1,
             SetSize: Tabs.Count);
@@ -252,6 +255,7 @@ internal readonly record struct TabAccessibleInfo(
     bool Closable,
     string? Badge,
     Rect Bounds,
+    Rect VisibleBounds,
     bool IsOffscreen,
     int PositionInSet,
     int SetSize);

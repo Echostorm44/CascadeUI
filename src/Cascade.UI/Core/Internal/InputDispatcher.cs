@@ -5177,55 +5177,39 @@ internal sealed partial class InputDispatcher
             }
         }
 
+        // Row movement follows the on-screen order (TabularNavigation): a grouped grid shows its
+        // rows group by group with collapsed groups hidden, so "down" is not display row + 1.
         switch (evt.Key)
         {
             case Key.Up:
-                if (tdn.SelectedRowIndex > 0)
-                {
-                    tdn.MoveSelection(-1);
-                    tdn.ScrollIntoView(tdn.SelectedRowIndex);
-                    RequestRepaint?.Invoke();
-                }
+                tdn.MoveSelection(-1);
+                AfterTabularNavigation(tdn);
                 return true;
 
             case Key.Down:
-                if (tdn.SelectedRowIndex < tdn.RowCount - 1)
-                {
-                    tdn.MoveSelection(1);
-                    tdn.ScrollIntoView(tdn.SelectedRowIndex);
-                    RequestRepaint?.Invoke();
-                }
+                tdn.MoveSelection(1);
+                AfterTabularNavigation(tdn);
                 return true;
 
             case Key.Home:
                 tdn.SelectFirst();
-                tdn.ScrollIntoView(tdn.SelectedRowIndex);
-                RequestRepaint?.Invoke();
+                AfterTabularNavigation(tdn);
                 return true;
 
             case Key.End:
                 tdn.SelectLast();
-                tdn.ScrollIntoView(tdn.SelectedRowIndex);
-                RequestRepaint?.Invoke();
+                AfterTabularNavigation(tdn);
                 return true;
 
             case Key.PageUp:
-            {
-                int jump = Math.Max(1, tdn.VisibleRowCount - 1);
-                tdn.MoveSelection(-jump);
-                tdn.ScrollIntoView(tdn.SelectedRowIndex);
-                RequestRepaint?.Invoke();
+                tdn.MoveSelection(-TabularNavigation.PageSize(tdn));
+                AfterTabularNavigation(tdn);
                 return true;
-            }
 
             case Key.PageDown:
-            {
-                int jump = Math.Max(1, tdn.VisibleRowCount - 1);
-                tdn.MoveSelection(jump);
-                tdn.ScrollIntoView(tdn.SelectedRowIndex);
-                RequestRepaint?.Invoke();
+                tdn.MoveSelection(TabularNavigation.PageSize(tdn));
+                AfterTabularNavigation(tdn);
                 return true;
-            }
 
             case Key.F2:
                 // F2 starts editing the selected row, first editable column
@@ -5250,6 +5234,17 @@ internal sealed partial class InputDispatcher
             default:
                 return false;
         }
+    }
+
+    /// <summary>After a keyboard move: bring the selected row into view and repaint.</summary>
+    private void AfterTabularNavigation(ITabularDataNode tdn)
+    {
+        if (tdn.SelectedRowIndex >= 0)
+        {
+            tdn.ScrollIntoView(tdn.SelectedRowIndex);
+        }
+
+        RequestRepaint?.Invoke();
     }
 
     private async Task HandleTabularDataPasteAsync(ITabularDataNode tdn)

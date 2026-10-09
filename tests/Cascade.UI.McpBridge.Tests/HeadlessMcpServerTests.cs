@@ -18,6 +18,9 @@ namespace Cascade.UI.McpBridge.Tests;
 [NotInParallel("HeadlessMcpServer")]
 public sealed class HeadlessMcpServerTests
 {
+    // Registry rows registered before their process started are stale (a reused pid), so the
+    // ordering tests stamp real registration times.
+    private static readonly long RegisteredAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
     // ── Headless mode tests ────────────────────────────────────
 
@@ -531,7 +534,7 @@ public sealed class HeadlessMcpServerTests
             Title = "Old",
             Pid = Environment.ProcessId,
             Focused = false,
-            ActivatedAt = 100,
+            ActivatedAt = RegisteredAt + 100,
         });
 
         registry.Register(new InstanceEntry
@@ -541,7 +544,7 @@ public sealed class HeadlessMcpServerTests
             Title = "New",
             Pid = Environment.ProcessId,
             Focused = false,
-            ActivatedAt = 200,
+            ActivatedAt = RegisteredAt + 200,
         });
 
         var target = registry.FindTarget();
@@ -570,7 +573,7 @@ public sealed class HeadlessMcpServerTests
             Title = "Unfocused",
             Pid = Environment.ProcessId,
             Focused = false,
-            ActivatedAt = 200,
+            ActivatedAt = RegisteredAt + 200,
         });
 
         registry.Register(new InstanceEntry
@@ -580,7 +583,7 @@ public sealed class HeadlessMcpServerTests
             Title = "Focused",
             Pid = Environment.ProcessId,
             Focused = true,
-            ActivatedAt = 100,
+            ActivatedAt = RegisteredAt + 100,
         });
 
         var target = registry.FindTarget();
@@ -607,7 +610,7 @@ public sealed class HeadlessMcpServerTests
             Title = "One",
             Pid = Environment.ProcessId,
             Focused = false,
-            ActivatedAt = 100,
+            ActivatedAt = RegisteredAt + 100,
         });
 
         registry.Register(new InstanceEntry
@@ -617,7 +620,7 @@ public sealed class HeadlessMcpServerTests
             Title = "Two",
             Pid = Environment.ProcessId,
             Focused = true,
-            ActivatedAt = 200,
+            ActivatedAt = RegisteredAt + 200,
         });
 
         var target = registry.FindTarget("target-one");

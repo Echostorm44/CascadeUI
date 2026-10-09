@@ -131,7 +131,7 @@ internal sealed partial class UiaElement : UiaFragment,
         int resolved = Resolve(tree);
         if (resolved == AccessibleTree.None)
         {
-            throw new COMException("The element is no longer in the tree.", UiaIds.UIA_E_ELEMENTNOTAVAILABLE);
+            throw new UiaException("The element is no longer in the tree.", UiaIds.UIA_E_ELEMENTNOTAVAILABLE);
         }
         return resolved;
     }
@@ -139,7 +139,7 @@ internal sealed partial class UiaElement : UiaFragment,
     private IListViewNode ListNode => (IListViewNode)list!.node!;
 
     private InputDispatcher Input => Context.Input
-        ?? throw new COMException("No input dispatcher.", UiaIds.UIA_E_ELEMENTNOTAVAILABLE);
+        ?? throw new UiaException("No input dispatcher.", UiaIds.UIA_E_ELEMENTNOTAVAILABLE);
 
     // ── Navigation and geometry ───────────────────────────────────────
 
@@ -573,11 +573,11 @@ internal sealed partial class UiaElement : UiaFragment,
     {
         if (!SupportsPattern(UiaIds.InvokePattern))
         {
-            throw new COMException("Invoke is not supported.", UiaIds.UIA_E_INVALIDOPERATION);
+            throw new UiaException("Invoke is not supported.", UiaIds.UIA_E_INVALIDOPERATION);
         }
         if (!IsEnabled())
         {
-            throw new COMException("The element is disabled.", UiaIds.UIA_E_ELEMENTNOTENABLED);
+            throw new UiaException("The element is disabled.", UiaIds.UIA_E_ELEMENTNOTENABLED);
         }
 
         switch (kind)
@@ -618,12 +618,12 @@ internal sealed partial class UiaElement : UiaFragment,
         ResolveOrThrow(out _);
         if (!SupportsPattern(UiaIds.ValuePattern) || IsValueReadOnly())
         {
-            throw new COMException("The value is read-only.", UiaIds.UIA_E_INVALIDOPERATION);
+            throw new UiaException("The value is read-only.", UiaIds.UIA_E_INVALIDOPERATION);
         }
 
         if (!Input.AutomationSetText(node!, value))
         {
-            throw new COMException("The value cannot be set.", UiaIds.UIA_E_INVALIDOPERATION);
+            throw new UiaException("The value cannot be set.", UiaIds.UIA_E_INVALIDOPERATION);
         }
     }
 
@@ -649,7 +649,7 @@ internal sealed partial class UiaElement : UiaFragment,
     {
         if (!SupportsPattern(UiaIds.ExpandCollapsePattern))
         {
-            throw new COMException("ExpandCollapse is not supported.", UiaIds.UIA_E_INVALIDOPERATION);
+            throw new UiaException("ExpandCollapse is not supported.", UiaIds.UIA_E_INVALIDOPERATION);
         }
 
         bool expanded = ExpandState() == UiaIds.ExpandCollapseState_Expanded;
@@ -684,7 +684,7 @@ internal sealed partial class UiaElement : UiaFragment,
     {
         if (!SupportsPattern(UiaIds.SelectionItemPattern))
         {
-            throw new COMException("SelectionItem is not supported.", UiaIds.UIA_E_INVALIDOPERATION);
+            throw new UiaException("SelectionItem is not supported.", UiaIds.UIA_E_INVALIDOPERATION);
         }
 
         if (kind == UiaElementKind.Row)
@@ -775,7 +775,7 @@ internal sealed partial class UiaElement : UiaFragment,
 
         if (!IsKeyboardFocusable())
         {
-            throw new COMException("The element cannot take focus.", UiaIds.UIA_E_INVALIDOPERATION);
+            throw new UiaException("The element cannot take focus.", UiaIds.UIA_E_INVALIDOPERATION);
         }
         Input.AutomationFocus(node!);
     }
@@ -945,11 +945,11 @@ internal sealed partial class UiaElement : UiaFragment,
             ResolveOrThrow(out _);
             if (node is not Slider slider || RangeValue().ReadOnly)
             {
-                throw new COMException("The value is read-only.", UiaIds.UIA_E_INVALIDOPERATION);
+                throw new UiaException("The value is read-only.", UiaIds.UIA_E_INVALIDOPERATION);
             }
             if (value < slider.Min || value > slider.Max)
             {
-                throw new ArgumentOutOfRangeException(nameof(value));
+                throw new UiaException("The value is outside the range.", UiaIds.E_INVALIDARG);
             }
             Input.AutomationSetSliderValue(slider, (float)value);
             return UiaIds.S_OK;
@@ -1008,7 +1008,7 @@ internal sealed partial class UiaElement : UiaFragment,
             ResolveOrThrow(out _);
             if (!IsEnabled())
             {
-                throw new COMException("The element is disabled.", UiaIds.UIA_E_ELEMENTNOTENABLED);
+                throw new UiaException("The element is disabled.", UiaIds.UIA_E_ELEMENTNOTENABLED);
             }
             Input.AutomationInvoke(node!);
             return UiaIds.S_OK;
@@ -1081,7 +1081,7 @@ internal sealed partial class UiaElement : UiaFragment,
             if (kind == UiaElementKind.Row && ListNode.SelectionModeValue != SelectionMode.Single)
             {
                 // Multi-selection lists select one row at a time through the binding today.
-                throw new COMException("Adding to the selection is not supported.", UiaIds.UIA_E_INVALIDOPERATION);
+                throw new UiaException("Adding to the selection is not supported.", UiaIds.UIA_E_INVALIDOPERATION);
             }
             SelectCore();
             return UiaIds.S_OK;
@@ -1094,7 +1094,7 @@ internal sealed partial class UiaElement : UiaFragment,
         {
             ResolveOrThrow(out _);
             return IsSelected()
-                ? throw new COMException("A selected item cannot be deselected.", UiaIds.UIA_E_INVALIDOPERATION)
+                ? throw new UiaException("A selected item cannot be deselected.", UiaIds.UIA_E_INVALIDOPERATION)
                 : UiaIds.S_OK;
         });
     }
@@ -1165,7 +1165,7 @@ internal sealed partial class UiaElement : UiaFragment,
             ResolveOrThrow(out _);
             if (kind != UiaElementKind.Row)
             {
-                throw new COMException("ScrollItem is not supported.", UiaIds.UIA_E_INVALIDOPERATION);
+                throw new UiaException("ScrollItem is not supported.", UiaIds.UIA_E_INVALIDOPERATION);
             }
             Input.AutomationScrollRowIntoView(ListNode, index);
             return UiaIds.S_OK;

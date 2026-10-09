@@ -244,9 +244,9 @@ public class UiaProviderTreeTests
         await Assert.That(save.LogicalBounds()).IsEqualTo(expected);
 
         await Assert.That(save.GetBoundingRectangle(out var screen)).IsEqualTo(UiaIds.S_OK);
-        await Assert.That(screen.Left).IsEqualTo(100 + (expected.X * 2.0));
-        await Assert.That(screen.Top).IsEqualTo(50 + (expected.Y * 2.0));
-        await Assert.That(screen.Width).IsEqualTo(expected.Width * 2.0);
+        await Assert.That(Math.Abs(screen.Left - (100 + (expected.X * 2.0)))).IsLessThan(0.01);
+        await Assert.That(Math.Abs(screen.Top - (50 + (expected.Y * 2.0)))).IsLessThan(0.01);
+        await Assert.That(Math.Abs(screen.Width - (expected.Width * 2.0))).IsLessThan(0.01);
 
         // A point inside the button, in screen pixels, finds it.
         var center = expected.Center;

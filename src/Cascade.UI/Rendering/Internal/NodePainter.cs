@@ -1012,7 +1012,7 @@ internal sealed partial class NodePainter
         if (root is ISelectNode { IsOpen: true }
             or IComboboxNode { IsOpen: true }
             or IMultiSelectNode { IsOpen: true }
-            or MenuBar { IsOpen: true }
+            or MenuBar { IsActive: true }
             or DatePicker { IsCalendarOpen: true }
             or DateRangePicker { IsCalendarOpen: true }
             or DateTimePicker { IsCalendarOpen: true }
@@ -12999,6 +12999,12 @@ internal sealed partial class NodePainter
 
     // ── MenuBar ───────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Paints the bar and its top-level labels. The open menu itself is the window's shared menu
+    /// overlay (<see cref="PaintMenuOverlay"/>); here the open label is a solid accent pill, the
+    /// hovered one a wash, the keyboard-focused one (Alt / F10) a wash with a focus ring, and the
+    /// access keys are underlined while Alt is held or the bar is active from the keyboard.
+    /// </summary>
     private void PaintMenuBar(MenuBar mb, Rect bounds)
     {
         const float barHeight = 30f;
@@ -13007,23 +13013,8 @@ internal sealed partial class NodePainter
 
         mb.AbsoluteBounds = new Rect(absoluteX, absoluteY, bounds.Width, bounds.Height);
 
-        // Track dropdown open state for entrance animation
-        // Use absolute bounds position for stable identity across re-renders.
-        int mbKey = HashCode.Combine(
-            (int)Math.Round(absoluteY * 10f),
-            (int)Math.Round(bounds.Width * 10f));
-        if (!mb.IsOpen)
-        {
-            menuBarOpenTick.Remove(mbKey);
-        }
-        else if (!menuBarOpenTick.ContainsKey(mbKey))
-        {
-            menuBarOpenTick[mbKey] = Environment.TickCount64;
-        }
-
         var bgColor = theme.Colors.SurfaceAlt;
         var textColor = theme.Colors.Text;
-        var mutedColor = theme.Colors.TextMuted;
         var hoverBg = theme.Colors.Text.Opacity(0.08f);
         // An open top-level menu reads like macOS: a solid accent-filled pill with
         // white-on-accent text, not a translucent wash with tinted text (which looks
@@ -13039,7 +13030,6 @@ internal sealed partial class NodePainter
             new Point(bounds.X + bounds.Width, bounds.Y + bounds.Height),
             new Stroke(borderColor.Opacity(0.3f), 1f));
 
-        // Ensure label bounds array is the right size
         if (mb.MenuLabelBounds.Length != mb.Menus.Count)
         {
             mb.MenuLabelBounds = new Rect[mb.Menus.Count];
@@ -13048,278 +13038,51 @@ internal sealed partial class NodePainter
         // Center menu items vertically when bounds are taller than intrinsic height
         float barY = bounds.Y + (bounds.Height - barHeight) / 2f;
         float x = bounds.X;
-        float absX = absoluteX;
-        float absY = absoluteY;
 
         for (int i = 0; i < mb.Menus.Count; i++)
         {
             var menu = mb.Menus[i];
+            string label = menu.DisplayLabel;
             // Measure the real text width so the highlight box has equal padding on
             // both sides — a char-count × average-width estimate is wrong for labels
             // with wide glyphs (e.g. "View") and leaves no padding on the right.
-            float labelW = ctx.MeasureText(menu.Label, fontSize).Width + labelPadH * 2f;
+            float labelW = ctx.MeasureText(label, fontSize).Width + labelPadH * 2f;
             var labelRect = new Rect(x, barY, labelW, barHeight);
 
-            // Store absolute bounds for hit testing
-            mb.MenuLabelBounds[i] = new Rect(absX + x - bounds.X, absY, labelW, barHeight);
+            // Store absolute bounds for hit testing (and to anchor the open menu below).
+            mb.MenuLabelBounds[i] = new Rect(absoluteX + x - bounds.X, absoluteY + barY - bounds.Y, labelW, barHeight);
 
-            // Highlight: open menu (solid accent pill) or hovered (subtle wash).
-            // Inset vertically so the fill reads as a pill inside the bar, not a
-            // full-height block.
-            var highlightRect = new Rect(
-                labelRect.X,
-                labelRect.Y + 3f,
-                labelRect.Width,
-                labelRect.Height - 6f);
-            if (mb.OpenMenuIndex == i)
+            // Inset vertically so the fill reads as a pill inside the bar, not a full-height block.
+            var highlightRect = new Rect(labelRect.X, labelRect.Y + 3f, labelRect.Width, labelRect.Height - 6f);
+            bool open = mb.OpenMenuIndex == i;
+            if (open)
             {
                 ctx.DrawRect(highlightRect, activeBg, radius: 5f);
+            }
+            else if (mb.FocusedMenuIndex == i)
+            {
+                ctx.DrawRect(highlightRect, hoverBg, radius: 5f);
+                ctx.DrawRect(highlightRect, stroke: new Stroke(theme.Colors.Primary, 1.5f), radius: 5f);
             }
             else if (mb.HoveredMenuIndex == i)
             {
                 ctx.DrawRect(highlightRect, hoverBg, radius: 5f);
             }
 
-            // Draw label text — white-on-accent for the open menu, normal otherwise
-            var labelColor = mb.OpenMenuIndex == i ? theme.Colors.TextOnPrimary : textColor;
-            PaintText(menu.Label, labelRect, labelPadH, labelColor, fontSize: fontSize);
+            var labelColor = open ? theme.Colors.TextOnPrimary : textColor;
+            PaintText(label, labelRect, labelPadH, labelColor, fontSize: fontSize);
+
+            if (mb.ShowAccessKeys && menu.AccessKeyIndex >= 0)
+            {
+                float before = ctx.MeasureText(label[..menu.AccessKeyIndex], fontSize).Width;
+                float keyWidth = ctx.MeasureText(label.Substring(menu.AccessKeyIndex, 1), fontSize).Width;
+                float underlineY = MathF.Round(labelRect.Y + (barHeight / 2f) + (fontSize * 0.55f)) + 0.5f;
+                float startX = labelRect.X + labelPadH + before;
+                ctx.DrawLine(new Point(startX, underlineY), new Point(startX + keyWidth, underlineY), new Stroke(labelColor, 1f));
+            }
 
             x += labelW;
         }
-
-        // Dropdown overlay (deferred)
-        if (mb.IsOpen && mb.OpenMenuIndex < mb.Menus.Count)
-        {
-            float capturedAbsX = absoluteX;
-            float capturedAbsY = absoluteY;
-
-            deferredOverlays ??= [];
-            deferredOverlays.Add(() =>
-            {
-                PaintMenuBarDropdown(mb, capturedAbsX, capturedAbsY);
-            });
-        }
-        else
-        {
-            mb.DropdownBounds = default;
-        }
-    }
-
-    private void PaintMenuBarDropdown(MenuBar mb, float barAbsX, float barAbsY)
-    {
-        var menu = mb.Menus[mb.OpenMenuIndex];
-        var items = menu.Items;
-        if (items.Count == 0)
-        {
-            return;
-        }
-
-        const float itemHeight = 28f;
-        const float separatorHeight = 9f;
-        const float headerHeight = 24f;
-        const float padH = 12f;
-        const float fontSize = 13f;
-        const float iconW = 20f;
-        const float shortcutGap = 24f;
-        const float submenuArrowW = 16f;
-        const float gap = 4f;
-        float radius = 6f;
-
-        mb.MenuItemHeight = itemHeight;
-
-        // Calculate dropdown size
-        float totalHeight = 8f; // top padding
-        float maxLabelW = 0f;
-        float maxShortcutW = 0f;
-
-        for (int i = 0; i < items.Count; i++)
-        {
-            var item = items[i];
-            if (item.Label == null && item.CustomContent == Node.Empty)
-            {
-                totalHeight += separatorHeight;
-            }
-            else if (!item.Enabled && item.OnClick == null && item.ToggleValue.OnChange is null && item.Items == null)
-            {
-                totalHeight += headerHeight;
-            }
-            else
-            {
-                totalHeight += itemHeight;
-                // Measure the real glyph width so wide labels (e.g. "Sort by Modified")
-                // aren't clipped by a char-count × average-width underestimate.
-                float labelLen = string.IsNullOrEmpty(item.Label)
-                    ? 0f
-                    : ctx.MeasureText(item.Label, fontSize).Width;
-                if (labelLen > maxLabelW)
-                {
-                    maxLabelW = labelLen;
-                }
-                if (item.Shortcut != null)
-                {
-                    float shortcutLen = ctx.MeasureText(item.Shortcut.Value.ToString(), fontSize - 1f).Width;
-                    if (shortcutLen > maxShortcutW)
-                    {
-                        maxShortcutW = shortcutLen;
-                    }
-                }
-            }
-        }
-        totalHeight += 8f; // bottom padding
-
-        float dropdownWidth = padH + iconW + maxLabelW + shortcutGap + maxShortcutW + submenuArrowW + padH;
-        dropdownWidth = Math.Max(dropdownWidth, 180f);
-
-        // Position below the menu label
-        var labelBounds = mb.MenuLabelBounds[mb.OpenMenuIndex];
-        float dropX = labelBounds.X;
-        float dropY = labelBounds.Y + labelBounds.Height + gap;
-
-        var dropdownBounds = new Rect(dropX, dropY, dropdownWidth, totalHeight);
-        mb.DropdownBounds = dropdownBounds;
-
-        // Entrance animation: scale from top + opacity fade
-        // Use the same content-position key as PaintMenuBar for consistent identity.
-        bool mbReducedMotion = ControlStateAnimator.ReducedMotion;
-        float openT = 1f;
-        int mbDropKey = HashCode.Combine(
-            (int)Math.Round(barAbsY * 10f),
-            (int)Math.Round(mb.AbsoluteBounds.Width * 10f));
-        if (!mbReducedMotion && menuBarOpenTick.TryGetValue(mbDropKey, out long openTick))
-        {
-            float elapsedMs = (float)(Environment.TickCount64 - openTick);
-            openT = Math.Clamp(elapsedMs / 150f, 0f, 1f);
-            openT = 1f - (1f - openT) * (1f - openT); // ease-out
-        }
-
-        ScopeGuard mbScaleScope = default;
-        ScopeGuard mbOpacityScope = default;
-        if (!mbReducedMotion && openT < 0.999f)
-        {
-            float scale = 0.92f + 0.08f * openT;
-            mbScaleScope = ctx.PushScale(scale, scale, new Point(dropX + dropdownWidth / 2f, dropY));
-            mbOpacityScope = ctx.PushOpacity(openT);
-            ControlStateAnimator.SignalActiveTransition();
-        }
-
-        // Shadow
-        var shadowBounds = new Rect(dropX + 2, dropY + 2, dropdownWidth, totalHeight);
-        ctx.DrawRect(shadowBounds, new ColorValue("#000000").Opacity(0.15f), radius: radius);
-
-        // Background
-        ctx.DrawRect(dropdownBounds, theme.Colors.Surface, radius: radius);
-        ctx.DrawRect(dropdownBounds, stroke: new Stroke(theme.Colors.Border.Opacity(0.3f), 1f), radius: radius);
-
-        // Items
-        float y = dropY + 4f; // top padding
-        var textColor = theme.Colors.Text;
-        var mutedColor = theme.Colors.TextMuted;
-        var hoverBg = theme.Colors.Text.Opacity(0.08f);
-        var checkColor = theme.Colors.Primary;
-
-        for (int i = 0; i < items.Count; i++)
-        {
-            var item = items[i];
-
-            // Per-item stagger: each item fades in with slight delay
-            ScopeGuard itemStaggerScope = default;
-            if (!mbReducedMotion && openT < 0.999f)
-            {
-                float itemDelay = i * 20f;
-                float elapsedForItem = menuBarOpenTick.TryGetValue(mbDropKey, out long ot)
-                    ? (float)(Environment.TickCount64 - ot) - itemDelay : 1000f;
-                float itemT = Math.Clamp(elapsedForItem / 100f, 0f, 1f);
-                itemT = 1f - (1f - itemT) * (1f - itemT);
-                if (itemT < 0.999f)
-                {
-                    itemStaggerScope = ctx.PushOpacity(itemT);
-                }
-            }
-
-            // Separator
-            if (item.Label == null && item.CustomContent == Node.Empty)
-            {
-                float sepY = MathF.Round(y + separatorHeight / 2f);
-                ctx.DrawLine(
-                    new Point(dropX + padH, sepY),
-                    new Point(dropX + dropdownWidth - padH, sepY),
-                    new Stroke(theme.Colors.Border.Opacity(0.3f), 1f));
-                y += separatorHeight;
-                itemStaggerScope.Dispose();
-                continue;
-            }
-
-            // Header (non-interactive disabled label)
-            if (!item.Enabled && item.OnClick == null && item.ToggleValue.OnChange is null && item.Items == null)
-            {
-                var headerRect = new Rect(dropX + padH, y, dropdownWidth - padH * 2, headerHeight);
-                PaintText(item.Label ?? "", headerRect, 0f, mutedColor, fontSize: fontSize - 1f);
-                y += headerHeight;
-                itemStaggerScope.Dispose();
-                continue;
-            }
-
-            var itemRect = new Rect(dropX + 4f, y, dropdownWidth - 8f, itemHeight);
-
-            // Highlight
-            if (mb.HighlightedItemIndex == i && item.Enabled)
-            {
-                ctx.DrawRect(itemRect, hoverBg, radius: 4f);
-            }
-
-            float ix = dropX + padH;
-
-            // Checkmark for toggles
-            if (item.ToggleValue.OnChange is not null)
-            {
-                if (item.ToggleValue.Value)
-                {
-                    var checkBounds = new Rect(ix, y, iconW, itemHeight);
-                    PaintText("✓", checkBounds, 0f, checkColor, fontSize: fontSize);
-                }
-                ix += iconW;
-            }
-            else
-            {
-                // Icon space (even if no icon, for alignment)
-                ix += iconW;
-            }
-
-            // Label
-            var labelColor = item.Enabled ? textColor : mutedColor;
-            var labelBoundsItem = new Rect(ix, y, maxLabelW + 4f, itemHeight);
-            PaintText(item.Label ?? "", labelBoundsItem, 0f, labelColor, fontSize: fontSize);
-
-            // Shortcut
-            if (item.Shortcut != null)
-            {
-                float shortcutX = dropX + dropdownWidth - padH - maxShortcutW - submenuArrowW;
-                var shortcutBounds = new Rect(shortcutX, y, maxShortcutW + submenuArrowW, itemHeight);
-                PaintText(item.Shortcut.Value.ToString(), shortcutBounds, 0f, mutedColor, fontSize: fontSize - 1f);
-            }
-
-            // Submenu arrow
-            if (item.Items != null && item.Items.Count > 0)
-            {
-                float arrowX = dropX + dropdownWidth - padH - 8f;
-                float arrowY2 = y + itemHeight / 2f;
-                float arrowSize = 4f;
-                ctx.DrawLine(
-                    new Point(arrowX, arrowY2 - arrowSize),
-                    new Point(arrowX + arrowSize, arrowY2),
-                    new Stroke(mutedColor, 1.5f));
-                ctx.DrawLine(
-                    new Point(arrowX + arrowSize, arrowY2),
-                    new Point(arrowX, arrowY2 + arrowSize),
-                    new Stroke(mutedColor, 1.5f));
-            }
-
-            y += itemHeight;
-            itemStaggerScope.Dispose();
-        }
-
-        mbScaleScope.Dispose();
-        mbOpacityScope.Dispose();
     }
 
     // ── PropertyGrid ──────────────────────────────────────────────────
@@ -15099,9 +14862,6 @@ internal sealed partial class NodePainter
             }
         }
     }
-
-    // ── Animation state for MenuBar dropdown entrance ─────────────────
-    private static readonly Dictionary<int, long> menuBarOpenTick = new();
 
     // ── TreeView ───────────────────────────────────────────────────────
 

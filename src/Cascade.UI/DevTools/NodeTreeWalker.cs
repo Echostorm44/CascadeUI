@@ -1000,7 +1000,37 @@ internal static class NodeTreeWalker
         };
     }
 
-    // A submenu is named by the item that opened it; the root by its split button, else "Context menu".
+    private static void AddMenuBarAccessibilityNodes(MenuBar bar, string barId, List<AccessibleNode> children)
+    {
+        var labels = bar.MenuLabelBounds;
+        for (int i = 0; i < bar.Menus.Count; i++)
+        {
+            var menuDef = bar.Menus[i];
+            var states = new Dictionary<string, string>
+            {
+                ["has_popup"] = "menu",
+                ["expanded"] = bar.OpenMenuIndex == i ? "true" : "false",
+            };
+            if (menuDef.AccessKey is { } key)
+            {
+                states["access_key"] = $"Alt+{key}";
+            }
+
+            children.Add(new AccessibleNode
+            {
+                NodeId = $"{barId}/menu-{i}",
+                Role = AccessibleRole.MenuItem,
+                Label = menuDef.DisplayLabel,
+                Focusable = true,
+                Focused = bar.FocusedMenuIndex == i,
+                StateProperties = states,
+                Bounds = i < labels.Length ? labels[i] : null,
+            });
+        }
+    }
+
+    // A submenu is named by the item that opened it; the root by its owner (a split button, a menu
+    // bar's menu), else "Context menu".
     private static string MenuAccessibleLabel(MenuOverlay menu, int levelIndex)
     {
         if (levelIndex > 0)
@@ -1009,7 +1039,12 @@ internal static class NodeTreeWalker
             return menu.Levels[levelIndex - 1].Items[parent].Label ?? "Submenu";
         }
 
-        return menu.Owner is SplitButton owner ? owner.Label.Resolve() : "Context menu";
+        return menu.Owner switch
+        {
+            SplitButton owner => owner.Label.Resolve(),
+            MenuBar { OpenMenuIndex: >= 0 } bar when bar.OpenMenuIndex < bar.Menus.Count => bar.Menus[bar.OpenMenuIndex].DisplayLabel,
+            _ => "Context menu",
+        };
     }
 
     private static AccessibleNode BuildMenuAccessibilityNode(MenuOverlay menu, int levelIndex)
@@ -1019,12 +1054,43 @@ internal static class NodeTreeWalker
         for (int i = 0; i < level.Items.Length; i++)
         {
             var item = level.Items[i];
-            if (item.Label is null)
+            var bounds = level.Bounds;
+            var itemBounds = new Rect(bounds.X, level.ItemTop(i), bounds.Width, level.ItemHeights[i]);
+            switch (item.Kind)
             {
-                continue;
+                case MenuItemKind.Separator:
+                    continue;
+
+                case MenuItemKind.Header:
+                    items.Add(new AccessibleNode
+                    {
+                        NodeId = $"menu-{levelIndex}-item-{i}",
+                        Role = AccessibleRole.Heading,
+                        Label = item.Label,
+                        Bounds = itemBounds,
+                    });
+                    continue;
+
+                case MenuItemKind.Custom:
+                {
+                    var content = BuildAccessibilityNode(item.Content);
+                    items.Add(new AccessibleNode
+                    {
+                        NodeId = $"menu-{levelIndex}-item-{i}",
+                        Role = content.Role,
+                        Label = content.Label,
+                        Bounds = itemBounds,
+                        Children = content.Children,
+                    });
+                    continue;
+                }
             }
 
             var states = new Dictionary<string, string>();
+            if (item.Kind is MenuItemKind.Toggle or MenuItemKind.Radio)
+            {
+                states["checked"] = item.IsChecked ? "true" : "false";
+            }
             if (!string.IsNullOrEmpty(item.Shortcut))
             {
                 states["shortcut"] = item.Shortcut;
@@ -1039,17 +1105,21 @@ internal static class NodeTreeWalker
                 states["destructive"] = "true";
             }
 
-            var bounds = level.Bounds;
             items.Add(new AccessibleNode
             {
                 NodeId = $"menu-{levelIndex}-item-{i}",
-                Role = AccessibleRole.MenuItem,
+                Role = item.Kind switch
+                {
+                    MenuItemKind.Toggle => AccessibleRole.MenuItemCheckbox,
+                    MenuItemKind.Radio => AccessibleRole.MenuItemRadio,
+                    _ => AccessibleRole.MenuItem,
+                },
                 Label = item.Label,
                 Focusable = !item.Disabled,
                 Focused = i == level.Highlighted,
                 Disabled = item.Disabled,
                 StateProperties = states,
-                Bounds = new Rect(bounds.X, level.ItemTop(i), bounds.Width, level.ItemHeights[i]),
+                Bounds = itemBounds,
             });
         }
 
@@ -1727,6 +1797,13 @@ internal static class NodeTreeWalker
         foreach (var child in GetChildren(node))
         {
             children.Add(BuildAccessibilityNode(child));
+        }
+
+        // A menu bar's top-level menus are painted labels: expose each as a menu item that opens
+        // a menu (expanded while open, focused while the bar has keyboard focus on it).
+        if (node is MenuBar bar)
+        {
+            AddMenuBarAccessibilityNodes(bar, info.id, children);
         }
 
         if (node is ITabularDataNode table)

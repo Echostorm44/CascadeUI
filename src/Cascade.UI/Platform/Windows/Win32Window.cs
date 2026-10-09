@@ -51,6 +51,12 @@ internal sealed class Win32Window : IDisposable
 
     // Callbacks for message routing.
     internal Action<uint, nuint, nint>? MessageReceived;
+
+    /// <summary>
+    /// Asked right after a system key message (WM_SYSKEYDOWN/UP, WM_SYSCHAR) was delivered: true
+    /// when the app used it, so the default window procedure must not run for it.
+    /// </summary>
+    internal Func<bool>? SystemKeyHandled;
     internal Func<bool>? CloseRequested;
     internal Func<bool>? MinimizeRequested;
     internal Action<bool>? ActivationChanged;
@@ -1139,8 +1145,17 @@ internal sealed class Win32Window : IDisposable
 
             case Win32.WM_SYSKEYDOWN:
             case Win32.WM_SYSKEYUP:
+            case Win32.WM_SYSCHAR:
             {
                 MessageReceived?.Invoke(msg, wParam, lParam);
+
+                // The app used the key (a menu bar: Alt tapped alone, F10, Alt+letter): the default
+                // would enter the system-menu loop (Alt, F10) or beep (an Alt+letter with no window
+                // menu to match).
+                if (SystemKeyHandled?.Invoke() == true)
+                {
+                    return 0;
+                }
 
                 // Shift+F10 is the context-menu key, which the input dispatcher handles. Left to
                 // DefWindowProc, F10 is also the menu key: the key-down arms it and the key-up
@@ -1178,7 +1193,6 @@ internal sealed class Win32Window : IDisposable
             case Win32.WM_KEYDOWN:
             case Win32.WM_KEYUP:
             case Win32.WM_CHAR:
-            case Win32.WM_SYSCHAR:
             case Win32.WM_TOUCH:
             case Win32.WM_POINTERDOWN:
             case Win32.WM_POINTERUP:

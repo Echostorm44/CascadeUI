@@ -179,6 +179,8 @@ internal sealed class AtSpiBridge : IPlatformAccessibilityBridge
             AccessibleRole.TabPanel => 39,      // ATSPI_ROLE_PANEL
             AccessibleRole.MenuBar => 34,       // ATSPI_ROLE_MENU_BAR
             AccessibleRole.MenuItem => 35,      // ATSPI_ROLE_MENU_ITEM
+            AccessibleRole.MenuItemCheckbox => 8, // ATSPI_ROLE_CHECK_MENU_ITEM
+            AccessibleRole.MenuItemRadio => 45,   // ATSPI_ROLE_RADIO_MENU_ITEM
             AccessibleRole.Menu => 33,          // ATSPI_ROLE_MENU
             AccessibleRole.Dialog => 16,        // ATSPI_ROLE_DIALOG
             AccessibleRole.AlertDialog => 2,    // ATSPI_ROLE_ALERT

@@ -406,6 +406,7 @@ internal sealed class UiaProvider : IPlatformAccessibilityBridge
             AccessibleRole.TabPanel => UiaIds.PaneControl,
             AccessibleRole.MenuBar => UiaIds.MenuBarControl,
             AccessibleRole.MenuItem => UiaIds.MenuItemControl,
+            AccessibleRole.MenuItemCheckbox or AccessibleRole.MenuItemRadio => UiaIds.MenuItemControl,
             AccessibleRole.Menu => UiaIds.MenuControl,
             AccessibleRole.Dialog => UiaIds.WindowControl,
             AccessibleRole.AlertDialog => UiaIds.WindowControl,

@@ -501,7 +501,7 @@ internal sealed partial class InputDispatcher
             || openDateRangePicker is not null
             || openTimePicker is not null
             || openMonthPicker is not null
-            || openMenuBar is not null
+            || activeMenuBar is not null
             || openNotificationBell is not null
             || openGridOverlay is { IsSelectDropdownOpen: true } or { IsDatePopupOpen: true } or { IsColumnChooserOpen: true };
     }

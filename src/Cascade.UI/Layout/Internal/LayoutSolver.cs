@@ -2216,7 +2216,7 @@ internal static class LayoutSolver
         float totalWidth = 0f;
         for (int i = 0; i < mb.Menus.Count; i++)
         {
-            float labelW = mb.Menus[i].Label.Length * avgCharW + labelPadH * 2f;
+            float labelW = mb.Menus[i].DisplayLabel.Length * avgCharW + labelPadH * 2f;
             totalWidth += labelW;
         }
 

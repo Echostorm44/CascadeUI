@@ -89,13 +89,19 @@ internal sealed partial class NodePainter
             using var clip = ctx.PushClip(new Rect(b.X, viewTop, b.Width, viewBottom - viewTop));
 
             float textInset = m.TextInset;
-            float iconX = b.X + textInset;
+            float checkX = b.X + textInset;
+            float iconX = checkX + (level.HasChecks ? m.CheckColumn : 0f);
             float labelX = iconX + (level.HasIcons ? m.IconColumn : 0f);
             float arrowWidth = level.HasSubmenus ? m.SubmenuArrowWidth : 0f;
             float shortcutRight = b.Right - textInset - arrowWidth;
             float labelRight = level.ShortcutWidth > 0f
                 ? shortcutRight - level.ShortcutWidth - m.ShortcutGap
                 : shortcutRight;
+
+            if (!level.ContentLaidOut)
+            {
+                LayOutMenuContent(level, b.Width - (m.InsetH * 2f));
+            }
 
             for (int i = 0; i < level.Items.Length; i++)
             {
@@ -107,14 +113,26 @@ internal sealed partial class NodePainter
                 }
 
                 var item = level.Items[i];
-                if (item.Label is null)
+                switch (item.Kind)
                 {
-                    float sepY = MathF.Round(y + (h / 2f));
-                    ctx.DrawLine(
-                        new Point(b.X + m.InsetH + 4f, sepY),
-                        new Point(b.Right - m.InsetH - 4f, sepY),
-                        new Stroke(st.BorderColor, 1f));
-                    continue;
+                    case MenuItemKind.Separator:
+                    {
+                        float sepY = MathF.Round(y + (h / 2f));
+                        ctx.DrawLine(
+                            new Point(b.X + m.InsetH + 4f, sepY),
+                            new Point(b.Right - m.InsetH - 4f, sepY),
+                            new Stroke(st.BorderColor, 1f));
+                        continue;
+                    }
+
+                    case MenuItemKind.Header:
+                        PaintText(item.Label ?? "", new Rect(b.X + textInset, y, Math.Max(0f, b.Width - (textInset * 2f)), h), 0f,
+                            st.TextColor.ScaleAlpha(0.55f), fontSize: m.HeaderFontSize, overflow: TextOverflow.Ellipsis);
+                        continue;
+
+                    case MenuItemKind.Custom:
+                        PaintMenuContent(item.Content, b.X + m.InsetH, y);
+                        continue;
                 }
 
                 bool enabled = !item.Disabled;
@@ -127,6 +145,11 @@ internal sealed partial class NodePainter
                 float alpha = enabled ? 1f : 0.4f;
                 var textColor = (item.Style == MenuItemStyle.Destructive ? theme.Colors.Danger : st.TextColor).ScaleAlpha(alpha);
 
+                if (item.IsChecked && item.Kind is MenuItemKind.Toggle or MenuItemKind.Radio)
+                {
+                    PaintMenuCheck(item.Kind, checkX, y, h, m, theme.Colors.Primary.ScaleAlpha(alpha));
+                }
+
                 if (item.Icon is { IsLayoutEmpty: false } icon)
                 {
                     PaintMenuIcon(icon, iconX, y, h, m, alpha);
@@ -134,7 +157,7 @@ internal sealed partial class NodePainter
 
                 // A label with no shortcut may run into the (empty) shortcut column.
                 float labelEnd = string.IsNullOrEmpty(item.Shortcut) ? shortcutRight : labelRight;
-                PaintText(item.Label, new Rect(labelX, y, Math.Max(0f, labelEnd - labelX), h), 0f, textColor,
+                PaintText(item.Label ?? "", new Rect(labelX, y, Math.Max(0f, labelEnd - labelX), h), 0f, textColor,
                     fontSize: m.FontSize, overflow: TextOverflow.Ellipsis);
 
                 if (!string.IsNullOrEmpty(item.Shortcut))
@@ -159,6 +182,52 @@ internal sealed partial class NodePainter
             opacityScope.Dispose();
             scaleScope.Dispose();
         }
+    }
+
+    /// <summary>Lays custom content rows out at the panel's inner width, once per opened panel.</summary>
+    private void LayOutMenuContent(MenuLevel level, float width)
+    {
+        foreach (var item in level.Items)
+        {
+            if (item.Kind == MenuItemKind.Custom)
+            {
+                menuIconLayout ??= new LayoutEngine();
+                menuIconLayout.Layout(item.Content, LayoutConstraints.Loose(new Size(Math.Max(0f, width), float.PositiveInfinity)));
+            }
+        }
+
+        level.ContentLaidOut = true;
+    }
+
+    private void PaintMenuContent(Node content, float x, float y)
+    {
+        float savedX = absoluteX;
+        float savedY = absoluteY;
+        absoluteX = x;
+        absoluteY = y;
+        using (ctx.PushTranslate(x, y))
+        {
+            PaintRecursive(content);
+        }
+
+        absoluteX = savedX;
+        absoluteY = savedY;
+    }
+
+    /// <summary>A toggle's check mark or a radio choice's dot, centred in the check column.</summary>
+    private void PaintMenuCheck(MenuItemKind kind, float x, float itemTop, float itemHeight, MenuMetrics m, ColorValue color)
+    {
+        float cx = x + ((m.CheckColumn - 6f) / 2f);
+        float cy = itemTop + (itemHeight / 2f);
+        if (kind == MenuItemKind.Radio)
+        {
+            ctx.DrawCircle(new Point(cx, cy), 3.5f, color);
+            return;
+        }
+
+        var stroke = new Stroke(color, 1.75f);
+        ctx.DrawLine(new Point(cx - 5f, cy), new Point(cx - 1.5f, cy + 3.5f), stroke);
+        ctx.DrawLine(new Point(cx - 1.5f, cy + 3.5f), new Point(cx + 5f, cy - 4f), stroke);
     }
 
     private void LayOutMenuIcons(MenuLevel level, MenuMetrics m)

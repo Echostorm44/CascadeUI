@@ -48,8 +48,6 @@ internal sealed partial class InputDispatcher
     // Open MonthPicker popup state
     private MonthPicker? openMonthPicker;
 
-    // Open MenuBar dropdown state
-    private MenuBar? openMenuBar;
 
     // Open NotificationBell dropdown state
     private NotificationBell? openNotificationBell;
@@ -514,6 +512,16 @@ internal sealed partial class InputDispatcher
             openMenu.Owner = newNode;
         }
 
+        // A menu bar keeps its open menu, keyboard focus and underlines across a re-render.
+        if (oldNode is MenuBar oldBar && newNode is MenuBar newBar)
+        {
+            newBar.AdoptStateFrom(oldBar);
+            if (ReferenceEquals(self.activeMenuBar, oldBar))
+            {
+                self.activeMenuBar = newBar;
+            }
+        }
+
         // Controlled input: when the app itself changes the value bound to the focused TextInput
         // (clearing a search box, say), the edit buffer adopts it; otherwise the field would keep
         // showing, and later commit, the stale text. Only a change between renders counts, so a
@@ -546,6 +554,10 @@ internal sealed partial class InputDispatcher
 
         current = this;
         LastInputWasKeyboard = false;
+        if (evt.Type == NativeMouseEventType.MouseDown)
+        {
+            NoteMenuBarPointerDown();
+        }
 
         // An open menu is modal for the pointer: it hovers, activates or dismisses first.
         if (HandleMenuMouse(evt))
@@ -803,12 +815,6 @@ internal sealed partial class InputDispatcher
             UpdateComboboxDropdownHover(evt.X, evt.Y);
         }
 
-        // Update MenuBar dropdown/label hover highlighting
-        if (openMenuBar != null)
-        {
-            UpdateMenuBarHover(evt.X, evt.Y);
-        }
-
         // Update calendar day hover highlighting if a DatePicker is open
         if (openDatePicker != null)
         {
@@ -941,9 +947,10 @@ internal sealed partial class InputDispatcher
                 RequestRepaint?.Invoke();
             }
         }
-        else if (hoveredNode is not MenuBar && openMenuBar == null)
+        else if (hoveredNode is MenuBar { HoveredMenuIndex: >= 0 } leftBar && !ReferenceEquals(hitNode, leftBar))
         {
-            // Clear hover on menu bars we're no longer over
+            leftBar.HoveredMenuIndex = -1;
+            RequestRepaint?.Invoke();
         }
 
         // Update hovered row on PropertyGrid
@@ -1496,93 +1503,6 @@ internal sealed partial class InputDispatcher
                 openCombobox = null;
                 RequestRepaint?.Invoke();
             }
-        }
-
-        // If a MenuBar dropdown is open, check if the click is within it or on a label
-        if (openMenuBar != null && evt.Button == NativeMouseButton.Left)
-        {
-            var dropBounds = openMenuBar.DropdownBounds;
-            var click = new Point(evt.X, evt.Y);
-
-            // Click inside dropdown — find and invoke the menu item
-            if (dropBounds.Width > 0 && dropBounds.Contains(click))
-            {
-                var menu = openMenuBar.Menus[openMenuBar.OpenMenuIndex];
-                float itemY = dropBounds.Y + 4f; // top padding
-                float separatorHeight = 9f;
-                float headerHeight = 24f;
-
-                for (int i = 0; i < menu.Items.Count; i++)
-                {
-                    var item = menu.Items[i];
-                    float currentH;
-                    if (item.Label == null && item.CustomContent == Node.Empty)
-                    {
-                        currentH = separatorHeight;
-                    }
-                    else if (!item.Enabled && item.OnClick == null && item.ToggleValue.OnChange is null && item.Items == null)
-                    {
-                        currentH = headerHeight;
-                    }
-                    else
-                    {
-                        currentH = openMenuBar.MenuItemHeight;
-                    }
-
-                    if (evt.Y >= itemY && evt.Y < itemY + currentH)
-                    {
-                        if (item.Enabled)
-                        {
-                            if (item.OnClick != null)
-                            {
-                                openMenuBar.Close();
-                                openMenuBar = null;
-                                RequestRepaint?.Invoke();
-                                item.OnClick();
-                                return;
-                            }
-                            if (item.ToggleValue.OnChange is not null)
-                            {
-                                item.ToggleValue.OnChange(!item.ToggleValue.Value);
-                                openMenuBar.Close();
-                                openMenuBar = null;
-                                RequestRepaint?.Invoke();
-                                return;
-                            }
-                        }
-                        break;
-                    }
-
-                    itemY += currentH;
-                }
-
-                return;
-            }
-
-            // Click on a different menu label — switch to it
-            for (int i = 0; i < openMenuBar.MenuLabelBounds.Length; i++)
-            {
-                if (openMenuBar.MenuLabelBounds[i].Contains(click))
-                {
-                    if (i == openMenuBar.OpenMenuIndex)
-                    {
-                        // Same label — toggle closed
-                        openMenuBar.Close();
-                        openMenuBar = null;
-                    }
-                    else
-                    {
-                        openMenuBar.OpenMenu(i);
-                    }
-                    RequestRepaint?.Invoke();
-                    return;
-                }
-            }
-
-            // Click outside — close
-            openMenuBar.Close();
-            openMenuBar = null;
-            RequestRepaint?.Invoke();
         }
 
         // If a NotificationBell dropdown is open, check if the click is within it
@@ -2878,8 +2798,15 @@ internal sealed partial class InputDispatcher
             Keyboard.Observe(evt.Modifiers);
         }
 
+        systemKeyHandled = false;
         if (evt.Type != NativeKeyEventType.KeyDown)
         {
+            current = this;
+            if (HandleMenuBarKeyUp(evt))
+            {
+                return;
+            }
+
             RouteKeyUp(evt);
             return;
         }
@@ -2889,6 +2816,9 @@ internal sealed partial class InputDispatcher
             if (suppressNextCharacter)
             {
                 suppressNextCharacter = false;
+
+                // The character of an Alt+letter the menu bar used: no system beep either.
+                systemKeyHandled = evt.Modifiers.HasFlag(ModifierKeys.Alt);
                 return;
             }
         }
@@ -2919,6 +2849,13 @@ internal sealed partial class InputDispatcher
 
         // Then the overlay that owns the keyboard (a modal one, or the one holding focus).
         if (RouteOverlayKey(evt))
+        {
+            altTapArmed = false;
+            return;
+        }
+
+        // The menu bar: Alt, F10, access keys, and its keyboard mode.
+        if (HandleMenuBarKey(evt))
         {
             return;
         }
@@ -3034,15 +2971,6 @@ internal sealed partial class InputDispatcher
         // Escape → clear focus (but if MentionInput popup is open, just close it)
         if (evt.Key == Key.Escape)
         {
-            // Close MenuBar dropdown first
-            if (openMenuBar != null)
-            {
-                openMenuBar.Close();
-                openMenuBar = null;
-                RequestRepaint?.Invoke();
-                return;
-            }
-
             if (openNotificationBell != null)
             {
                 openNotificationBell.Close();
@@ -3308,7 +3236,7 @@ internal sealed partial class InputDispatcher
                 }
                 if (item.ToggleValue.OnChange is not null)
                 {
-                    item.ToggleValue.OnChange(!item.ToggleValue.Value);
+                    item.ToggleValue.OnChange(item.Kind == MenuItemKind.Radio || !item.ToggleValue.Value);
                     return true;
                 }
             }
@@ -4689,29 +4617,8 @@ internal sealed partial class InputDispatcher
             }
 
             case MenuBar mb:
-            {
-                // Find which menu label was clicked
-                var clickPt = new Point(lastMousePosition.X, lastMousePosition.Y);
-                for (int i = 0; i < mb.MenuLabelBounds.Length; i++)
-                {
-                    if (mb.MenuLabelBounds[i].Contains(clickPt))
-                    {
-                        if (mb.IsOpen && mb.OpenMenuIndex == i)
-                        {
-                            mb.Close();
-                            openMenuBar = null;
-                        }
-                        else
-                        {
-                            mb.OpenMenu(i);
-                            openMenuBar = mb;
-                        }
-                        RequestRepaint?.Invoke();
-                        return;
-                    }
-                }
+                HandleMenuBarClick(mb);
                 return;
-            }
 
             case PropertyGrid pg:
             {
@@ -7536,96 +7443,6 @@ internal sealed partial class InputDispatcher
         }
     }
 
-    private void UpdateMenuBarHover(float x, float y)
-    {
-        if (openMenuBar == null)
-        {
-            return;
-        }
-
-        var point = new Point(x, y);
-        var mb = openMenuBar;
-
-        // Check if hovering over a menu label (switch menus)
-        if (mb.IsOpen)
-        {
-            for (int i = 0; i < mb.MenuLabelBounds.Length; i++)
-            {
-                if (mb.MenuLabelBounds[i].Contains(point))
-                {
-                    if (mb.HoveredMenuIndex != i)
-                    {
-                        mb.HoveredMenuIndex = i;
-                        // Switch open menu when hovering a different label
-                        if (i != mb.OpenMenuIndex)
-                        {
-                            mb.OpenMenu(i);
-                        }
-                        RequestRepaint?.Invoke();
-                    }
-                    return;
-                }
-            }
-        }
-
-        // Check if hovering in the dropdown
-        var dropBounds = mb.DropdownBounds;
-        if (mb.IsOpen && dropBounds.Width > 0 && dropBounds.Contains(point))
-        {
-            var menu = mb.Menus[mb.OpenMenuIndex];
-            float itemY = dropBounds.Y + 4f; // top padding
-            float separatorHeight = 9f;
-            float headerHeight = 24f;
-
-            for (int i = 0; i < menu.Items.Count; i++)
-            {
-                var item = menu.Items[i];
-                float currentH;
-                if (item.Label == null && item.CustomContent == Node.Empty)
-                {
-                    currentH = separatorHeight;
-                }
-                else if (!item.Enabled && item.OnClick == null && item.ToggleValue.OnChange is null && item.Items == null)
-                {
-                    currentH = headerHeight;
-                }
-                else
-                {
-                    currentH = mb.MenuItemHeight;
-                }
-
-                if (y >= itemY && y < itemY + currentH)
-                {
-                    int newIndex = item.Enabled ? i : -1;
-                    if (mb.HighlightedItemIndex != newIndex)
-                    {
-                        mb.HighlightedItemIndex = newIndex;
-                        RequestRepaint?.Invoke();
-                    }
-                    return;
-                }
-
-                itemY += currentH;
-            }
-        }
-
-        // Clear highlights when outside
-        bool changed = false;
-        if (mb.HoveredMenuIndex != -1)
-        {
-            mb.HoveredMenuIndex = -1;
-            changed = true;
-        }
-        if (mb.HighlightedItemIndex != -1)
-        {
-            mb.HighlightedItemIndex = -1;
-            changed = true;
-        }
-        if (changed)
-        {
-            RequestRepaint?.Invoke();
-        }
-    }
 
     private void UpdateDataGridSelectDropdownHover(ITabularDataNode tdn, float x, float y)
     {

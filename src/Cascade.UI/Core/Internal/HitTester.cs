@@ -240,7 +240,7 @@ internal static class HitTester
         // the rows (e.g. a per-row remove button) rather than stop at the list.
     }
 
-    private static IReadOnlyList<Node>? GetChildren(Node node)
+    internal static IReadOnlyList<Node>? GetChildren(Node node)
     {
         return node switch
         {
@@ -253,7 +253,7 @@ internal static class HitTester
         };
     }
 
-    private static Node? GetSingleChild(Node node)
+    internal static Node? GetSingleChild(Node node)
     {
         return node switch
         {

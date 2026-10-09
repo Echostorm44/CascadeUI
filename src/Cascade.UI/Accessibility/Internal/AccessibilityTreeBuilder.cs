@@ -150,11 +150,29 @@ internal static class AccessibilityTreeBuilder
 
     /// <summary>
     /// Notifies the platform bridge that the accessibility tree has changed.
-    /// Called by the reconciler after each commit.
     /// </summary>
     internal static void NotifyTreeChanged()
     {
         platformBridge?.OnTreeChanged();
+    }
+
+    /// <summary>
+    /// Called by the frame orchestrator after every painted frame. <paramref name="reRendered"/>
+    /// is true when components re-rendered (the tree's structure may have changed); otherwise only
+    /// geometry, focus or state did. A bridge nobody is listening to returns at once.
+    /// </summary>
+    internal static void NotifyFrameCompleted(bool reRendered)
+    {
+        platformBridge?.OnFrameCompleted(reRendered);
+    }
+
+    /// <summary>
+    /// Called by the reconciler when a re-render replaces <paramref name="from"/> with
+    /// <paramref name="to"/>, so a platform element bound to the old node follows it.
+    /// </summary>
+    internal static void NotifyNodeReplaced(Node from, Node to)
+    {
+        platformBridge?.OnNodeReplaced(from, to);
     }
 
     /// <summary>
@@ -312,7 +330,7 @@ internal static class AccessibilityTreeBuilder
         {
             var data = cascadeNode.LayoutData;
             role = ResolveRole(cascadeNode);
-            label = ResolveLabel(cascadeNode);
+            label = ResolveName(cascadeNode);
             description = data.A11yDescription;
             liveRegion = data.A11yLiveRegion;
             tabIndex = data.A11yTabIndex;
@@ -362,15 +380,48 @@ internal static class AccessibilityTreeBuilder
             return role;
         }
 
-        // DataTable<T> and DataGrid<T> are generic, so their type names ("DataTable`1") never
-        // matched the "Table"/"DataGrid" names below and tables had no role at all.
-        return node is ITabularDataNode ? AccessibleRole.Table : InferRoleFromType(node.GetType());
+        // The framework's own controls by type (generic ones such as ListView<T> and DataTable<T>
+        // have type names like "ListView`1", which never matched the name table below).
+        // The name table is only for nodes defined outside the framework: the framework's layout
+        // containers have names like "Row" and "Grid" that would otherwise read as table parts.
+        var inferred = InferRoleFromControl(node);
+        var type = node.GetType();
+        return inferred != AccessibleRole.None || type.Assembly == typeof(Node).Assembly ? inferred : InferRoleFromType(type);
+    }
+
+    private static AccessibleRole InferRoleFromControl(Node node)
+    {
+        return node switch
+        {
+            Button or IconButton or SplitButton => AccessibleRole.Button,
+            LinkButton => AccessibleRole.Link,
+            Checkbox => AccessibleRole.Checkbox,
+            Toggle => AccessibleRole.Switch,
+            TextInput or TextArea or PasswordInput or INumberInput => AccessibleRole.TextBox,
+            Slider or RangeSlider => AccessibleRole.Slider,
+            IRadioButton => AccessibleRole.Radio,
+            IRadioGroup => AccessibleRole.RadioGroup,
+            ISelectNode or IComboboxNode or IMultiSelectNode => AccessibleRole.ComboBox,
+            ProgressBar or ProgressRing => AccessibleRole.ProgressBar,
+            IListViewNode => AccessibleRole.List,
+            ITabularDataNode => AccessibleRole.Table,
+            ITreeView => AccessibleRole.Tree,
+            Expander => AccessibleRole.Region,
+            MenuBar => AccessibleRole.MenuBar,
+            TabBar => AccessibleRole.TabList,
+            Label => AccessibleRole.Text,
+            Image image when image.LayoutData.A11yLabel is { Length: > 0 } => AccessibleRole.Image,
+            IconView view when view.LayoutData.A11yLabel is { Length: > 0 } => AccessibleRole.Image,
+            Image or IconView => AccessibleRole.Presentation,
+            _ => AccessibleRole.None,
+        };
     }
 
     /// <summary>
-    /// The node's accessible name: the explicit <c>AccessibleLabel()</c> when set (an empty string
-    /// marks it decorative), otherwise the control's own visible text. An <see cref="IconButton"/>
-    /// has none, so it falls back to its tooltip and then to its icon's accessible name.
+    /// The node's accessible label: the explicit <c>AccessibleLabel()</c> when set (an empty string
+    /// marks it decorative), otherwise the control's own visible text or label. An
+    /// <see cref="IconButton"/> has none, so it falls back to its tooltip and then to its icon's
+    /// accessible name. A text field without a label is named by its placeholder.
     /// </summary>
     internal static string? ResolveLabel(Node node)
     {
@@ -381,13 +432,118 @@ internal static class AccessibilityTreeBuilder
 
         return node switch
         {
-            Label labelNode => labelNode.Text ?? labelNode.LocText.Resolve(),
-            Button button => button.Label.Resolve(),
-            LinkButton link => link.Label.Resolve(),
+            Label labelNode => labelNode.Text ?? Text(labelNode.LocText),
+            Button button => Text(button.Label),
+            LinkButton link => Text(link.Label),
+            SplitButton split => Text(split.Label),
             IconButton iconButton => iconButton.TooltipText.Value is { Length: > 0 }
                 ? iconButton.TooltipText.Resolve()
                 : iconButton.Icon.AccessibleName,
+            TextInput input => Text(input.Label) ?? Text(input.Placeholder),
+            TextArea area => Text(area.Label) ?? Text(area.Placeholder),
+            PasswordInput password => Text(password.Placeholder),
+            Checkbox checkbox => Text(checkbox.Label),
+            Toggle toggle => Text(toggle.Label),
+            Slider slider => Text(slider.Label),
+            IRadioButton radio => radio.LabelText is { Length: > 0 } text ? text : TextOf(radio.NodeLabel),
+            ISelectNode select => Text(select.Label) ?? Text(select.Placeholder),
+            IComboboxNode combo => Text(combo.Label) ?? Text(combo.Placeholder),
+            IMultiSelectNode multi => Text(multi.Label) ?? Text(multi.Placeholder),
+            Expander expander => Text(expander.HeaderText) ?? TextOf(expander.HeaderNode),
             _ => null,
+        };
+    }
+
+    /// <summary>
+    /// The name assistive technology announces: <see cref="ResolveLabel"/>, or — for an element
+    /// whose name comes from its content (a custom button, a list row, a dialog) — the text of the
+    /// labels inside it, in order.
+    /// </summary>
+    internal static string? ResolveName(Node node)
+    {
+        if (ResolveLabel(node) is { } label)
+        {
+            return label;
+        }
+
+        return node is Component or Row or Column or Stack or Grid or Center or Card or Badge or KeyHandler or FormValidator
+            ? TextOf(node)
+            : null;
+    }
+
+    /// <summary>The visible text inside <paramref name="node"/>: its labels (and controls' labels), space separated.</summary>
+    internal static string? TextOf(Node node)
+    {
+        var builder = new System.Text.StringBuilder();
+        AppendText(node, builder, depth: 0);
+        return builder.Length > 0 ? builder.ToString() : null;
+    }
+
+    private static void AppendText(Node node, System.Text.StringBuilder builder, int depth)
+    {
+        if (depth > 64 || node.IsLayoutEmpty || !node.LayoutData.IsVisible || node.LayoutData.A11yLabel is { Length: 0 })
+        {
+            return;
+        }
+
+        if (node is Component component)
+        {
+            if (component.RenderedTree is { } rendered)
+            {
+                AppendText(rendered, builder, depth + 1);
+            }
+            return;
+        }
+
+        if (node is not (Row or Column or Stack or Grid or Center or Card or Badge or KeyHandler or FormValidator or ScrollView or AnimatePresence)
+            && ResolveLabel(node) is { Length: > 0 } text)
+        {
+            if (builder.Length > 0)
+            {
+                builder.Append(' ');
+            }
+            builder.Append(text);
+            return;
+        }
+
+        foreach (var child in NodeDiffer.GetChildren(node))
+        {
+            if (child is not null)
+            {
+                AppendText(child, builder, depth + 1);
+            }
+        }
+    }
+
+    private static string? Text(LocKey key)
+    {
+        return key.Value is { Length: > 0 } ? key.Resolve() : null;
+    }
+
+    /// <summary>Whether a control is disabled (its own <c>Disabled()</c>, or <c>A11yDisabled</c>).</summary>
+    internal static bool IsDisabled(Node node)
+    {
+        if (node.LayoutData.A11yDisabled)
+        {
+            return true;
+        }
+
+        return node switch
+        {
+            Button button => button.IsDisabled,
+            LinkButton link => link.IsDisabled,
+            IconButton icon => icon.IsDisabled,
+            SplitButton split => split.IsDisabled,
+            TextInput input => input.IsDisabled,
+            TextArea area => area.IsDisabled,
+            Checkbox checkbox => checkbox.IsDisabled,
+            Toggle toggle => toggle.IsDisabled,
+            Slider slider => slider.IsDisabled,
+            ISelectNode select => select.IsNodeDisabled,
+            IComboboxNode combo => combo.IsNodeDisabled,
+            IMultiSelectNode multi => multi.IsNodeDisabled,
+            INumberInput number => number.IsDisabled,
+            _ => false,
         };
     }
 
@@ -416,7 +572,7 @@ internal static class AccessibilityTreeBuilder
             "Dialog" or "Modal" => AccessibleRole.Dialog,
             "AlertDialog" => AccessibleRole.AlertDialog,
             "ProgressBar" or "Progress" => AccessibleRole.ProgressBar,
-            "ScrollBar" or "ScrollView" => AccessibleRole.ScrollBar,
+            "ScrollBar" => AccessibleRole.ScrollBar,
             "Image" or "Icon" => AccessibleRole.Image,
             "List" or "ListView" => AccessibleRole.List,
             "ListItem" => AccessibleRole.ListItem,
@@ -450,9 +606,37 @@ internal static class AccessibilityTreeBuilder
 
     private static IReadOnlyList<object> GetNodeChildren(object node)
     {
-        // The reconciler maintains child lists for each mounted component.
-        // This is the integration point with the live tree.
-        return [];
+        // The live tree: a component's rendered tree, a container's children, a wrapper's content.
+        // Leaf controls fold their content into their name, as in the platform tree.
+        if (node is not Node cascadeNode || AccessibleTree.IsLeaf(cascadeNode, ResolveRole(cascadeNode)))
+        {
+            return [];
+        }
+
+        if (cascadeNode is Component component)
+        {
+            return component.RenderedTree is { } rendered ? [rendered] : [];
+        }
+
+        if (HitTester.GetChildren(cascadeNode) is { } children)
+        {
+            var result = new List<object>(children.Count);
+            foreach (var child in children)
+            {
+                if (!child.IsLayoutEmpty)
+                {
+                    result.Add(child);
+                }
+            }
+            return result;
+        }
+
+        return cascadeNode switch
+        {
+            ScrollView { Content: { } content } => [content],
+            SplitView split => [split.First, split.Second],
+            _ => HitTester.GetSingleChild(cascadeNode) is { IsLayoutEmpty: false } single ? [single] : [],
+        };
     }
 
     private record struct NodeMetadata(
@@ -520,6 +704,24 @@ internal interface IPlatformAccessibilityBridge
 
     /// <summary>Posts a screen reader announcement.</summary>
     void Announce(string message, AnnouncePriority priority);
+
+    /// <summary>
+    /// A frame was painted. <paramref name="reRendered"/> is true when components re-rendered.
+    /// Called on the UI thread after every frame, so an implementation with nobody listening must
+    /// return at once without allocating.
+    /// </summary>
+    void OnFrameCompleted(bool reRendered)
+    {
+        if (reRendered)
+        {
+            OnTreeChanged();
+        }
+    }
+
+    /// <summary>A re-render replaced <paramref name="from"/> with <paramref name="to"/>.</summary>
+    void OnNodeReplaced(Node from, Node to)
+    {
+    }
 
     /// <summary>Queries the OS for current accessibility preferences.</summary>
     AccessibilityContext GetAccessibilityContext();

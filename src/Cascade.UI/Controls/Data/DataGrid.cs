@@ -525,6 +525,26 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
         return InputDispatcher.Active?.OpenTabularContextMenu(self, self.SelectedRowIndex, pointer: null) == true;
     }
 
+    /// <summary>
+    /// Gives every row inline action buttons, built by <paramref name="factory"/> for the row's
+    /// item and shown right-aligned in a column after the last data column — the same as
+    /// <see cref="DataTable{T}.RowActions"/>. Clicking an action commits any cell edit and runs
+    /// the action without changing the selection. From the keyboard, with the grid focused and a
+    /// row selected, Right/Left move through the selected row's actions, Enter or Space runs the
+    /// focused one, and Escape returns to the row. Return an empty list for an item that has no
+    /// actions.
+    /// </summary>
+    public DataGrid<T> RowActions(Func<T, IReadOnlyList<Node>> factory)
+    {
+        ArgumentNullException.ThrowIfNull(factory);
+        rowActions = new TabularRowActions<T>(factory, () => Items.Value, MapRow);
+        return this;
+    }
+
+    internal TabularRowActions? rowActions;
+
+    TabularRowActions? ITabularDataNode.RowActionStrip => rowActions;
+
     bool ITabularDataNode.HasRowContextMenu => rowContextMenuFactory is not null || batchActionsFactory is not null;
 
     int ITabularDataNode.SelectedRowCount => selectedRows.Count;

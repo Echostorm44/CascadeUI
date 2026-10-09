@@ -1,10 +1,10 @@
 namespace Cascade.UI.CliFixture;
 
 /// <summary>
-/// Fixture for the DataGrid context-menu integration test (CASCADE_FIXTURE_VIEW=gridmenus): a
-/// grouped, scrolling grid of clips with a per-row context menu and batch actions for a
-/// multi-row selection. "Last: …" shows the most recent menu action, "Selected: …" the row the
-/// grid last selected.
+/// Fixture for the DataGrid integration tests (CASCADE_FIXTURE_VIEW=gridmenus): a grouped,
+/// scrolling grid of clips with a per-row context menu, batch actions for a multi-row selection,
+/// and two inline row actions ("Pin", "Delete") in a strip after the last column. "Last: …" shows
+/// the most recent menu or row action, "Selected: …" the row the grid last selected.
 /// </summary>
 internal sealed class GridMenusView : Component
 {
@@ -26,6 +26,9 @@ internal sealed class GridMenusView : Component
         new("+1 555 0100", "Text"),
         new("hello@example.com", "Text"),
     ];
+
+    private static readonly Icon PinIcon = new("M12 17v5M9 3h6l-1 7 4 4H6l4-4z", new Size(24, 24), 24f, "Pin");
+    private static readonly Icon TrashIcon = new("M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14", new Size(24, 24), 24f, "Trash");
 
     private static readonly IReadOnlyList<DataGridColumn<Clip>> Columns =
     [
@@ -49,6 +52,7 @@ internal sealed class GridMenusView : Component
                 .OnSelect(c => { selected = c.Name; Invalidate(); })
                 .RowContextMenu(MenuFor)
                 .BatchActions(BatchFor)
+                .RowActions(ActionsFor)
                 .Width(420)
                 .Height(300),
         ]).Padding(EdgeInsets.All(12));
@@ -62,6 +66,15 @@ internal sealed class GridMenusView : Component
             ContextMenuItem.Action("Copy to Clipboard", () => { Record($"copy {clip.Name}"); }, shortcut: "Ctrl+C"),
             ContextMenuItem.Separator(),
             ContextMenuItem.Action("Delete", () => { Record($"delete {clip.Name}"); }, style: MenuItemStyle.Destructive),
+        ];
+    }
+
+    private IReadOnlyList<Node> ActionsFor(Clip clip)
+    {
+        return
+        [
+            new IconButton(PinIcon, () => { Record($"pin {clip.Name}"); }).Size(22f).Tooltip("Pin"),
+            new IconButton(TrashIcon, () => { Record($"remove {clip.Name}"); }).Size(22f).Tooltip("Delete"),
         ];
     }
 

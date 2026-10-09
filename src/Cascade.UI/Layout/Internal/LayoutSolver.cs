@@ -1396,10 +1396,13 @@ internal static class LayoutSolver
         float availWidth = float.IsPositiveInfinity(constraints.MaxWidth)
             ? 600f
             : constraints.MaxWidth;
-        float totalWidth = 0f;
+        // The inline row-action strip follows the last column (0 until the painter measures it);
+        // the columns resolve in what is left of the width, as they do when painted.
+        float actionStrip = TabularRowGeometry.ActionStripWidth(tdn, availWidth);
+        float totalWidth = actionStrip;
         for (int i = 0; i < tdn.ColumnCount; i++)
         {
-            totalWidth += tdn.GetColumnWidth(i, availWidth);
+            totalWidth += tdn.GetColumnWidth(i, availWidth - actionStrip);
         }
 
         // Reserve space for column chooser button so it doesn't overlay columns

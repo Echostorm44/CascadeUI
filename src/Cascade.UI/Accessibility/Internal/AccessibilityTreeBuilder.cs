@@ -357,7 +357,14 @@ internal static class AccessibilityTreeBuilder
     internal static AccessibleRole ResolveRole(Node node)
     {
         var role = node.LayoutData.A11yRole;
-        return role != AccessibleRole.None ? role : InferRoleFromType(node.GetType());
+        if (role != AccessibleRole.None)
+        {
+            return role;
+        }
+
+        // DataTable<T> and DataGrid<T> are generic, so their type names ("DataTable`1") never
+        // matched the "Table"/"DataGrid" names below and tables had no role at all.
+        return node is ITabularDataNode ? AccessibleRole.Table : InferRoleFromType(node.GetType());
     }
 
     /// <summary>

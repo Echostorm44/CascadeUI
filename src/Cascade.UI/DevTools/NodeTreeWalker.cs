@@ -1706,6 +1706,11 @@ internal static class NodeTreeWalker
             children.Add(BuildAccessibilityNode(child));
         }
 
+        if (node is ITabularDataNode { RowActionStrip: { } actions } table)
+        {
+            AddRowActionAccessibilityNodes(table, actions, info.id, children);
+        }
+
         // An open dialog, sheet or popover: say whether it is modal, and give its window bounds
         // (the panel is laid out in window coordinates, unlike nodes in the page).
         if (node is Node panel && inputDispatcher?.Overlays?.FindByTree(panel) is { } overlay)
@@ -1738,6 +1743,78 @@ internal static class NodeTreeWalker
             Label = info.accessibleLabel,
             Children = children,
         };
+    }
+
+    /// <summary>
+    /// A table's inline row actions are painted inside the table node, not nodes of the tree:
+    /// expose each row on screen that has actions as a row element (named by its first cell,
+    /// selected state included) holding one button per action, in window coordinates, with the
+    /// keyboard-focused action marked focused — the same treatment the context menu gets.
+    /// </summary>
+    private static void AddRowActionAccessibilityNodes(
+        ITabularDataNode table, TabularRowActions actions, string tableId, List<AccessibleNode> children)
+    {
+        var tableBounds = table.AbsoluteBounds;
+        if (tableBounds.Width <= 0f || actions.Painted.Count == 0)
+        {
+            return;
+        }
+
+        float rowHeight = table.GetRowHeight();
+        float areaTop = tableBounds.Y + TabularRowGeometry.DataTop(table);
+        float areaBottom = tableBounds.Y + TabularRowGeometry.DataBottom(table, tableBounds.Height);
+        bool tableFocused = table is Node tableNode && ReferenceEquals(FocusManager.FocusedElement, tableNode);
+
+        int index = 0;
+        var painted = actions.Painted;
+        while (index < painted.Count)
+        {
+            int row = painted[index].Row;
+            var buttons = new List<AccessibleNode>();
+            bool hasTop = TabularRowGeometry.TryGetRowContentTop(table, row, out float contentTop);
+            float rowTop = areaTop + contentTop - table.ScrollOffsetY;
+            for (; index < painted.Count && painted[index].Row == row; index++)
+            {
+                var action = painted[index];
+                var target = TabularRowActions.FindActivatable(action.Node) ?? action.Node;
+                buttons.Add(new AccessibleNode
+                {
+                    NodeId = $"{tableId}/row-{row}/action-{action.Index}",
+                    Role = AccessibleRole.Button,
+                    Label = AccessibilityTreeBuilder.ResolveLabel(target) ?? AccessibilityTreeBuilder.ResolveLabel(action.Node),
+                    Focusable = true,
+                    Focused = tableFocused && table.SelectedRowIndex == row && actions.FocusedIndex == action.Index,
+                    Disabled = TabularRowActions.IsDisabled(action.Node),
+                    Bounds = new Rect(
+                        tableBounds.X + action.Bounds.X,
+                        rowTop + action.Bounds.Y,
+                        action.Bounds.Width,
+                        action.Bounds.Height),
+                });
+            }
+
+            // Rows painted as the virtualization buffer above or below the viewport are not on screen.
+            if (!hasTop || rowTop + rowHeight <= areaTop || rowTop >= areaBottom)
+            {
+                continue;
+            }
+
+            var states = new Dictionary<string, string>();
+            if (table.IsRowSelected(row))
+            {
+                states["selected"] = "true";
+            }
+
+            children.Add(new AccessibleNode
+            {
+                NodeId = $"{tableId}/row-{row}",
+                Role = AccessibleRole.Row,
+                Label = table.ColumnCount > 0 ? table.GetCellText(row, 0) : null,
+                StateProperties = states,
+                Bounds = new Rect(tableBounds.X, rowTop, tableBounds.Width, rowHeight),
+                Children = buttons,
+            });
+        }
     }
 
     private static (ColorValue foreground, ColorValue background)? GetComputedColors(object node)

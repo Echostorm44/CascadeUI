@@ -1137,6 +1137,11 @@ internal static class McpCommand
                 Console.WriteLine("  --x/--y N         Position to scroll at (defaults to center)");
                 Console.WriteLine("  --wait-frames N   Presented frames to wait for before returning");
                 Console.WriteLine();
+                Console.WriteLine("A delta scroll reports the view under the point that took it: target.kind");
+                Console.WriteLine("(table, list_view, scroll_view, ...), target.node_id, and that view's own");
+                Console.WriteLine("scroll_offset_y / max_scroll_y (grids and lists scroll themselves, not the");
+                Console.WriteLine("page). scrolled=false means it was already at the end.");
+                Console.WriteLine();
                 Console.WriteLine("The response includes presented_frame and timed_out — no sleeps needed");
                 Console.WriteLine("before a follow-up screenshot (use screenshot --after-frame).");
                 break;

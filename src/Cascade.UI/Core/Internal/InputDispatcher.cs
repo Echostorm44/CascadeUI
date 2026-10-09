@@ -3275,6 +3275,12 @@ internal sealed partial class InputDispatcher
     /// rendered tree. Wraps around at the ends. Returns null when the tree has no tab
     /// stops.
     /// </summary>
+    /// <remarks>
+    /// While <paramref name="current"/> is inside a <see cref="FocusExtensions.FocusTrap{T}"/>
+    /// subtree, the order is that subtree's tab stops only (the innermost trap when traps nest),
+    /// so Tab and Shift+Tab wrap inside it. A trap does not pull focus in: from outside it, Tab
+    /// walks the whole tree and may enter the trap, after which focus stays inside.
+    /// </remarks>
     private Node? FindNextTabStop(Node? current, bool backward)
     {
         if (rootNode is null)
@@ -3282,8 +3288,14 @@ internal sealed partial class InputDispatcher
             return null;
         }
 
+        Node scope = rootNode;
+        if (current is not null && TryFindFocusTrap(rootNode, current, null, out var trap) && trap is not null)
+        {
+            scope = trap;
+        }
+
         var stops = new List<Node>();
-        CollectTabStops(rootNode, stops);
+        CollectTabStops(scope, stops);
         if (stops.Count == 0)
         {
             return null;
@@ -3310,6 +3322,36 @@ internal sealed partial class InputDispatcher
             ? (currentIndex - 1 + stops.Count) % stops.Count
             : (currentIndex + 1) % stops.Count;
         return stops[nextIndex];
+    }
+
+    /// <summary>
+    /// Finds <paramref name="target"/> under <paramref name="node"/>. Returns true when found, with
+    /// <paramref name="trap"/> set to the innermost <c>.FocusTrap()</c> node on the path to it
+    /// (the target itself included), or null when no node on the path traps focus.
+    /// </summary>
+    private static bool TryFindFocusTrap(Node node, Node target, Node? enclosingTrap, out Node? trap)
+    {
+        if (node.LayoutData.FocusData is { FocusTrap: true })
+        {
+            enclosingTrap = node;
+        }
+
+        if (ReferenceEquals(node, target))
+        {
+            trap = enclosingTrap;
+            return true;
+        }
+
+        foreach (var child in NodeDiffer.GetChildren(node))
+        {
+            if (TryFindFocusTrap(child, target, enclosingTrap, out trap))
+            {
+                return true;
+            }
+        }
+
+        trap = null;
+        return false;
     }
 
     /// <summary>

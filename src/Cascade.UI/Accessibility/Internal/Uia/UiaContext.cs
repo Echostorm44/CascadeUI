@@ -189,7 +189,9 @@ internal sealed class UiaContext
 
         int result = UiaIds.UIA_E_ELEMENTNOTAVAILABLE;
         // Not disposed on timeout: the posted work may still run later and signal it.
+#pragma warning disable CA2000 // Disposed on success; on timeout ownership stays with the posted work.
         var done = new ManualResetEventSlim();
+#pragma warning restore CA2000
         try
         {
             Dispatcher.Post(() =>

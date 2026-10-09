@@ -466,3 +466,32 @@ internal unsafe struct UiaVariant
     }
 }
 
+
+/// <summary>
+/// A provider failure carrying the HRESULT UIA should see (UIA_E_ELEMENTNOTAVAILABLE and the
+/// like); <see cref="UiaContext.Run"/> turns it into that HRESULT.
+/// </summary>
+#pragma warning disable CA1064 // Never escapes the provider: UiaContext.Run converts it to an HRESULT.
+internal sealed class UiaException : Exception
+#pragma warning restore CA1064
+{
+    public UiaException()
+    {
+    }
+
+    public UiaException(string message)
+        : base(message)
+    {
+    }
+
+    public UiaException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+
+    public UiaException(string message, int hresult)
+        : base(message)
+    {
+        HResult = hresult;
+    }
+}

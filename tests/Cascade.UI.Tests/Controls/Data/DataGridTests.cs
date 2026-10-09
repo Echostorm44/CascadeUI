@@ -206,10 +206,12 @@ public class DataGridTests
     [Test]
     public async Task BatchEditConfirmationStoresValue()
     {
-        var grid = CreateGrid().BatchEditConfirmation(true);
-
-        var enabled = grid.batchEditConfirmationEnabled;
-        await Assert.That(enabled).IsTrue();
+        // On by default (asks from two selected rows); false never asks; a number sets the threshold.
+        await Assert.That(CreateGrid().batchEditConfirmFromRows).IsEqualTo(2);
+        await Assert.That(CreateGrid().BatchEditConfirmation(false).batchEditConfirmFromRows).IsEqualTo(int.MaxValue);
+        await Assert.That(CreateGrid().BatchEditConfirmation(true).batchEditConfirmFromRows).IsEqualTo(2);
+        await Assert.That(CreateGrid().BatchEditConfirmation(10).batchEditConfirmFromRows).IsEqualTo(10);
+        await Assert.That(CreateGrid().BatchEditConfirmation(0).batchEditConfirmFromRows).IsEqualTo(2);
     }
 
     // ── Column management ───────────────────────────────────────────
@@ -1163,7 +1165,7 @@ public class DataGridTests
     public async Task CommitEdit_BatchEdit_AppliesAll()
     {
         var grid = CreateGrid();
-        grid.BatchEdit(true);
+        grid.BatchEdit(true).BatchEditConfirmation(false);
         var tdn = (ITabularDataNode)grid;
 
         // Select both rows

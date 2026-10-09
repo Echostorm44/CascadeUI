@@ -70,6 +70,51 @@ public class BatchEditCliTests
         }
     }
 
+    [Test]
+    public async Task InlineEditOnAMultiSelection_AsksApplyToAll_OnlyThisRowKeepsItToTheEditedRow()
+    {
+        string appId = CliTestHarness.NewFixtureAppId();
+        using var fixture = CliTestHarness.StartFixture(appId, new Dictionary<string, string> { ["CASCADE_FIXTURE_VIEW"] = "batchedit" });
+        try
+        {
+            await CliTestHarness.WaitForFixtureRegistrationAsync(appId, TimeSpan.FromSeconds(30), fixture.Id);
+
+            var grid = JsonNode.Parse((await Run(appId, "find", "DataGrid", "--by", "component")).StdOut)!["nodes"]![0]!;
+            string gridId = grid["id"]!.GetValue<string>();
+            float gridY = 12f + grid["bounds"]!["y"]!.GetValue<float>();
+            float Row(int index) => gridY + HeaderHeight + (index * RowHeight) + (RowHeight / 2f);
+            const string GenreX = "250";
+
+            await Run(appId, "click", gridId, "--x", "100", "--y", Format(Row(0)), "--coord-space", "logical");
+            await Run(appId, "click", gridId, "--x", "100", "--y", Format(Row(1)), "--coord-space", "logical", "--ctrl");
+
+            // A click on the Genre cell of a selected row edits it; Enter commits and asks.
+            await Run(appId, "click", gridId, "--x", GenreX, "--y", Format(Row(0)), "--coord-space", "logical");
+            await Run(appId, "type", "s");
+            await Run(appId, "type", "--key", "Enter", "--wait-frames", "6");
+            string asking = await Labels(appId);
+            await Assert.That(asking).Contains("Apply to all 2 selected rows?").Because(asking);
+            await Assert.That(asking).Contains("Genres: Jazz, Jazz, Rock, Classical");
+
+            await Run(appId, "click", await ButtonId(appId, "Apply to all"), "--wait-frames", "6");
+            string applied = await Labels(appId);
+            await Assert.That(applied).Contains("Genres: Jazzs, Jazzs, Rock, Classical").Because(applied);
+            await Assert.That(applied).DoesNotContain("Apply to all");
+
+            // Again, declining: only the edited row changes.
+            await Run(appId, "click", gridId, "--x", GenreX, "--y", Format(Row(1)), "--coord-space", "logical");
+            await Run(appId, "type", "!");
+            await Run(appId, "type", "--key", "Enter", "--wait-frames", "6");
+            await Run(appId, "click", await ButtonId(appId, "Only this row"), "--wait-frames", "6");
+            string declined = await Labels(appId);
+            await Assert.That(declined).Contains("Genres: Jazzs, Jazzs!, Rock, Classical").Because(declined);
+        }
+        finally
+        {
+            fixture.Kill();
+        }
+    }
+
     private static async Task<JsonArray> OpenBatchMenu(string appId, string gridId, float y)
     {
         await Run(appId, "right-click", gridId, "--x", "100", "--y", Format(y), "--coord-space", "logical", "--wait-frames", "6");

@@ -46,7 +46,11 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
     internal bool undoEnabledValue;
     internal int undoDepthValue = 100;
     internal bool batchEditEnabled;
-    internal bool batchEditConfirmationEnabled;
+    /// <summary>
+    /// The smallest selection an inline batch edit asks about before it writes every row (see
+    /// <see cref="BatchEditConfirmation(bool)"/>); <see cref="int.MaxValue"/> means never ask.
+    /// </summary>
+    internal int batchEditConfirmFromRows = 2;
     internal Func<IReadOnlyList<T>, IReadOnlyList<ContextMenuItem>>? batchActionsFactory;
     internal bool columnReorderingEnabled;
     internal bool columnChooserEnabled;
@@ -220,17 +224,38 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
 
     // ── Batch edit ────────────────────────────────────────────────────
 
-    /// <summary>Enables batch editing of selected rows.</summary>
+    /// <summary>
+    /// Enables batch editing of selected rows: a cell edited inline while two or more rows are
+    /// selected writes the same value into that column of every selected row (as one undo step,
+    /// after the confirmation set by <see cref="BatchEditConfirmation(bool)"/>), and the menu of a
+    /// multi-row selection offers "Set [Column] for selected rows…" for each editable column.
+    /// </summary>
     public DataGrid<T> BatchEdit(bool enabled)
     {
         batchEditEnabled = enabled;
         return this;
     }
 
-    /// <summary>Enables or disables the batch edit confirmation prompt.</summary>
+    /// <summary>
+    /// Whether an inline edit on a multi-row selection asks "Apply to all N selected rows?" before
+    /// writing every selected row. On by default; <c>false</c> applies immediately. The dialog's
+    /// "Apply to all" writes every selected row; "Only this row" (or Escape, or a click outside)
+    /// keeps the edit on the edited row alone.
+    /// </summary>
     public DataGrid<T> BatchEditConfirmation(bool enabled)
     {
-        batchEditConfirmationEnabled = enabled;
+        batchEditConfirmFromRows = enabled ? 2 : int.MaxValue;
+        return this;
+    }
+
+    /// <summary>
+    /// Asks before an inline batch edit only when at least <paramref name="minimumRows"/> rows are
+    /// selected; smaller selections apply immediately. <c>BatchEditConfirmation(10)</c> lets a
+    /// handful of rows change without a prompt but stops a slip from rewriting a hundred.
+    /// </summary>
+    public DataGrid<T> BatchEditConfirmation(int minimumRows)
+    {
+        batchEditConfirmFromRows = Math.Max(2, minimumRows);
         return this;
     }
 
@@ -1089,71 +1114,146 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
             return false;
         }
 
-        var item = items[dataRow];
         var column = Columns[editingCol];
         string newValue = editBuffer;
+        int committedRow = editingRow;
+
+        // Leave edit mode first: the value is written below, possibly after a confirmation dialog.
+        ((ITabularDataNode)this).CancelEdit();
+
+        // An inline batch edit: the edited row is one of several selected rows, so the value goes
+        // to all of them — after asking, when the selection is at least the confirmation size.
+        if (batchEditEnabled && selectedRows.Count > 1 && selectedRows.Contains(committedRow))
+        {
+            var targets = InlineEditTargets(SelectedRowsInDisplayOrder());
+            if (targets.Length >= batchEditConfirmFromRows)
+            {
+                var edited = Array.Find(targets, t => t.Display == committedRow);
+                _ = ConfirmInlineBatchEditAsync(column, edited, targets, newValue);
+                return true;
+            }
+
+            WriteInlineEdit(column, targets, newValue);
+            return true;
+        }
+
+        WriteInlineEdit(column, [new InlineEditTarget(committedRow, dataRow, items[dataRow])], newValue);
+        return true;
+    }
+
+    /// <summary>A row an inline edit writes: its display row (for validation), data row (for the cell cache) and item.</summary>
+    private readonly record struct InlineEditTarget(int Display, int Data, T Item);
+
+    private InlineEditTarget[] InlineEditTargets(int[] displayRows)
+    {
+        var items = Items.Value;
+        var targets = new List<InlineEditTarget>(displayRows.Length);
+        foreach (int row in displayRows)
+        {
+            int data = MapRow(row);
+            if (data >= 0 && data < items.Count)
+            {
+                targets.Add(new InlineEditTarget(row, data, items[data]));
+            }
+        }
+
+        return [.. targets];
+    }
+
+    /// <summary>The confirmation title: "Apply to all 40 selected rows?".</summary>
+    internal static string BatchConfirmTitle(int rowCount) => $"Apply to all {rowCount} selected rows?";
+
+    /// <summary>
+    /// Asks whether an inline edit on a multi-row selection should go to every selected row.
+    /// "Apply to all" writes them all; "Only this row", Escape or a click outside writes just the
+    /// edited row — the user did edit it — so declining never loses the edit itself.
+    /// </summary>
+    private async Task ConfirmInlineBatchEditAsync(
+        DataGridColumn<T> column, InlineEditTarget edited, InlineEditTarget[] targets, string value)
+    {
+        bool all = await Dialog.ConfirmAsync(
+            BatchConfirmTitle(targets.Length),
+            $"Set {column.Header} to \"{value}\" on every selected row, or only on the row you edited.",
+            confirmLabel: "Apply to all",
+            cancelLabel: "Only this row");
+
+        WriteInlineEdit(column, all ? targets : [edited], value);
+        InputDispatcher.Active?.RequestRepaint?.Invoke();
+    }
+
+    /// <summary>
+    /// Writes an inline edit's text into <paramref name="column"/> of every target as one undo
+    /// step (when undo is on), then raises <c>OnChange</c> per row, refreshes their cells and
+    /// re-validates them. Before this, a batch edit pushed an undo step for the edited cell only,
+    /// so undo left every other row changed.
+    /// </summary>
+    private void WriteInlineEdit(DataGridColumn<T> column, InlineEditTarget[] targets, string value)
+    {
+        if (targets.Length == 0)
+        {
+            return;
+        }
 
         if (undoEnabledValue)
         {
             EnsureUndoStack();
+            var old = new string[targets.Length];
+            for (int i = 0; i < targets.Length; i++)
+            {
+                var item = targets[i].Item;
+                old[i] = column.textGetter != null
+                    ? column.textGetter(item) ?? ""
+                    : column.objectGetter?.Invoke(item)?.ToString() ?? "";
+            }
 
-            // Capture old value before applying
-            string oldValue = column.textGetter != null
-                ? column.textGetter(item) ?? ""
-                : column.objectGetter != null
-                    ? column.objectGetter(item)?.ToString() ?? ""
-                    : "";
+            string description = targets.Length == 1
+                ? $"Edit {column.Header}"
+                : $"Edit {column.Header} on {targets.Length} rows";
 
-            int capturedDataRow = dataRow;
-            int capturedCol = editingCol;
-
-            // Execute applies the new value and pushes onto undo stack.
-            // Invalidate cache inside each lambda so undo/redo refresh text.
+            // Execute applies the new value and pushes onto the undo stack; each half refreshes
+            // the cached cell text, since there is no change notification.
             undoStack!.Execute(UndoCommand.Create(
-                $"Edit {column.Header}",
-                () => { ApplyCellValue(items[capturedDataRow], Columns[capturedCol], newValue); InvalidateCellCache(capturedDataRow); },
-                () => { ApplyCellValue(items[capturedDataRow], Columns[capturedCol], oldValue); InvalidateCellCache(capturedDataRow); }));
+                description,
+                () =>
+                {
+                    for (int i = 0; i < targets.Length; i++)
+                    {
+                        ApplyCellValue(targets[i].Item, column, value);
+                        InvalidateCellCache(targets[i].Data);
+                    }
+                },
+                () =>
+                {
+                    for (int i = 0; i < targets.Length; i++)
+                    {
+                        ApplyCellValue(targets[i].Item, column, old[i]);
+                        InvalidateCellCache(targets[i].Data);
+                    }
+                }));
         }
         else
         {
-            ApplyCellValue(item, column, newValue);
-        }
-
-        // Apply batch edit to all other selected rows
-        if (batchEditEnabled && selectedRows.Count > 1)
-        {
-            int currentEditRow = editingRow;
-            foreach (int selRow in selectedRows)
+            foreach (var target in targets)
             {
-                if (selRow == currentEditRow)
-                {
-                    continue;
-                }
-                int selDataRow = MapRow(selRow);
-                if (selDataRow >= 0 && selDataRow < items.Count)
-                {
-                    ApplyCellValue(items[selDataRow], column, newValue);
-                    onChangeHandler?.Invoke(items[selDataRow]);
-                    InvalidateCellCache(selDataRow);
-                }
+                ApplyCellValue(target.Item, column, value);
+                InvalidateCellCache(target.Data);
             }
         }
 
-        onChangeHandler?.Invoke(item);
-        InvalidateCellCache(dataRow);
+        foreach (var target in targets)
+        {
+            onChangeHandler?.Invoke(target.Item);
+        }
 
-        // Run validation on the edited row
-        int committedRow = editingRow;
-        editingRow = -1;
-        editingCol = -1;
-        editBuffer = "";
-        editCursorPos = 0;
-
-        ((ITabularDataNode)this).ValidateRow(committedRow);
-
-        return true;
+        var tdn = (ITabularDataNode)this;
+        foreach (var target in targets)
+        {
+            if (target.Display < tdn.RowCount)
+            {
+                tdn.ValidateRow(target.Display);
+            }
+        }
     }
-
     void ITabularDataNode.CancelEdit()
     {
         editingRow = -1;

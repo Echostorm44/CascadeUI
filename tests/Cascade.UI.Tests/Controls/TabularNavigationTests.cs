@@ -12,7 +12,7 @@ namespace Cascade.UI.Tests.Controls;
 /// Rows alternate between categories A and B, so grouped by category the screen shows
 /// row0, row2, row4, … under A and then row1, row3, row5, … under B, while display rows 0, 1, 2, …
 /// alternate between the two groups. Before this, Down from row0 jumped to row1 at the top of
-/// group B. Also covers Home/End, Page Up/Down, scrolling the new row into view, Shift+click
+/// group B. Also covers Ctrl+Home/End (plain Home/End move along the row in a grid with cells), Page Up/Down, scrolling the new row into view, Shift+click
 /// ranges, and a filtered grid (where Down could run past the filtered rows).
 /// </summary>
 // Global focus, hover and DevTools state: run alone, not merely apart from other keyed classes —
@@ -112,20 +112,20 @@ public class TabularNavigationTests
     }
 
     [Test]
-    public async Task Grouped_HomeAndEnd_AreTheFirstAndLastRowsOnScreen()
+    public async Task Grouped_CtrlHomeAndCtrlEnd_AreTheFirstAndLastRowsOnScreen()
     {
         var grid = BuildGrid(6);
         ITabularDataNode tdn = grid;
 
-        Press(Key.End);
+        Press(Key.End, ModifierKeys.Ctrl);
         await Assert.That(Name(tdn)).IsEqualTo("row5");
-        Press(Key.Home);
+        Press(Key.Home, ModifierKeys.Ctrl);
         await Assert.That(Name(tdn)).IsEqualTo("row0");
 
         // At either end the key does nothing — and does not fire OnSelect again.
         selected.Clear();
         Press(Key.Up);
-        Press(Key.Home);
+        Press(Key.Home, ModifierKeys.Ctrl);
         await Assert.That(selected).IsEmpty();
     }
 
@@ -136,7 +136,7 @@ public class TabularNavigationTests
         ITabularDataNode tdn = grid;
         tdn.ToggleGroupCollapse(1);
 
-        Press(Key.End);
+        Press(Key.End, ModifierKeys.Ctrl);
         await Assert.That(Name(tdn)).IsEqualTo("row4");
         Press(Key.Down);
         await Assert.That(Name(tdn)).IsEqualTo("row4");
@@ -153,7 +153,7 @@ public class TabularNavigationTests
     {
         var grid = BuildGrid(6);
         ITabularDataNode tdn = grid;
-        Press(Key.End);
+        Press(Key.End, ModifierKeys.Ctrl);
         await Assert.That(Name(tdn)).IsEqualTo("row5");
 
         tdn.ToggleGroupCollapse(1);
@@ -170,7 +170,7 @@ public class TabularNavigationTests
         tdn.ToggleGroupCollapse(1);
 
         Press(Key.Down);
-        Press(Key.End);
+        Press(Key.End, ModifierKeys.Ctrl);
 
         await Assert.That(tdn.SelectedRowIndex).IsEqualTo(-1);
         await Assert.That(selected).IsEmpty();
@@ -182,7 +182,7 @@ public class TabularNavigationTests
         // 40 rows: group A = row0, row2 … row38 (20 rows), then group B.
         var grid = BuildGrid(40);
         ITabularDataNode tdn = grid;
-        Press(Key.Home);
+        Press(Key.Home, ModifierKeys.Ctrl);
 
         // The data area is 300 - 34 = 266px: 8 whole rows, so a page is 7.
         await Assert.That(TabularNavigation.PageSize(tdn)).IsEqualTo(7);
@@ -208,7 +208,7 @@ public class TabularNavigationTests
         var grid = BuildGrid(40);
         ITabularDataNode tdn = grid;
 
-        Press(Key.End);
+        Press(Key.End, ModifierKeys.Ctrl);
 
         await Assert.That(Name(tdn)).IsEqualTo("row39");
         await Assert.That(tdn.ScrollOffsetY).IsEqualTo(tdn.MaxScrollOffsetY);
@@ -239,7 +239,7 @@ public class TabularNavigationTests
         Press(Key.Down);
         Press(Key.Down);
         await Assert.That(Name(tdn)).IsEqualTo("row1");
-        Press(Key.End);
+        Press(Key.End, ModifierKeys.Ctrl);
         await Assert.That(Name(tdn)).IsEqualTo("row5");
     }
 
@@ -253,7 +253,7 @@ public class TabularNavigationTests
 
         // row1 and row10..row19 pass: 11 rows.
         await Assert.That(tdn.RowCount).IsEqualTo(11);
-        Press(Key.End);
+        Press(Key.End, ModifierKeys.Ctrl);
         Press(Key.Down);
         await Assert.That(tdn.SelectedRowIndex).IsEqualTo(10);
         await Assert.That(Name(tdn)).IsEqualTo("row19");

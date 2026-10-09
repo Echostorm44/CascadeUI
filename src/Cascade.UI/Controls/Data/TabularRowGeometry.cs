@@ -88,6 +88,94 @@ internal static class TabularRowGeometry
         return actions.TryHit(hit.Index, relX, relY - rowTop, out action, out target);
     }
 
+    /// <summary>Width of the row-detail expand chevron column that shifts the cells right.</summary>
+    internal const float ExpandIndicatorWidth = 24f;
+
+    /// <summary>
+    /// The painted width of every column (0 for a hidden one): each column's resolved width, the
+    /// sorted column widened by its sort arrow, then all scaled down to fit when together they
+    /// exceed the table less the row-action strip and the column-chooser button. The painter, the
+    /// pointer hit tests and the accessibility tree all use this, so they agree on where a cell is.
+    /// </summary>
+    internal static float[] ScaledColumnWidths(ITabularDataNode tdn, float tableWidth)
+    {
+        // The row-action strip sits after the last column; columns resolve in what is left.
+        float availableWidth = tableWidth - ActionStripWidth(tdn, tableWidth);
+        float[] widths = new float[tdn.ColumnCount];
+        float total = 0f;
+        const float sortIndicatorReserve = 5f + 3f; // arrowW + arrowGap
+        for (int c = 0; c < tdn.ColumnCount; c++)
+        {
+            widths[c] = tdn.GetColumnWidth(c, availableWidth);
+            if (widths[c] > 0f && tdn.IsSortable && tdn.SortColumnIndex == c)
+            {
+                widths[c] += sortIndicatorReserve;
+            }
+            total += widths[c];
+        }
+
+        const float chooserBtnSize = 24f;
+        float chooserReserve = tdn.IsColumnChooserEnabled ? chooserBtnSize + 4f : 0f;
+        float usable = availableWidth - chooserReserve;
+        if (total > usable && total > 0f)
+        {
+            float scale = usable / total;
+            for (int c = 0; c < tdn.ColumnCount; c++)
+            {
+                widths[c] = MathF.Floor(widths[c] * scale);
+            }
+        }
+
+        return widths;
+    }
+
+    /// <summary>
+    /// The left edge and width of column <paramref name="col"/> relative to the table's left edge
+    /// (after the row-detail chevron column), from <see cref="ScaledColumnWidths"/>. False for a
+    /// hidden or out-of-range column.
+    /// </summary>
+    internal static bool TryGetColumnSpan(ITabularDataNode tdn, float[] widths, int col, out float left, out float width)
+    {
+        left = tdn.HasRowDetail ? ExpandIndicatorWidth : 0f;
+        width = 0f;
+        if ((uint)col >= (uint)widths.Length || widths[col] <= 0f)
+        {
+            return false;
+        }
+
+        for (int c = 0; c < col; c++)
+        {
+            left += widths[c];
+        }
+
+        width = widths[col];
+        return true;
+    }
+
+    /// <summary>
+    /// The window-logical rectangle of the cell at display row <paramref name="row"/>, column
+    /// <paramref name="col"/>, kept inside the visible data area like
+    /// <see cref="TryGetVisibleRowBounds"/> — where a cell's dropdown, calendar or menu anchors.
+    /// False when the table has not been painted, or the row or column is not shown.
+    /// </summary>
+    internal static bool TryGetVisibleCellBounds(ITabularDataNode tdn, int row, int col, out Rect bounds)
+    {
+        bounds = default;
+        if (!TryGetVisibleRowBounds(tdn, row, out var rowBounds))
+        {
+            return false;
+        }
+
+        var widths = ScaledColumnWidths(tdn, tdn.AbsoluteBounds.Width);
+        if (!TryGetColumnSpan(tdn, widths, col, out float left, out float width))
+        {
+            return false;
+        }
+
+        bounds = new Rect(rowBounds.X + left, rowBounds.Y, width, rowBounds.Height);
+        return true;
+    }
+
     /// <summary>Height of the column header band.</summary>
     internal static float HeaderHeight(ITabularDataNode tdn)
     {

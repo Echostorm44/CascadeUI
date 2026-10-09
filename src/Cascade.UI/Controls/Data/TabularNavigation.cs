@@ -162,6 +162,66 @@ internal static class TabularNavigation
     }
 
     /// <summary>
+    /// Appends the rows of <paramref name="selected"/> (or <paramref name="single"/> when the set
+    /// is empty and it is a row) to <paramref name="into"/> in the order the grid shows them: group
+    /// by group when grouped — rows of a collapsed group included, where the group sits — else
+    /// display order. What copy, cut and the grid's selection snapshot walk.
+    /// </summary>
+    internal static void AddSelectedRowsInScreenOrder(ITabularDataNode tdn, HashSet<int> selected, int single, List<int> into)
+    {
+        int rowCount = tdn.RowCount;
+        if (selected.Count == 0)
+        {
+            if ((uint)single < (uint)rowCount)
+            {
+                into.Add(single);
+            }
+
+            return;
+        }
+
+        if (!tdn.IsGrouped)
+        {
+            if (selected.Count * 4 < rowCount)
+            {
+                foreach (int row in selected)
+                {
+                    if ((uint)row < (uint)rowCount)
+                    {
+                        into.Add(row);
+                    }
+                }
+
+                into.Sort();
+                return;
+            }
+
+            for (int row = 0; row < rowCount; row++)
+            {
+                if (selected.Contains(row))
+                {
+                    into.Add(row);
+                }
+            }
+
+            return;
+        }
+
+        for (int g = 0; g < tdn.GroupCount; g++)
+        {
+            int count = tdn.GetGroupRowCount(g);
+            for (int i = 0; i < count; i++)
+            {
+                int row = tdn.GetGroupDataRowIndex(g, i);
+                if (selected.Contains(row))
+                {
+                    into.Add(row);
+                }
+            }
+        }
+    }
+
+    /// <summary>
     /// The rows between <paramref name="anchor"/> and <paramref name="row"/> inclusive, in visual
     /// order — what a Shift+click selects. Rows in collapsed groups between them are not included:
     /// they are not on screen. Falls back to the display-index range when either end is not

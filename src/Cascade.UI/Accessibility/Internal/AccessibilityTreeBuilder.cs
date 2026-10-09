@@ -259,6 +259,35 @@ internal static class AccessibilityTreeBuilder
             }
         }
 
+        // A table's rows and cells are painted, not nodes: add them (headers, then the rows on
+        // screen), and report the table's size and current cell.
+        if (node is ITabularDataNode table)
+        {
+            AddTableNodes(table, metadata.NodeId, depth + 1, children);
+            var states = new Dictionary<string, string>(metadata.States);
+            foreach (var pair in TabularAccessibility.TableStates(table))
+            {
+                states[pair.Key] = pair.Value;
+            }
+
+            return new AccessibleNodeInfo
+            {
+                NodeId = metadata.NodeId,
+                Role = metadata.Role,
+                Label = metadata.Label,
+                Description = metadata.Description,
+                Focusable = true,
+                Focused = table is Node tableNode && ReferenceEquals(FocusManager.FocusedElement, tableNode),
+                Disabled = metadata.Disabled,
+                TabIndex = metadata.TabIndex,
+                LiveRegion = metadata.LiveRegion,
+                States = states,
+                Bounds = metadata.Bounds,
+                Children = children,
+                Depth = depth,
+            };
+        }
+
         return new AccessibleNodeInfo
         {
             NodeId = metadata.NodeId,
@@ -275,6 +304,75 @@ internal static class AccessibilityTreeBuilder
             Children = children,
             Depth = depth,
         };
+    }
+
+    /// <summary>
+    /// The header row and the rows on screen of a DataTable/DataGrid, with one cell per visible
+    /// column: <see cref="AccessibleRole.Row"/> / <see cref="AccessibleRole.ColumnHeader"/> /
+    /// <see cref="AccessibleRole.Cell"/> elements in window coordinates, the current cell focused
+    /// while the table has focus.
+    /// </summary>
+    private static void AddTableNodes(ITabularDataNode table, string tableId, int depth, List<AccessibleNodeInfo> children)
+    {
+        bool tableFocused = table is Node tableNode && ReferenceEquals(FocusManager.FocusedElement, tableNode);
+        var headers = TabularAccessibility.Headers(table);
+        if (headers.Count > 0)
+        {
+            var headerCells = new List<AccessibleNodeInfo>(headers.Count);
+            foreach (var header in headers)
+            {
+                headerCells.Add(new AccessibleNodeInfo
+                {
+                    NodeId = $"{tableId}/header-{header.Column}",
+                    Role = AccessibleRole.ColumnHeader,
+                    Label = header.Header,
+                    States = TabularAccessibility.HeaderStates(header),
+                    Bounds = header.Bounds,
+                    Depth = depth + 1,
+                });
+            }
+
+            float left = headers[0].Bounds.X;
+            children.Add(new AccessibleNodeInfo
+            {
+                NodeId = $"{tableId}/header",
+                Role = AccessibleRole.Row,
+                Label = "Column headers",
+                Bounds = new Rect(left, headers[0].Bounds.Y, headers[^1].Bounds.Right - left, headers[0].Bounds.Height),
+                Children = headerCells,
+                Depth = depth,
+            });
+        }
+
+        foreach (var row in TabularAccessibility.RowsOnScreen(table))
+        {
+            var cells = new List<AccessibleNodeInfo>(row.Cells.Count);
+            foreach (var cell in row.Cells)
+            {
+                cells.Add(new AccessibleNodeInfo
+                {
+                    NodeId = $"{tableId}/row-{row.Row}/cell-{cell.Column}",
+                    Role = AccessibleRole.Cell,
+                    Label = cell.Text,
+                    Focusable = true,
+                    Focused = tableFocused && cell.Current,
+                    States = TabularAccessibility.CellStates(row, cell),
+                    Bounds = cell.Bounds,
+                    Depth = depth + 1,
+                });
+            }
+
+            children.Add(new AccessibleNodeInfo
+            {
+                NodeId = $"{tableId}/row-{row.Row}",
+                Role = AccessibleRole.Row,
+                Label = row.Cells.Count > 0 ? row.Cells[0].Text : null,
+                States = TabularAccessibility.RowStates(row),
+                Bounds = row.Bounds,
+                Children = cells,
+                Depth = depth,
+            });
+        }
     }
 
     private static void CollectFocusableNodes(object node, List<FocusOrderEntry> entries, int documentOrder)

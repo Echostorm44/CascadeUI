@@ -42,7 +42,8 @@ internal readonly record struct TabularInteractionState(
     int AnchorRow,
     int[]? SelectedRows,
     float ScrollOffsetY,
-    float ScrollOffsetX);
+    float ScrollOffsetX,
+    GridCellState? Cells = null);
 
 /// <summary>
 /// Resolves tabular column widths. Both tabular controls call this, so the two cannot drift:

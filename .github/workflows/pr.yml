@@ -131,7 +131,7 @@ jobs:
 
   merge-gate:
     name: Merge Gate
-    needs: [component-tests, generator-tests, performance-gates, visual-regression]
+    needs: [component-tests, generator-tests, performance-gates, visual-regression, integration-tests]
     runs-on: windows-latest
     timeout-minutes: 1
     steps:

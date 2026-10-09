@@ -313,16 +313,30 @@ internal sealed class AccessibleTree
 
             for (int i = 0; i < level.Items.Length; i++)
             {
-                if (level.Items[i].Label is null)
+                var menuItem = level.Items[i];
+                if (menuItem.IsSeparator)
                 {
                     continue;
                 }
 
                 var itemBounds = new Rect(level.Bounds.X, level.ItemTop(i), level.Bounds.Width, level.ItemHeights[i]);
+                if (menuItem.Kind == MenuItemKind.Custom)
+                {
+                    // A custom row: its own content (buttons and labels), laid out at the row.
+                    Walk(menuItem.Content, level.Bounds.X + menu.Metrics.InsetH, level.ItemTop(i), Intersect(level.Bounds, itemBounds), panel);
+                    continue;
+                }
+
                 int item = Add(new AccessibleEntry
                 {
                     Kind = AccessibleElementKind.MenuItem,
-                    Role = AccessibleRole.MenuItem,
+                    Role = menuItem.Kind switch
+                    {
+                        MenuItemKind.Toggle => AccessibleRole.MenuItemCheckbox,
+                        MenuItemKind.Radio => AccessibleRole.MenuItemRadio,
+                        MenuItemKind.Header => AccessibleRole.Heading,
+                        _ => AccessibleRole.MenuItem,
+                    },
                     MenuLevel = level,
                     Level = levelIndex,
                     Item = i,
@@ -369,6 +383,7 @@ internal sealed class AccessibleTree
             or AccessibleRole.Switch
             or AccessibleRole.ListItem
             or AccessibleRole.MenuItem
+            or AccessibleRole.MenuBar
             or AccessibleRole.Tab
             or AccessibleRole.ProgressBar
             or AccessibleRole.Image

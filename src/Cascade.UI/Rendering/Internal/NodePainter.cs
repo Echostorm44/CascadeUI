@@ -10166,34 +10166,8 @@ internal sealed partial class NodePainter
         float actionsWidth = TabularRowGeometry.ActionStripWidth(tdn, bounds.Width);
         bool tableFocused = ReferenceEquals(FocusManager.FocusedElement, node);
 
-        // Compute column widths (hidden columns get 0 from GetColumnWidth)
-        float[] colWidths = new float[tdn.ColumnCount];
-        float availWidth = bounds.Width - actionsWidth;
-        float totalColWidth = 0f;
-        // Sort indicator reserve: only added to the actually-sorted column.
-        // Reserving on ALL columns inflates total width, worsening proportional scaling.
-        const float sortIndicatorReserve = 5f + 3f; // arrowW (2.5*2) + arrowGap (3)
-        for (int c = 0; c < tdn.ColumnCount; c++)
-        {
-            colWidths[c] = tdn.GetColumnWidth(c, availWidth);
-            if (colWidths[c] > 0f && tdn.IsSortable && tdn.SortColumnIndex == c)
-            {
-                colWidths[c] += sortIndicatorReserve;
-            }
-            totalColWidth += colWidths[c];
-        }
-
-        // Scale columns proportionally when they exceed available width
-        float chooserReserveForScale = hasChooserBtn ? chooserBtnSize + 4f : 0f;
-        float usableWidth = availWidth - chooserReserveForScale;
-        if (totalColWidth > usableWidth && totalColWidth > 0f)
-        {
-            float scale = usableWidth / totalColWidth;
-            for (int c = 0; c < tdn.ColumnCount; c++)
-            {
-                colWidths[c] = MathF.Floor(colWidths[c] * scale);
-            }
-        }
+        // Column widths (hidden columns get 0), shared with the hit tests and the accessibility tree.
+        float[] colWidths = TabularRowGeometry.ScaledColumnWidths(tdn, bounds.Width);
 
         // Draw outer border
         ctx.DrawRect(bounds, stroke: new Stroke(borderColor, 1f), radius: 4f);
@@ -10825,17 +10799,11 @@ internal sealed partial class NodePainter
         // ── Deferred overlay rendering for select dropdown and date popup ──
         if (tdn.IsSelectDropdownOpen)
         {
-            // Store absolute cell bounds for the dropdown trigger
-            int ddCol = tdn.SelectDropdownCol;
-            int ddRow = tdn.SelectDropdownRow;
-            float cellAbsX = absoluteX;
-            for (int c = 0; c < ddCol; c++)
-            {
-                cellAbsX += colWidths[c];
-            }
-            float cellAbsY = absoluteY + headerHeight + ddRow * rowHeight;
-            float cellW = ddCol < colWidths.Length ? colWidths[ddCol] : 100f;
-            var cellAbsBounds = new Rect(cellAbsX, cellAbsY, cellW, rowHeight);
+            // The cell the dropdown hangs from, where it is on screen (scrolled, grouped, filtered).
+            var cellAbsBounds = DataGridPopupAnchor(tdn, tdn.SelectDropdownRow, tdn.SelectDropdownCol, colWidths, headerHeight, rowHeight);
+            float cellAbsX = cellAbsBounds.X;
+            float cellAbsY = cellAbsBounds.Y;
+            float cellW = cellAbsBounds.Width;
             tdn.SelectDropdownCellBounds = cellAbsBounds;
 
             float capturedAbsX = cellAbsX;
@@ -10851,16 +10819,10 @@ internal sealed partial class NodePainter
 
         if (tdn.IsDatePopupOpen && tdn.DatePopupPicker != null)
         {
-            int dpCol = tdn.DatePopupCol;
-            int dpRow = tdn.DatePopupRow;
-            float cellAbsX = absoluteX;
-            for (int c = 0; c < dpCol; c++)
-            {
-                cellAbsX += colWidths[c];
-            }
-            float cellAbsY = absoluteY + headerHeight + dpRow * rowHeight;
-            float cellW = dpCol < colWidths.Length ? colWidths[dpCol] : 100f;
-            var cellAbsBounds = new Rect(cellAbsX, cellAbsY, cellW, rowHeight);
+            var cellAbsBounds = DataGridPopupAnchor(tdn, tdn.DatePopupRow, tdn.DatePopupCol, colWidths, headerHeight, rowHeight);
+            float cellAbsX = cellAbsBounds.X;
+            float cellAbsY = cellAbsBounds.Y;
+            float cellW = cellAbsBounds.Width;
             tdn.DatePopupCellBounds = cellAbsBounds;
 
             var datePicker = tdn.DatePopupPicker;
@@ -10960,6 +10922,28 @@ internal sealed partial class NodePainter
         }
     }
 
+    /// <summary>
+    /// Window-logical rectangle of the grid cell a select dropdown or calendar hangs from: where
+    /// the cell is on screen (scroll, groups, filter and aggregate rows applied). Falls back to the
+    /// top of the data area when the row is scrolled away or collapsed, so the popup stays on the
+    /// table instead of floating where the row would be.
+    /// </summary>
+    private Rect DataGridPopupAnchor(ITabularDataNode tdn, int row, int col, float[] colWidths, float headerHeight, float rowHeight)
+    {
+        if (TabularRowGeometry.TryGetVisibleCellBounds(tdn, row, col, out var cell))
+        {
+            return cell;
+        }
+
+        float x = absoluteX;
+        if (TabularRowGeometry.TryGetColumnSpan(tdn, colWidths, col, out float left, out float width))
+        {
+            return new Rect(absoluteX + left, absoluteY + TabularRowGeometry.DataTop(tdn), width, rowHeight);
+        }
+
+        return new Rect(x, absoluteY + headerHeight, 100f, rowHeight);
+    }
+
     private void PaintTabularDataRow(
         ITabularDataNode tdn, int r, float rowY, float rowHeight,
         Rect bounds, float[] colWidths,
@@ -10970,8 +10954,12 @@ internal sealed partial class NodePainter
         float leftOffset = 0f, float editOpenT = 1f, bool tabReducedMotion = false,
         TabularRowActions? rowActions = null, float actionsWidth = 0f, bool tableFocused = false)
     {
+        // A range-mode grid selects cells, not rows: those are highlighted cell by cell below.
+        var cellGrid = tdn as ITabularCellGrid;
+        bool cellBlocks = cellGrid is { HasCellBlocks: true };
+
         // Selection highlight (strongest)
-        if (tdn.IsRowSelected(r))
+        if (tdn.IsRowSelected(r) && !cellBlocks)
         {
             ctx.DrawRect(new Rect(bounds.X + 1f, rowY, bounds.Width - 2f, rowHeight), selectedBg);
         }
@@ -11002,6 +10990,11 @@ internal sealed partial class NodePainter
 
             // Clip each cell to its column width
             using var dataCellClip = ctx.PushClip(new Rect(colX, rowY, colWidths[c], rowHeight));
+
+            if (cellBlocks && cellGrid!.IsCellSelected(r, c))
+            {
+                ctx.DrawRect(new Rect(colX, rowY, colWidths[c], rowHeight), selectedBg);
+            }
 
             if (tdn.IsCustomColumn(c))
             {
@@ -11134,6 +11127,18 @@ internal sealed partial class NodePainter
             }
 
             errColX += colWidths[c];
+        }
+
+        // The current cell: a focus ring inside it while the grid has keyboard focus (not on the
+        // cell being edited, which has its own border, nor while an inline action has the focus).
+        if (tableFocused && cellGrid is { CellNavigationEnabled: true } && r == tdn.SelectedRowIndex
+            && rowActions is not { FocusedIndex: >= 0 }
+            && !(tdn.IsEditing && tdn.EditingRow == r && tdn.EditingCol == cellGrid.CurrentColumn)
+            && TabularRowGeometry.TryGetColumnSpan(tdn, colWidths, cellGrid.CurrentColumn, out float ringLeft, out float ringWidth))
+        {
+            float ringX = bounds.X + ringLeft;
+            var ring = new Rect(ringX + 1f, rowY + 1f, Math.Max(0f, ringWidth - 2f), Math.Max(0f, rowHeight - 2f));
+            ctx.DrawRect(ring, stroke: new Stroke(theme.Colors.Primary, 2f), radius: 3f);
         }
 
         if (rowActions is not null && actionsWidth > 0f)

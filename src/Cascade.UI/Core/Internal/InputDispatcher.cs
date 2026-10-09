@@ -2968,6 +2968,13 @@ internal sealed partial class InputDispatcher
         {
             if (HandleTabularDataKeyboard(tdnFocus, evt))
             {
+                // A key the grid used (Space selecting a row, Enter starting an edit) must not
+                // also type its character into the cell.
+                if (evt.Key != Key.None)
+                {
+                    suppressNextCharacter = true;
+                }
+
                 return;
             }
         }
@@ -5206,6 +5213,19 @@ internal sealed partial class InputDispatcher
                 {
                     tdn.CommitEdit();
                 }
+
+                // The clicked cell becomes the current cell (keyboard navigation continues from it).
+                if (tdn is ITabularCellGrid { CellNavigationEnabled: true } clickedCells)
+                {
+                    if (clickedCells.RangeSelectionEnabled)
+                    {
+                        clickedCells.SelectCell(row, col, CellSelectKind.Replace);
+                    }
+                    else
+                    {
+                        clickedCells.SetCurrentColumn(col);
+                    }
+                }
                 // Close any existing DataGrid overlay
                 if (openGridOverlay != null && !ReferenceEquals(openGridOverlay, tdn))
                 {
@@ -5232,7 +5252,11 @@ internal sealed partial class InputDispatcher
                 openGridOverlay.CloseOverlay();
                 openGridOverlay = null;
             }
-            tdn.SelectRow(row, ctrl, shift);
+
+            if (!SelectClickedGridCell(tdn, row, col, ctrl, shift))
+            {
+                tdn.SelectRow(row, ctrl, shift);
+            }
         }
 
         // A click puts keyboard focus on the row, not on one of its actions.
@@ -5333,10 +5357,24 @@ internal sealed partial class InputDispatcher
             }
         }
 
+        // A grid's cells come first — unless keyboard focus is on one of the row's inline actions,
+        // which then keep Right/Left/Enter/Space/Escape (Right past the last cell reaches them).
+        bool actionKey = tdn.RowActionStrip is { FocusedIndex: >= 0 }
+            && evt.Key is Key.Right or Key.Left or Key.Enter or Key.Space or Key.Escape;
+        if (!actionKey && tdn is ITabularCellGrid cells && HandleGridCellKey(tdn, cells, evt))
+        {
+            return true;
+        }
+
         // The selected row's inline actions: Right/Left/Enter/Space/Escape when they apply.
         if (HandleRowActionKey(tdn, evt))
         {
             return true;
+        }
+
+        if (evt.Key == Key.None)
+        {
+            return false;
         }
 
         // Row movement follows the on-screen order (TabularNavigation): a grouped grid shows its
@@ -5433,6 +5471,12 @@ internal sealed partial class InputDispatcher
 
     private bool HandleTabularDataEditKeyboard(ITabularDataNode tdn, NativeKeyEvent evt)
     {
+        // A grid with cell navigation: Enter/Up/Down/Tab commit and move to the next cell.
+        if (tdn is ITabularCellGrid cells && HandleGridEditNavigationKey(tdn, cells, evt) is { } handled)
+        {
+            return handled;
+        }
+
         switch (evt.Key)
         {
             case Key.Enter:
@@ -5809,42 +5853,9 @@ internal sealed partial class InputDispatcher
         dp.SelectYear(year);
     }
 
-    /// <summary>
-    /// Computes proportionally-scaled column widths matching what the renderer uses.
-    /// When columns exceed available width (minus chooser reserve), they scale down to fit.
-    /// Includes sort indicator reserve only on the currently-sorted column.
-    /// </summary>
     private static float[] GetScaledColumnWidths(ITabularDataNode tdn, float tableWidth)
     {
-        // The row-action strip sits after the last column; columns resolve in what is left, as
-        // the painter does.
-        float availableWidth = tableWidth - TabularRowGeometry.ActionStripWidth(tdn, tableWidth);
-        float[] widths = new float[tdn.ColumnCount];
-        float total = 0f;
-        const float sortIndicatorReserve = 5f + 3f; // arrowW + arrowGap
-        for (int c = 0; c < tdn.ColumnCount; c++)
-        {
-            widths[c] = tdn.GetColumnWidth(c, availableWidth);
-            if (widths[c] > 0f && tdn.IsSortable && tdn.SortColumnIndex == c)
-            {
-                widths[c] += sortIndicatorReserve;
-            }
-            total += widths[c];
-        }
-
-        const float chooserBtnSize = 24f;
-        float chooserReserve = tdn.IsColumnChooserEnabled ? chooserBtnSize + 4f : 0f;
-        float usable = availableWidth - chooserReserve;
-        if (total > usable && total > 0f)
-        {
-            float scale = usable / total;
-            for (int c = 0; c < tdn.ColumnCount; c++)
-            {
-                widths[c] = MathF.Floor(widths[c] * scale);
-            }
-        }
-
-        return widths;
+        return TabularRowGeometry.ScaledColumnWidths(tdn, tableWidth);
     }
 
     private static int HitTestTabularColumn(ITabularDataNode tdn, float relX, float availableWidth)

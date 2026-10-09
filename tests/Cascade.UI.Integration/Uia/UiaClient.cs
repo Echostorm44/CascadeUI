@@ -406,6 +406,8 @@ internal sealed partial class UiaClient
     internal const int ListItemControl = 50007;
     internal const int MenuItemControl = 50011;
     internal const int WindowControl = 50032;
+    internal const int TabControl = 50018;
+    internal const int TabItemControl = 50019;
     internal const int MenuOpenedEvent = 20003;
 
     private static readonly Guid ClsidCUIAutomation8 = new("e22ad333-b25f-460c-83d0-0581107395c9");
@@ -545,6 +547,8 @@ internal sealed partial class UiaClient
             ListItemControl => "ListItem",
             MenuItemControl => "MenuItem",
             WindowControl => "Window",
+            TabControl => "Tab",
+            TabItemControl => "TabItem",
             50002 => "CheckBox",
             50020 => "Text",
             50009 => "Menu",

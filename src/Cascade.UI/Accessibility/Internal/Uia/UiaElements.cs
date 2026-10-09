@@ -85,6 +85,22 @@ internal sealed partial class UiaRootElement : UiaFragment, IRawElementProviderS
         }
 
         var element = Context.ElementFor(tree, index);
+        if (element is UiaElement bar && tree[index].Node is TabBar tabBar)
+        {
+            var bounds = tree[index].Bounds;
+            var padding = tabBar.LayoutData.Padding;
+            var content = new Rect(bounds.X + padding.Left, bounds.Y + padding.Top,
+                MathF.Max(0f, bounds.Width - padding.Horizontal), MathF.Max(0f, bounds.Height - padding.Vertical));
+            for (int i = 0; i < tabBar.AccessibleTabCount; i++)
+            {
+                if (tabBar.GetAccessibleTab(i, content).VisibleBounds.Contains(point))
+                {
+                    return bar.Tab(i);
+                }
+            }
+            return element;
+        }
+
         if (element is UiaElement list && tree[index].Node is IListViewNode { SectionCount: 0 } listNode)
         {
             var listBounds = tree[index].Bounds;

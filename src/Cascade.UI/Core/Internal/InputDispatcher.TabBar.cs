@@ -277,6 +277,61 @@ internal sealed partial class InputDispatcher
         return true;
     }
 
+    // ── Assistive technology (UI Automation) ──────────────────────────
+
+    /// <summary>Selects tab <paramref name="position"/> (SelectionItem.Select), as a click on it does, and scrolls it into view.</summary>
+    internal void AutomationSelectTab(TabBar bar, int position)
+    {
+        current = this;
+        if (bar.IsDisabled)
+        {
+            return;
+        }
+
+        bar.State.FocusPosition = -1;
+        SelectTab(bar, position);
+        RepaintTabBar(bar);
+    }
+
+    /// <summary>
+    /// Moves keyboard focus onto tab <paramref name="position"/> (SetFocus), as the arrow keys do:
+    /// the bar takes focus, and the tab is selected under automatic activation or becomes the
+    /// focused tab under manual activation.
+    /// </summary>
+    internal void AutomationFocusTab(TabBar bar, int position)
+    {
+        current = this;
+        if (!ReferenceEquals(FocusManager.FocusedElement, bar))
+        {
+            FocusManager.RequestFocus(bar);
+        }
+
+        FocusManager.LastFocusWasKeyboard = true;
+        if (bar.IsTabEnabled(position))
+        {
+            if (bar.ActivationMode == TabActivation.Manual)
+            {
+                bar.State.FocusPosition = position;
+            }
+            else
+            {
+                SelectTab(bar, position);
+            }
+        }
+
+        RepaintTabBar(bar);
+    }
+
+    /// <summary>Scrolls tab <paramref name="position"/> fully into view (ScrollItem.ScrollIntoView).</summary>
+    internal void AutomationScrollTabIntoView(TabBar bar, int position)
+    {
+        current = this;
+        var geometry = TabStripLayout.Ensure(bar);
+        var state = bar.State;
+        TabStripLayout.ScrollTo(state, geometry.RevealOffset(position, state.ScrollOffset), animate: false);
+        RepaintTabBar(bar);
+    }
+
     // ── Keyboard ─────────────────────────────────────────────────────
 
     /// <summary>

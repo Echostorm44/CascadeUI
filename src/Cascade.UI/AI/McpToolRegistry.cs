@@ -328,14 +328,14 @@ internal static class McpToolRegistry
 
         new(
             Name: "cascade_simulate_interaction",
-            Description: "Simulate user interaction: hover, click, press, release, focus, blur, right_click, drag. " +
+            Description: "Simulate user interaction: hover, click, press, release, focus, blur, right_click, middle_click, drag. " +
                          "For drag: use start_x/start_y (node-relative), delta_x/delta_y or end_x/end_y, and steps. " +
                          "Use x/y to click at specific coordinates (e.g. overlay popups); they are in the returned " +
                          "screenshot's pixel space by default, so a point read off a screenshot can be clicked " +
                          "directly (coord_space=\"logical\" for raw logical coordinates). " +
                          "Frame-synchronous: the response includes presented_frame and timed_out — " +
                          "timed_out=true means nothing repainted within ~2s (no sleep needed before screenshots).",
-            InputSchemaJson: """{"type":"object","properties":{"node_id":{"type":"string"},"interaction":{"type":"string","enum":["hover","click","press","release","focus","blur","right_click","unhover","drag"]},"x":{"type":"number"},"y":{"type":"number"},"coord_space":{"type":"string","enum":["screenshot","logical"],"default":"screenshot","description":"Coordinate space for x/y: returned-screenshot pixels (default) or raw logical/input pixels"},"start_x":{"type":"number"},"start_y":{"type":"number"},"end_x":{"type":"number"},"end_y":{"type":"number"},"delta_x":{"type":"number"},"delta_y":{"type":"number"},"steps":{"type":"integer","default":5},"ctrl":{"type":"boolean","description":"Hold Ctrl for a click, right_click, press, release or hover (e.g. Ctrl+click to add a row to a selection)"},"shift":{"type":"boolean","description":"Hold Shift for a click, right_click, press, release or hover (e.g. Shift+click to extend a selection)"},"alt":{"type":"boolean","description":"Hold Alt for a click, right_click, press, release or hover"},"wait_frames":{"type":"integer","default":1,"description":"How many new presented frames to wait for before responding (1-240)"}},"required":["node_id","interaction"]}""",
+            InputSchemaJson: """{"type":"object","properties":{"node_id":{"type":"string"},"interaction":{"type":"string","enum":["hover","click","press","release","focus","blur","right_click","middle_click","unhover","drag"]},"x":{"type":"number"},"y":{"type":"number"},"coord_space":{"type":"string","enum":["screenshot","logical"],"default":"screenshot","description":"Coordinate space for x/y: returned-screenshot pixels (default) or raw logical/input pixels"},"start_x":{"type":"number"},"start_y":{"type":"number"},"end_x":{"type":"number"},"end_y":{"type":"number"},"delta_x":{"type":"number"},"delta_y":{"type":"number"},"steps":{"type":"integer","default":5},"ctrl":{"type":"boolean","description":"Hold Ctrl for a click, right_click, press, release or hover (e.g. Ctrl+click to add a row to a selection)"},"shift":{"type":"boolean","description":"Hold Shift for a click, right_click, press, release or hover (e.g. Shift+click to extend a selection)"},"alt":{"type":"boolean","description":"Hold Alt for a click, right_click, press, release or hover"},"wait_frames":{"type":"integer","default":1,"description":"How many new presented frames to wait for before responding (1-240)"}},"required":["node_id","interaction"]}""",
             DebugOnly: true,
             RawResponse: false,
             RequiresLiveInstance: true,
@@ -382,6 +382,24 @@ internal static class McpToolRegistry
                     ConstantArguments: new Dictionary<string, JsonNode>
                     {
                         ["interaction"] = "right_click",
+                    }),
+                new McpCliVerbSpec(
+                    Verb: "middle-click",
+                    HelpSummary: "Simulate a middle-button click on a node, e.g. to close a tab (use --x/--y for a point)",
+                    Positionals:
+                    [
+                        new CliPositionalMapping("node_id", CliValueKind.String),
+                    ],
+                    Options:
+                    [
+                        new CliOptionMapping("--x", "x", CliValueKind.Double),
+                        new CliOptionMapping("--y", "y", CliValueKind.Double),
+                        new CliOptionMapping("--coord-space", "coord_space", CliValueKind.String),
+                        new CliOptionMapping("--wait-frames", "wait_frames", CliValueKind.Int),
+                    ],
+                    ConstantArguments: new Dictionary<string, JsonNode>
+                    {
+                        ["interaction"] = "middle_click",
                     }),
                 new McpCliVerbSpec(
                     Verb: "hover",
@@ -447,7 +465,7 @@ internal static class McpToolRegistry
                          "which view to scroll and is in the returned screenshot's pixel space by default " +
                          "(coord_space=\"logical\" for raw logical coordinates); omit x/y to scroll the center. " +
                          "A delta scroll goes to whatever is under the point, as the mouse wheel would, and reports that " +
-                         "view: target.kind (table, list_view, scroll_view, text_area, dropdown, menu, calendar, gesture, none), " +
+                         "view: target.kind (table, list_view, scroll_view, tab_bar, text_area, dropdown, menu, calendar, gesture, none), " +
                          "target.type and target.node_id, with scroll_offset_y/max_scroll_y being that view's own offset " +
                          "(a DataGrid, DataTable or virtualized ListView scrolls itself, not the page), scrolled=true when it moved, " +
                          "and unit (px, or items for an open dropdown). " +

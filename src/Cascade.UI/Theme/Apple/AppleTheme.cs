@@ -445,6 +445,10 @@ public class AppleTheme : CascadeTheme
         BorderWidth     = 0.5f,
 
         Transition = Motion.Default,
+
+        // Rounded hover pill inset from the strip, as in Safari and Finder tab bars.
+        ItemRadius = Radius.Sm,
+        ItemInset  = 6,
     };
 
     /// <inheritdoc />

@@ -9,7 +9,7 @@ namespace Cascade.UI.Tests.Controls;
 /// neighbour. All three now use <see cref="SegmentLayout"/>. These click on either side of a painted
 /// boundary in a real frame.
 /// </summary>
-[NotInParallel(nameof(SegmentGeometryTests))]
+[NotInParallel(["FocusManager", nameof(LayoutSolver.DefaultFontPath)])]
 public class SegmentGeometryTests
 {
     private static readonly ToggleOption<string>[] ToggleOptions =

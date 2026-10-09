@@ -522,4 +522,41 @@ internal sealed partial class InputDispatcher
 
         return null;
     }
+
+    // ── Assistive technology ──────────────────────────────────────────
+
+    /// <summary>Opens (or closes) top-level menu <paramref name="index"/> of <paramref name="bar"/>, for UI Automation's ExpandCollapse.</summary>
+    internal void AutomationExpandMenuBarItem(MenuBar bar, int index, bool expand)
+    {
+        current = this;
+        if (expand)
+        {
+            OpenMenuBarMenu(bar, index, highlightFirst: true);
+            return;
+        }
+
+        if (bar.OpenMenuIndex == index)
+        {
+            DeactivateMenuBar();
+        }
+    }
+
+    /// <summary>Gives the bar keyboard focus on menu <paramref name="index"/> (as Alt then the arrows would), for UI Automation's SetFocus.</summary>
+    internal void AutomationFocusMenuBarItem(MenuBar bar, int index)
+    {
+        current = this;
+        if ((uint)index >= (uint)bar.Menus.Count)
+        {
+            return;
+        }
+
+        if (!ReferenceEquals(activeMenuBar, bar) || bar.OpenMenuIndex >= 0)
+        {
+            EnterMenuBarKeyboardMode(bar);
+        }
+
+        bar.FocusedMenuIndex = index;
+        RefreshOwner(bar);
+        RequestRepaint?.Invoke();
+    }
 }

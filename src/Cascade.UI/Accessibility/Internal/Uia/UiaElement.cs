@@ -32,6 +32,9 @@ internal enum UiaElementKind : byte
 
     /// <summary>A cell of a DataTable/DataGrid, by screen position and column.</summary>
     TableCell,
+
+    /// <summary>A top-level menu of a <see cref="MenuBar"/>, by index.</summary>
+    MenuBarItem,
 }
 
 /// <summary>
@@ -94,8 +97,8 @@ internal sealed partial class UiaElement : UiaFragment,
 
     internal UiaElementKind Kind => kind;
 
-    /// <summary>The node this element speaks for (the list, for a row; the tab bar, for a tab; the table, for a table part).</summary>
-    internal Node? Node => kind is UiaElementKind.Row or UiaElementKind.Tab || IsTablePart ? list!.node : node;
+    /// <summary>The node this element speaks for (the list, for a row; the tab bar, for a tab; the table, for a table part; the bar, for a top-level menu).</summary>
+    internal Node? Node => kind is UiaElementKind.Row or UiaElementKind.Tab or UiaElementKind.MenuBarItem || IsTablePart ? list!.node : node;
 
     /// <summary>Row index for a row element.</summary>
     internal int RowIndex => index;
@@ -137,6 +140,11 @@ internal sealed partial class UiaElement : UiaFragment,
         if (IsTablePart)
         {
             return ResolveTablePart(tree);
+        }
+
+        if (kind == UiaElementKind.MenuBarItem)
+        {
+            return ResolveMenuBarItem(tree);
         }
 
         switch (kind)
@@ -212,6 +220,17 @@ internal sealed partial class UiaElement : UiaFragment,
             return NavigateIntoTable(tableNode, direction);
         }
 
+        if (kind == UiaElementKind.MenuBarItem)
+        {
+            return NavigateMenuBarItem(direction);
+        }
+
+        if (node is MenuBar barNode
+            && direction is UiaIds.NavigateDirection_FirstChild or UiaIds.NavigateDirection_LastChild)
+        {
+            return barNode.Menus.Count == 0 ? null : MenuBarItem(direction == UiaIds.NavigateDirection_FirstChild ? 0 : barNode.Menus.Count - 1);
+        }
+
         if (kind == UiaElementKind.Row)
         {
             int count = ListNode.ItemCount;
@@ -272,6 +291,11 @@ internal sealed partial class UiaElement : UiaFragment,
             return TablePartBounds();
         }
 
+        if (kind == UiaElementKind.MenuBarItem)
+        {
+            return MenuBarItemBounds();
+        }
+
         if (kind != UiaElementKind.Row)
         {
             return tree[self].Bounds;
@@ -309,6 +333,12 @@ internal sealed partial class UiaElement : UiaFragment,
             return TablePartVisible(tree[self].Visible);
         }
 
+        if (kind == UiaElementKind.MenuBarItem)
+        {
+            var label = tree[self].Visible.Intersect(MenuBarItemBounds());
+            return label.Width > 0 && label.Height > 0 ? label : default;
+        }
+
         if (kind != UiaElementKind.Row)
         {
             return tree[self].Visible;
@@ -333,6 +363,7 @@ internal sealed partial class UiaElement : UiaFragment,
             UiaElementKind.TableHeader => AccessibleRole.ColumnHeader,
             UiaElementKind.TableRow => AccessibleRole.Row,
             UiaElementKind.TableCell => AccessibleRole.Cell,
+            UiaElementKind.MenuBarItem => AccessibleRole.MenuItem,
             _ => tree[self].Role,
         };
     }
@@ -345,7 +376,8 @@ internal sealed partial class UiaElement : UiaFragment,
             UiaElementKind.Row => UiaIds.ListItemControl,
             UiaElementKind.Tab => UiaIds.TabItemControl,
             UiaElementKind.Menu => UiaIds.MenuControl,
-            UiaElementKind.MenuItem => UiaIds.MenuItemControl,
+            UiaElementKind.MenuItem => tree[self].Role == AccessibleRole.Heading ? UiaIds.TextControl : UiaIds.MenuItemControl,
+            UiaElementKind.MenuBarItem => UiaIds.MenuItemControl,
             UiaElementKind.TableHeaderRow or UiaElementKind.TableHeader or UiaElementKind.TableRow or UiaElementKind.TableCell => TablePartControlType(),
             _ => UiaProvider.MapRoleToUiaControlType(tree[self].Role),
         };
@@ -379,6 +411,9 @@ internal sealed partial class UiaElement : UiaFragment,
             case UiaElementKind.MenuItem:
                 return menuLevel!.Items[menuItem].Label;
 
+            case UiaElementKind.MenuBarItem:
+                return ((MenuBar)list!.node!).Menus[index].DisplayLabel;
+
             default:
                 ref readonly var entry = ref tree[self];
                 return AccessibilityTreeBuilder.ResolveName(node!) ?? entry.Overlay?.Title ?? entry.Overlay?.AccessibleLabel;
@@ -394,7 +429,12 @@ internal sealed partial class UiaElement : UiaFragment,
             return menu.Levels[level - 1].Items[parent].Label ?? "Submenu";
         }
 
-        return menu.Owner is SplitButton owner ? owner.Label.Resolve() : "Context menu";
+        return menu.Owner switch
+        {
+            SplitButton owner => owner.Label.Resolve(),
+            MenuBar { OpenMenuIndex: >= 0 } bar when bar.OpenMenuIndex < bar.Menus.Count => bar.Menus[bar.OpenMenuIndex].DisplayLabel,
+            _ => "Context menu",
+        };
     }
 
     internal bool IsEnabled()
@@ -406,6 +446,7 @@ internal sealed partial class UiaElement : UiaFragment,
             UiaElementKind.Tab => !TabInfo(tree, self).Disabled,
             UiaElementKind.Menu => true,
             UiaElementKind.MenuItem => !menuLevel!.Items[menuItem].Disabled,
+            UiaElementKind.MenuBarItem => true,
             _ => !AccessibilityTreeBuilder.IsDisabled(node!),
         };
     }
@@ -430,7 +471,9 @@ internal sealed partial class UiaElement : UiaFragment,
             case UiaElementKind.Menu:
                 return false;
             case UiaElementKind.MenuItem:
+                return MenuOverlay.IsActionable(menuLevel!.Items[menuItem]);
             case UiaElementKind.Tab:
+            case UiaElementKind.MenuBarItem:
                 return true;
         }
 
@@ -513,12 +556,25 @@ internal sealed partial class UiaElement : UiaFragment,
                 return patternId is UiaIds.SelectionItemPattern or UiaIds.ScrollItemPattern;
 
             case UiaElementKind.MenuItem:
+            {
+                var item = menuLevel!.Items[menuItem];
+                if (!MenuOverlay.IsActionable(item) && item.Kind is MenuItemKind.Header)
+                {
+                    return false;
+                }
+
                 return patternId switch
                 {
                     UiaIds.InvokePattern => !HasSubmenu,
                     UiaIds.ExpandCollapsePattern => HasSubmenu,
+                    UiaIds.TogglePattern => item.Kind == MenuItemKind.Toggle,
+                    UiaIds.SelectionItemPattern => item.Kind == MenuItemKind.Radio,
                     _ => false,
                 };
+            }
+
+            case UiaElementKind.MenuBarItem:
+                return patternId == UiaIds.ExpandCollapsePattern;
         }
 
         var target = node!;
@@ -627,6 +683,7 @@ internal sealed partial class UiaElement : UiaFragment,
             UiaElementKind.TableHeader => "TableColumnHeader",
             UiaElementKind.TableRow => "TableRow",
             UiaElementKind.TableCell => "TableCell",
+            UiaElementKind.MenuBarItem => "MenuBarItem",
             _ => node!.GetType().Name,
         };
         int tick = name.IndexOf('`', StringComparison.Ordinal);
@@ -635,6 +692,11 @@ internal sealed partial class UiaElement : UiaFragment,
 
     private (int Index, int Count)? SetPosition()
     {
+        if (kind == UiaElementKind.MenuBarItem)
+        {
+            return (index + 1, ((MenuBar)list!.node!).Menus.Count);
+        }
+
         if (kind == UiaElementKind.Row)
         {
             return (index + 1, ListNode.ItemCount);
@@ -656,7 +718,7 @@ internal sealed partial class UiaElement : UiaFragment,
         var items = menuLevel!.Items;
         for (int i = 0; i < items.Length; i++)
         {
-            if (items[i].Label is null)
+            if (items[i].Kind is MenuItemKind.Separator or MenuItemKind.Header or MenuItemKind.Custom)
             {
                 continue;
             }
@@ -794,11 +856,21 @@ internal sealed partial class UiaElement : UiaFragment,
 
     internal int ToggleState()
     {
+        if (kind == UiaElementKind.MenuItem)
+        {
+            return menuLevel!.Items[menuItem].IsChecked ? UiaIds.ToggleState_On : UiaIds.ToggleState_Off;
+        }
+
         return ToggleStateOf(node!);
     }
 
     internal int ExpandState()
     {
+        if (kind == UiaElementKind.MenuBarItem)
+        {
+            return ((MenuBar)list!.node!).OpenMenuIndex == index ? UiaIds.ExpandCollapseState_Expanded : UiaIds.ExpandCollapseState_Collapsed;
+        }
+
         if (kind == UiaElementKind.MenuItem)
         {
             var menu = Input.Menu;
@@ -823,6 +895,12 @@ internal sealed partial class UiaElement : UiaFragment,
             return;
         }
 
+        if (kind == UiaElementKind.MenuBarItem)
+        {
+            Input.AutomationExpandMenuBarItem((MenuBar)list!.node!, index, expand);
+            return;
+        }
+
         if (kind == UiaElementKind.MenuItem)
         {
             if (expand)
@@ -842,6 +920,11 @@ internal sealed partial class UiaElement : UiaFragment,
 
     internal bool IsSelected()
     {
+        if (kind == UiaElementKind.MenuItem)
+        {
+            return menuLevel!.Items[menuItem].IsChecked;
+        }
+
         if (IsTablePart)
         {
             return TablePartSelected();
@@ -881,6 +964,12 @@ internal sealed partial class UiaElement : UiaFragment,
                 throw new UiaException("The tab is disabled.", UiaIds.UIA_E_ELEMENTNOTENABLED);
             }
             Input.AutomationSelectTab(TabBarNode, index);
+            return;
+        }
+
+        if (kind == UiaElementKind.MenuItem)
+        {
+            Input.AutomationActivateMenuItem(MenuLevelIndex(), menuItem);
             return;
         }
 
@@ -986,6 +1075,10 @@ internal sealed partial class UiaElement : UiaFragment,
             case UiaElementKind.TableRow:
             case UiaElementKind.TableCell:
                 TablePartFocus();
+                return;
+
+            case UiaElementKind.MenuBarItem:
+                Input.AutomationFocusMenuBarItem((MenuBar)list!.node!, index);
                 return;
 
             case UiaElementKind.Menu:
@@ -1228,6 +1321,11 @@ internal sealed partial class UiaElement : UiaFragment,
             if (!IsEnabled())
             {
                 throw new UiaException("The element is disabled.", UiaIds.UIA_E_ELEMENTNOTENABLED);
+            }
+            if (kind == UiaElementKind.MenuItem)
+            {
+                Input.AutomationActivateMenuItem(MenuLevelIndex(), menuItem);
+                return UiaIds.S_OK;
             }
             Input.AutomationInvoke(node!);
             return UiaIds.S_OK;

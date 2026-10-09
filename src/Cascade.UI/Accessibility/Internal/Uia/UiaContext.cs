@@ -155,6 +155,12 @@ internal sealed class UiaContext
             return index == AccessibleTree.None ? null : ElementFor(snapshot, index);
         }
 
+        // A menu bar with keyboard focus (Alt / F10): the focused top-level menu.
+        if (input()?.ActiveMenuBar is { FocusedMenuIndex: >= 0 } menuBar && snapshot.IndexOf(menuBar) != AccessibleTree.None)
+        {
+            return ElementForNode(menuBar).MenuBarItem(menuBar.FocusedMenuIndex);
+        }
+
         if (FocusManager.FocusedElement is not { } focused)
         {
             return null;

@@ -189,6 +189,11 @@ internal sealed class UiaProvider : IPlatformAccessibilityBridge
             return new FocusKey(null, -1, level, level.Highlighted);
         }
 
+        if (context.Input?.ActiveMenuBar is { FocusedMenuIndex: >= 0 } menuBar)
+        {
+            return new FocusKey(menuBar, menuBar.FocusedMenuIndex, null, -1);
+        }
+
         var focused = FocusManager.FocusedElement;
         if (focused is ITabularDataNode table)
         {

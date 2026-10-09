@@ -101,6 +101,11 @@ internal sealed partial class UiaRootElement : UiaFragment, IRawElementProviderS
             return element;
         }
 
+        if (element is UiaElement table && tree[index].Node is ITabularDataNode && table.TablePartAt(point, tree[index].Bounds) is { } part)
+        {
+            return part;
+        }
+
         if (element is UiaElement list && tree[index].Node is IListViewNode { SectionCount: 0 } listNode)
         {
             var listBounds = tree[index].Bounds;

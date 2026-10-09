@@ -130,6 +130,7 @@ internal static class McpCommand
             Console.WriteLine($"  Port:    {entry.Port}");
             Console.WriteLine($"  PID:     {entry.Pid}");
             Console.WriteLine($"  Focused: {entry.Focused}");
+            Console.WriteLine($"  Select:  --app {InstanceSelector.Format(entry)}");
             Console.WriteLine();
         }
 
@@ -863,10 +864,10 @@ internal static class McpCommand
 
         if (discovery.Status == InstanceDiscovery.DiscoveryStatus.MultipleRunning)
         {
-            Console.Error.WriteLine($"Multiple Cascade instances are running ({discovery.AllInstances.Count}). Specify which with --app <name>:");
+            Console.Error.WriteLine($"Multiple Cascade instances are running ({discovery.AllInstances.Count}). Specify which with --app <name> or --app <name>#<pid>:");
             foreach (InstanceEntry entry in discovery.AllInstances)
             {
-                Console.Error.WriteLine($"  --app {entry.Title}   (pid {entry.Pid}, port {entry.Port}, window {entry.WindowId})");
+                Console.Error.WriteLine($"  --app {InstanceSelector.Format(entry)}   (pid {entry.Pid}, port {entry.Port}, window {entry.WindowId})");
             }
 
             return null;
@@ -1006,6 +1007,9 @@ internal static class McpCommand
         Console.WriteLine("  --app <name>   Target a specific app. Without --app, the one running");
         Console.WriteLine("                 instance is auto-detected; with several running, the");
         Console.WriteLine("                 command lists them and asks for --app.");
+        Console.WriteLine("  --app <name>#<pid>, --app #<pid>");
+        Console.WriteLine("                 Target one process when several instances share a name");
+        Console.WriteLine("                 (`info` prints each instance's <name>#<pid>).");
         Console.WriteLine("  --help, -h     Show help (works for every subcommand, no app needed)");
         Console.WriteLine();
         Console.WriteLine("Examples:");
@@ -1047,7 +1051,8 @@ internal static class McpCommand
             Console.WriteLine("running Cascade apps via the shared registry, and forwards live tool");
             Console.WriteLine("calls to them. With no app running it still serves tool schemas and");
             Console.WriteLine("returns structured \"no live instance\" errors. Without --app it targets");
-            Console.WriteLine("whichever Cascade app is running.");
+            Console.WriteLine("whichever Cascade app is running; --app <name>#<pid> (or #<pid>) pins one");
+            Console.WriteLine("process and never falls back to another.");
             return 0;
         }
 
@@ -1059,6 +1064,8 @@ internal static class McpCommand
             Console.WriteLine("Without --app, every live instance is shown; with --app, only the");
             Console.WriteLine("named app is queried. This command does not require a connection");
             Console.WriteLine("to an instance — it reads the shared instance registry directly.");
+            Console.WriteLine("Each instance's \"Select:\" line is the --app <name>#<pid> that targets");
+            Console.WriteLine("exactly that process when several share a name.");
             return 0;
         }
 

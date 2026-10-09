@@ -20,7 +20,8 @@ internal static class Program
     {
         string appId = "cascade-mcp";
 
-        // Optional: --app <id> to scope discovery to a specific app.
+        // Optional: --app <id> to scope discovery to a specific app; --app <id>#<pid> or
+        // --app #<pid> pins one process (what `cascade mcp info` prints as Select).
         // Without --app, the bridge reads the global registry and can
         // connect to any running Cascade app.
         for (int i = 0; i < args.Length - 1; i++)

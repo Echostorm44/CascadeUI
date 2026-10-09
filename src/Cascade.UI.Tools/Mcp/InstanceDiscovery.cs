@@ -93,11 +93,13 @@ internal static class InstanceDiscovery
     /// </summary>
     public static IReadOnlyList<InstanceEntry> FindAllInstances(string? appId)
     {
-        string registryId = appId ?? UI.DevTools.McpHost.GlobalRegistryId;
+        var selector = InstanceSelector.Parse(appId);
+        string registryId = selector.AppId ?? UI.DevTools.McpHost.GlobalRegistryId;
         try
         {
             using var registry = new SharedInstanceRegistry(registryId);
-            return registry.FindAll();
+            var all = registry.FindAll();
+            return selector.Pid is int pid ? all.FindAll(e => e.Pid == pid) : all;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
@@ -106,15 +108,15 @@ internal static class InstanceDiscovery
     }
 
     /// <summary>
-    /// Finds the best target in a specific app's registry (focused, else
-    /// most recently activated — see <see cref="SharedInstanceRegistry.FindTarget"/>).
+    /// Finds the instance <c>--app</c> names: <c>Name</c> is that app's focused (else most
+    /// recently activated) window — see <see cref="SharedInstanceRegistry.FindTarget"/>;
+    /// <c>Name#pid</c> and <c>#pid</c> pick one process (see <see cref="InstanceSelector"/>).
     /// </summary>
     private static InstanceEntry? FindTargetForApp(string appId)
     {
         try
         {
-            using var registry = new SharedInstanceRegistry(appId);
-            return registry.FindTarget();
+            return InstanceSelector.Parse(appId).Resolve(UI.DevTools.McpHost.GlobalRegistryId);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         {

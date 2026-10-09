@@ -35,6 +35,13 @@ internal static class McpToolDocs
         sb.AppendLine();
         sb.AppendLine("CLI-only meta-commands (no MCP tool behind them): `cascade mcp info`");
         sb.AppendLine("lists running instances; `cascade mcp docs` prints this page.");
+        sb.AppendLine();
+        sb.AppendLine("Choosing the instance: every verb, `info` and `serve` (and the `cascade-mcp`");
+        sb.AppendLine("bridge) take `--app <name>` — that app's focused or most recently activated");
+        sb.AppendLine("window. When several instances share a name, `--app <name>#<pid>` (or");
+        sb.AppendLine("`--app #<pid>`) targets one process; `cascade mcp info` prints each");
+        sb.AppendLine("instance's selector as `Select:  --app <name>#<pid>`. A pid that matches no");
+        sb.AppendLine("live instance is an error, never a fallback to another one.");
 
         foreach (McpToolRegistryEntry entry in McpToolRegistry.Entries)
         {

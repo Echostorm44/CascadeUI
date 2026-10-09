@@ -47,6 +47,10 @@ else if (string.Equals(view, "a11y", StringComparison.OrdinalIgnoreCase))
 {
     App.Run<AccessibilityView>(Configure);
 }
+else if (string.Equals(view, "gridkeys", StringComparison.OrdinalIgnoreCase))
+{
+    App.Run<GridKeysView>(Configure);
+}
 else if (string.Equals(view, "dialogs", StringComparison.OrdinalIgnoreCase))
 {
     App.Run<DialogsView>(Configure);

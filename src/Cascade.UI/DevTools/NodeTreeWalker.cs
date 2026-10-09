@@ -1729,9 +1729,19 @@ internal static class NodeTreeWalker
             children.Add(BuildAccessibilityNode(child));
         }
 
-        if (node is ITabularDataNode { RowActionStrip: { } actions } table)
+        if (node is ITabularDataNode table)
         {
-            AddRowActionAccessibilityNodes(table, actions, info.id, children);
+            AddTableAccessibilityNodes(table, info.id, children);
+            return new AccessibleNode
+            {
+                NodeId = info.id,
+                Role = info.role ?? AccessibleRole.Table,
+                Label = info.accessibleLabel,
+                Focusable = true,
+                Focused = table is Node tableNode && ReferenceEquals(FocusManager.FocusedElement, tableNode),
+                StateProperties = TabularAccessibility.TableStates(table),
+                Children = children,
+            };
         }
 
         if (node is TabBar tabBar)
@@ -1899,76 +1909,128 @@ internal static class NodeTreeWalker
     }
 
     /// <summary>
-    /// A table's inline row actions are painted inside the table node, not nodes of the tree:
-    /// expose each row on screen that has actions as a row element (named by its first cell,
-    /// selected state included) holding one button per action, in window coordinates, with the
-    /// keyboard-focused action marked focused — the same treatment the context menu gets.
+    /// A DataTable/DataGrid's rows and cells are painted inside the table node, not nodes of the
+    /// tree: expose the table as a table element — a header row of column headers, then each row on
+    /// screen as a row element (named by its first cell, selected/current state included) holding
+    /// one cell per visible column (text, column header, row/column index, selected, current and
+    /// editing state; the current cell is focused while the table has focus) and one button per
+    /// inline row action, all in window coordinates. Shared geometry: <see cref="TabularAccessibility"/>.
     /// </summary>
-    private static void AddRowActionAccessibilityNodes(
-        ITabularDataNode table, TabularRowActions actions, string tableId, List<AccessibleNode> children)
+    private static void AddTableAccessibilityNodes(ITabularDataNode table, string tableId, List<AccessibleNode> children)
     {
-        var tableBounds = table.AbsoluteBounds;
-        if (tableBounds.Width <= 0f || actions.Painted.Count == 0)
-        {
-            return;
-        }
-
-        float rowHeight = table.GetRowHeight();
-        float areaTop = tableBounds.Y + TabularRowGeometry.DataTop(table);
-        float areaBottom = tableBounds.Y + TabularRowGeometry.DataBottom(table, tableBounds.Height);
         bool tableFocused = table is Node tableNode && ReferenceEquals(FocusManager.FocusedElement, tableNode);
 
-        int index = 0;
-        var painted = actions.Painted;
-        while (index < painted.Count)
+        var headers = TabularAccessibility.Headers(table);
+        if (headers.Count > 0)
         {
-            int row = painted[index].Row;
-            var buttons = new List<AccessibleNode>();
-            bool hasTop = TabularRowGeometry.TryGetRowContentTop(table, row, out float contentTop);
-            float rowTop = areaTop + contentTop - table.ScrollOffsetY;
-            for (; index < painted.Count && painted[index].Row == row; index++)
+            var headerCells = new List<AccessibleNode>(headers.Count);
+            float left = headers[0].Bounds.X;
+            float right = headers[^1].Bounds.Right;
+            foreach (var header in headers)
             {
-                var action = painted[index];
-                var target = TabularRowActions.FindActivatable(action.Node) ?? action.Node;
-                buttons.Add(new AccessibleNode
+                headerCells.Add(new AccessibleNode
                 {
-                    NodeId = $"{tableId}/row-{row}/action-{action.Index}",
-                    Role = AccessibleRole.Button,
-                    Label = AccessibilityTreeBuilder.ResolveLabel(target) ?? AccessibilityTreeBuilder.ResolveLabel(action.Node),
-                    Focusable = true,
-                    Focused = tableFocused && table.SelectedRowIndex == row && actions.FocusedIndex == action.Index,
-                    Disabled = TabularRowActions.IsDisabled(action.Node),
-                    Bounds = new Rect(
-                        tableBounds.X + action.Bounds.X,
-                        rowTop + action.Bounds.Y,
-                        action.Bounds.Width,
-                        action.Bounds.Height),
+                    NodeId = $"{tableId}/header-{header.Column}",
+                    Role = AccessibleRole.ColumnHeader,
+                    Label = header.Header,
+                    StateProperties = TabularAccessibility.HeaderStates(header),
+                    Bounds = header.Bounds,
                 });
-            }
-
-            // Rows painted as the virtualization buffer above or below the viewport are not on screen.
-            if (!hasTop || rowTop + rowHeight <= areaTop || rowTop >= areaBottom)
-            {
-                continue;
-            }
-
-            var states = new Dictionary<string, string>();
-            if (table.IsRowSelected(row))
-            {
-                states["selected"] = "true";
             }
 
             children.Add(new AccessibleNode
             {
-                NodeId = $"{tableId}/row-{row}",
+                NodeId = $"{tableId}/header",
                 Role = AccessibleRole.Row,
-                Label = table.ColumnCount > 0 ? table.GetCellText(row, 0) : null,
-                StateProperties = states,
-                Bounds = new Rect(tableBounds.X, rowTop, tableBounds.Width, rowHeight),
-                Children = buttons,
+                Label = "Column headers",
+                Bounds = new Rect(left, headers[0].Bounds.Y, right - left, headers[0].Bounds.Height),
+                Children = headerCells,
+            });
+        }
+
+        var actionButtons = RowActionButtons(table, tableId, tableFocused);
+        foreach (var row in TabularAccessibility.RowsOnScreen(table))
+        {
+            var rowChildren = new List<AccessibleNode>(row.Cells.Count + 2);
+            foreach (var cell in row.Cells)
+            {
+                rowChildren.Add(new AccessibleNode
+                {
+                    NodeId = $"{tableId}/row-{row.Row}/cell-{cell.Column}",
+                    Role = AccessibleRole.Cell,
+                    Label = cell.Text,
+                    Focused = tableFocused && cell.Current && table.RowActionStrip is not { FocusedIndex: >= 0 },
+                    StateProperties = TabularAccessibility.CellStates(row, cell),
+                    Bounds = cell.Bounds,
+                });
+            }
+
+            if (actionButtons.TryGetValue(row.Row, out var buttons))
+            {
+                rowChildren.AddRange(buttons);
+            }
+
+            children.Add(new AccessibleNode
+            {
+                NodeId = $"{tableId}/row-{row.Row}",
+                Role = AccessibleRole.Row,
+                Label = row.Cells.Count > 0 ? row.Cells[0].Text : null,
+                StateProperties = TabularAccessibility.RowStates(row),
+                Bounds = row.Bounds,
+                Children = rowChildren,
             });
         }
     }
+
+    /// <summary>
+    /// The inline row actions (<c>RowActions</c>) painted this frame, as buttons per display row:
+    /// window coordinates, the keyboard-focused one focused — the same treatment the context menu
+    /// gets.
+    /// </summary>
+    private static Dictionary<int, List<AccessibleNode>> RowActionButtons(ITabularDataNode table, string tableId, bool tableFocused)
+    {
+        var result = new Dictionary<int, List<AccessibleNode>>();
+        var tableBounds = table.AbsoluteBounds;
+        if (table.RowActionStrip is not { } actions || tableBounds.Width <= 0f || actions.Painted.Count == 0)
+        {
+            return result;
+        }
+
+        float areaTop = tableBounds.Y + TabularRowGeometry.DataTop(table);
+        foreach (var action in actions.Painted)
+        {
+            if (!TabularRowGeometry.TryGetRowContentTop(table, action.Row, out float contentTop))
+            {
+                continue;
+            }
+
+            float rowTop = areaTop + contentTop - table.ScrollOffsetY;
+            var target = TabularRowActions.FindActivatable(action.Node) ?? action.Node;
+            if (!result.TryGetValue(action.Row, out var buttons))
+            {
+                buttons = [];
+                result[action.Row] = buttons;
+            }
+
+            buttons.Add(new AccessibleNode
+            {
+                NodeId = $"{tableId}/row-{action.Row}/action-{action.Index}",
+                Role = AccessibleRole.Button,
+                Label = AccessibilityTreeBuilder.ResolveLabel(target) ?? AccessibilityTreeBuilder.ResolveLabel(action.Node),
+                Focusable = true,
+                Focused = tableFocused && table.SelectedRowIndex == action.Row && actions.FocusedIndex == action.Index,
+                Disabled = TabularRowActions.IsDisabled(action.Node),
+                Bounds = new Rect(
+                    tableBounds.X + action.Bounds.X,
+                    rowTop + action.Bounds.Y,
+                    action.Bounds.Width,
+                    action.Bounds.Height),
+            });
+        }
+
+        return result;
+    }
+
 
     private static (ColorValue foreground, ColorValue background)? GetComputedColors(object node)
     {

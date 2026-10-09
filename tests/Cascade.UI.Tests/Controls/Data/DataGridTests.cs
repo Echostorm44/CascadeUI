@@ -1080,10 +1080,13 @@ public class DataGridTests
     // ── WP-3090: Clipboard ───────────────────────────────────────────
 
     [Test]
-    public async Task ClipboardEnabled_DefaultFalse()
+    public async Task ClipboardEnabled_DefaultTrue_AsDocumented()
     {
         var grid = CreateGrid();
         var tdn = (ITabularDataNode)grid;
+        await Assert.That(tdn.IsClipboardEnabled).IsTrue();
+
+        grid.ClipboardSupport(false);
         await Assert.That(tdn.IsClipboardEnabled).IsFalse();
     }
 

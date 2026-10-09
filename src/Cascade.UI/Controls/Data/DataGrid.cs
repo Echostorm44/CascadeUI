@@ -7,7 +7,7 @@ namespace Cascade.UI;
 /// capabilities.
 /// </summary>
 /// <typeparam name="T">The row data type.</typeparam>
-public sealed class DataGrid<T> : Node, ITabularDataNode
+public sealed partial class DataGrid<T> : Node, ITabularDataNode, ITabularCellGrid
 {
     private readonly List<DataGridColumn<T>> columns;
 
@@ -69,7 +69,7 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
     internal AggregatePosition? aggregatePosition;
     internal IReadOnlyList<ColumnAggregate<T>>? aggregates;
     internal bool isExportEnabled;
-    internal bool clipboardEnabled;
+    internal bool clipboardEnabled = true;
     internal Func<T, ValidationResult>? rowValidator;
     internal int frozenRowCount;
     internal int virtualizationBufferRows = 10;
@@ -1696,6 +1696,20 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
 
         // Keep the sort indicator tracking the same logical column.
         sortColumnIdx = RemapReorderedIndex(sortColumnIdx, fromIndex, toIndex);
+
+        // The current cell follows its column; a cell block keeps its two edge columns.
+        currentCol = RemapReorderedIndex(currentCol, fromIndex, toIndex);
+        anchorCol = RemapReorderedIndex(anchorCol, fromIndex, toIndex);
+        foreach (var block in cellBlocks)
+        {
+            block.ColA = RemapReorderedIndex(block.ColA, fromIndex, toIndex);
+            block.ColB = RemapReorderedIndex(block.ColB, fromIndex, toIndex);
+        }
+
+        if (editingCol >= 0)
+        {
+            editingCol = RemapReorderedIndex(editingCol, fromIndex, toIndex);
+        }
     }
 
     /// <summary>
@@ -2157,46 +2171,47 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
             return;
         }
 
-        var sb = new System.Text.StringBuilder();
-        var tdn = (ITabularDataNode)this;
-
-        if (selectedRows.Count > 0)
+        string text = SelectionAsTsv();
+        if (text.Length > 0)
         {
-            // Copy selected rows, sorted by display order
-            var sorted = new List<int>(selectedRows);
-            sorted.Sort();
-            foreach (int row in sorted)
-            {
-                for (int col = 0; col < tdn.ColumnCount; col++)
-                {
-                    if (col > 0)
-                    {
-                        sb.Append('\t');
-                    }
-                    sb.Append(tdn.GetCellText(row, col));
-                }
-                sb.AppendLine();
-            }
+            await Clipboard.WriteTextAsync(text);
         }
-        else if (tdn.SelectedRowIndex >= 0)
+    }
+
+    /// <summary>
+    /// The selection as tab-separated text, rows and columns in screen order: a cell block as its
+    /// rectangle (several blocks as their bounding columns, cells outside a block left empty), the
+    /// current cell in Single mode, or whole rows (visible columns) when rows are selected.
+    /// </summary>
+    internal string SelectionAsTsv()
+    {
+        CollectSelection(out var rows, out var cols, out bool cellBased);
+        if (rows.Count == 0 || cols.Count == 0)
         {
-            // Copy the single selected row
-            int row = tdn.SelectedRowIndex;
-            for (int col = 0; col < tdn.ColumnCount; col++)
+            return "";
+        }
+
+        ITabularDataNode tdn = this;
+        var sb = new System.Text.StringBuilder();
+        foreach (int row in rows)
+        {
+            for (int i = 0; i < cols.Count; i++)
             {
-                if (col > 0)
+                if (i > 0)
                 {
                     sb.Append('\t');
                 }
-                sb.Append(tdn.GetCellText(row, col));
+
+                if (!cellBased || ((ITabularCellGrid)this).IsCellSelected(row, cols[i]))
+                {
+                    sb.Append(tdn.GetCellText(row, cols[i]));
+                }
             }
-            sb.AppendLine();
+
+            sb.Append("\r\n");
         }
 
-        if (sb.Length > 0)
-        {
-            await Clipboard.WriteTextAsync(sb.ToString());
-        }
+        return sb.ToString();
     }
 
     async Task<bool> ITabularDataNode.CutCellsAsync()
@@ -2206,34 +2221,29 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
             return false;
         }
 
-        // Copy first
-        await ((ITabularDataNode)this).CopyCellsAsync();
-
-        // Clear selected cells
-        var items = Items.Value;
-        var rowsToEdit = selectedRows.Count > 0
-            ? new List<int>(selectedRows)
-            : (selectedRowIdx >= 0 ? new List<int> { selectedRowIdx } : new List<int>());
-
-        foreach (int row in rowsToEdit)
+        // Copy first, then clear exactly the cells that were copied, as one undo step.
+        CollectSelection(out var rows, out var cols, out bool cellBased);
+        string text = SelectionAsTsv();
+        if (text.Length == 0)
         {
-            int dataRow = MapRow(row);
-            if (dataRow < 0 || dataRow >= items.Count)
+            return false;
+        }
+
+        await Clipboard.WriteTextAsync(text);
+
+        var cells = new List<(int Row, int Col)>(rows.Count * cols.Count);
+        foreach (int row in rows)
+        {
+            foreach (int col in cols)
             {
-                continue;
-            }
-            var item = items[dataRow];
-            for (int col = 0; col < Columns.Count; col++)
-            {
-                if (((ITabularDataNode)this).IsColumnEditable(col) && !((ITabularDataNode)this).IsBoolColumn(col))
+                if (!cellBased || ((ITabularCellGrid)this).IsCellSelected(row, col))
                 {
-                    ApplyCellValue(item, Columns[col], "");
-                    onChangeHandler?.Invoke(item);
+                    cells.Add((row, col));
                 }
             }
         }
 
-        return rowsToEdit.Count > 0;
+        return ClearCells(cells, "Cut");
     }
 
     async Task<bool> ITabularDataNode.PasteCellsAsync()
@@ -2262,18 +2272,34 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
             return false;
         }
 
-        // Parse tab-separated lines
-        string[] lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        if (lines.Length == 0)
+        return PasteText(text);
+    }
+
+    /// <summary>
+    /// Writes tab-separated <paramref name="text"/> into the grid from the current cell: each line
+    /// into the next row on screen, each value into the next visible column. Read-only and toggle
+    /// cells are skipped (their value is not written, the column still advances); values past the
+    /// last row or column are dropped. One undo step.
+    /// </summary>
+    internal bool PasteText(string text)
+    {
+        var lines = new List<string>(text.Split('\n'));
+        if (lines.Count > 0 && lines[^1].TrimEnd('\r').Length == 0)
+        {
+            lines.RemoveAt(lines.Count - 1);
+        }
+
+        if (lines.Count == 0)
         {
             return false;
         }
 
-        var tdn = (ITabularDataNode)this;
-        int startRow = tdn.SelectedRowIndex;
-        if (startRow < 0)
+        ITabularDataNode tdn = this;
+        int startRow = selectedRowIdx >= 0 ? selectedRowIdx : TabularNavigation.First(this);
+        int startCol = TabularCellNavigation.Clamp(this, currentCol);
+        if (startRow < 0 || startCol < 0)
         {
-            startRow = 0;
+            return false;
         }
 
         var items = Items.Value;
@@ -2286,65 +2312,75 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
             batch = undoStack!.BeginBatch("Paste");
         }
 
-        for (int lineIdx = 0; lineIdx < lines.Length; lineIdx++)
+        try
         {
-            int targetRow = startRow + lineIdx;
-            if (targetRow >= tdn.RowCount)
+            int targetRow = startRow;
+            for (int lineIdx = 0; lineIdx < lines.Count && targetRow >= 0; lineIdx++)
             {
-                break;
-            }
-
-            int dataRow = MapRow(targetRow);
-            if (dataRow < 0 || dataRow >= items.Count)
-            {
-                continue;
-            }
-
-            string[] cells = lines[lineIdx].TrimEnd('\r').Split('\t');
-            var item = items[dataRow];
-
-            for (int cellIdx = 0; cellIdx < cells.Length && cellIdx < tdn.ColumnCount; cellIdx++)
-            {
-                if (!tdn.IsColumnEditable(cellIdx) || tdn.IsBoolColumn(cellIdx))
+                int dataRow = MapRow(targetRow);
+                if ((uint)dataRow >= (uint)items.Count)
                 {
-                    continue;
+                    break;
                 }
 
-                string newVal = cells[cellIdx];
-                var column = Columns[cellIdx];
+                string[] cells = lines[lineIdx].TrimEnd('\r').Split('\t');
+                var item = items[dataRow];
+                bool rowChanged = false;
 
-                if (undoEnabledValue)
+                int col = startCol;
+                for (int cellIdx = 0; cellIdx < cells.Length && col >= 0; cellIdx++, col = TabularCellNavigation.Next(this, col, +1))
                 {
-                    string oldVal = column.textGetter != null
-                        ? column.textGetter(item) ?? ""
-                        : column.objectGetter != null
-                            ? column.objectGetter(item)?.ToString() ?? ""
-                            : "";
+                    if (!tdn.IsColumnEditable(col) || tdn.IsBoolColumn(col))
+                    {
+                        continue;
+                    }
 
-                    int capturedDataRow = dataRow;
-                    int capturedCol = cellIdx;
+                    string newVal = cells[cellIdx];
+                    var column = Columns[col];
 
-                    // Invalidate the row's cached text in each lambda so the apply,
-                    // undo, and redo all refresh GetCellText — same reason as
-                    // CommitEdit/ApplyBatchEdit (no INotifyPropertyChanged).
-                    undoStack!.Execute(UndoCommand.Create(
-                        $"Paste {column.Header}",
-                        () => { ApplyCellValue(items[capturedDataRow], Columns[capturedCol], newVal); InvalidateCellCache(capturedDataRow); },
-                        () => { ApplyCellValue(items[capturedDataRow], Columns[capturedCol], oldVal); InvalidateCellCache(capturedDataRow); }));
+                    if (undoEnabledValue)
+                    {
+                        string oldVal = column.textGetter != null
+                            ? column.textGetter(item) ?? ""
+                            : column.objectGetter != null
+                                ? column.objectGetter(item)?.ToString() ?? ""
+                                : "";
+
+                        int capturedDataRow = dataRow;
+                        int capturedCol = col;
+
+                        // Invalidate the row's cached text in each lambda so the apply,
+                        // undo, and redo all refresh GetCellText — same reason as
+                        // CommitEdit/ApplyBatchEdit (no INotifyPropertyChanged).
+                        undoStack!.Execute(UndoCommand.Create(
+                            $"Paste {column.Header}",
+                            () => { ApplyCellValue(items[capturedDataRow], Columns[capturedCol], newVal); InvalidateCellCache(capturedDataRow); },
+                            () => { ApplyCellValue(items[capturedDataRow], Columns[capturedCol], oldVal); InvalidateCellCache(capturedDataRow); }));
+                    }
+                    else
+                    {
+                        ApplyCellValue(item, column, newVal);
+                        InvalidateCellCache(dataRow);
+                    }
+
+                    anyPasted = true;
+                    rowChanged = true;
                 }
-                else
+
+                if (rowChanged)
                 {
-                    ApplyCellValue(item, column, newVal);
-                    InvalidateCellCache(dataRow);
+                    onChangeHandler?.Invoke(item);
+                    tdn.ValidateRow(targetRow);
                 }
 
-                anyPasted = true;
+                int next = TabularNavigation.Step(this, targetRow, 1);
+                targetRow = next == targetRow ? -1 : next;
             }
-
-            onChangeHandler?.Invoke(item);
         }
-
-        batch?.Dispose();
+        finally
+        {
+            batch?.Dispose();
+        }
 
         return anyPasted;
     }
@@ -2950,6 +2986,7 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
         selectedRowIdx = -1;
         selectedRows.Clear();
         anchorRow = -1;
+        ResetCellBlocks();
     }
 
     private bool RowPassesFilter(T item, int dataRow, string globalText)
@@ -3090,6 +3127,7 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
                 selectedRowIdx = -1;
                 selectedRows.Clear();
                 anchorRow = -1;
+                ResetCellBlocks();
                 RebuildGroupedRows();
                 return;
             }
@@ -3106,6 +3144,7 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
         selectedRowIdx = -1;
         selectedRows.Clear();
         anchorRow = -1;
+        ResetCellBlocks();
 
         // Rebuild groups from new sort order
         RebuildGroupedRows();
@@ -3193,6 +3232,32 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
             return;
         }
 
+        // Range modes select cell blocks: a row click is a click on the current column's cell.
+        if (IsRangeMode)
+        {
+            var kind = (ctrl, shift) switch
+            {
+                (true, true) => CellSelectKind.AddExtend,
+                (true, false) => CellSelectKind.Add,
+                (false, true) => CellSelectKind.Extend,
+                _ => CellSelectKind.Replace,
+            };
+            int previousRow = selectedRowIdx;
+            ((ITabularCellGrid)this).SelectCell(row, currentCol, kind);
+            if (previousRow == row)
+            {
+                NotifyRowSelected(row);
+            }
+
+            return;
+        }
+
+        if (cellSelectionModeValue == CellSelectionMode.Single && !TabularCellNavigation.IsVisibleColumn(this, currentCol))
+        {
+            currentCol = TabularCellNavigation.FirstColumn(this);
+            anchorCol = currentCol;
+        }
+
         if (shift && anchorRow >= 0)
         {
             // The rows between anchor and row as they appear on screen: grouped, that is not the
@@ -3251,6 +3316,7 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
                 selectedRows.Clear();
                 selectedRowIdx = -1;
                 anchorRow = -1;
+                ResetCellBlocks();
             }
 
             return;
@@ -3298,6 +3364,13 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
         selectedRows.Add(displayRow);
         selectedRowIdx = displayRow;
         anchorRow = displayRow;
+        ResetCellBlocks();
+        if (IsRangeMode)
+        {
+            currentCol = TabularCellNavigation.Clamp(this, currentCol);
+            anchorCol = currentCol;
+            cellBlocks.Add(new CellBlock([displayRow], currentCol, currentCol));
+        }
     }
 
     /// <summary>
@@ -3422,7 +3495,8 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
             AnchorRow: anchorRow,
             SelectedRows: selectedRows.Count > 0 ? [.. selectedRows] : null,
             ScrollOffsetY: scrollOffsetY,
-            ScrollOffsetX: scrollOffsetX);
+            ScrollOffsetX: scrollOffsetX,
+            Cells: CaptureCellState());
 
     void ITabularDataNode.RestoreInteractionState(TabularInteractionState state)
     {
@@ -3457,6 +3531,11 @@ public sealed class DataGrid<T> : Node, ITabularDataNode
         // clamps on the next frame, once it knows the viewport.
         scrollOffsetY = Math.Max(0f, state.ScrollOffsetY);
         scrollOffsetX = Math.Max(0f, state.ScrollOffsetX);
+
+        if (state.Cells is { } cells)
+        {
+            RestoreCellState(cells);
+        }
     }
 
     string ITabularDataNode.GetCellText(int row, int col)

@@ -33,7 +33,7 @@ public class GridRowActionsCliTests
             // The accessibility tree names each row's actions.
             var shopping = await RowNamed(appId, "Shopping list");
             await Assert.That(shopping).IsNotNull().Because("rows on screen expose their actions");
-            var buttons = shopping!["children"]!.AsArray();
+            var buttons = Buttons(shopping!);
             await Assert.That(string.Join("|", buttons.Select(b => $"{b!["role"]!.GetValue<string>()}:{b["label"]!.GetValue<string>()}"))).IsEqualTo("Button:Pin|Button:Delete");
 
             // A click on "Pin" runs it for that row and leaves the selection alone.
@@ -47,10 +47,15 @@ public class GridRowActionsCliTests
             var meetingBounds = meeting!["bounds"]!;
             await Run(appId, "click", gridId, "--x", "60", "--y", Format(CenterY(meetingBounds)), "--coord-space", "logical");
             await Assert.That(await Labels(appId)).Contains("Selected: Meeting notes");
+            // Right moves through the row's cells first (Clip, then Kind), then into its actions.
+            await Run(appId, "type", "--key", "Right");
+            var onKind = await RowNamed(appId, "Meeting notes");
+            await Assert.That(Cells(onKind!)[1]["focused"]?.GetValue<bool>()).IsTrue();
             await Run(appId, "type", "--key", "Right");
             await Run(appId, "type", "--key", "Right");
             var focusedRow = await RowNamed(appId, "Meeting notes");
-            await Assert.That(focusedRow!["children"]![1]!["focused"]?.GetValue<bool>()).IsTrue();
+            await Assert.That(Buttons(focusedRow!)[1]["focused"]?.GetValue<bool>()).IsTrue();
+            await Assert.That(Cells(focusedRow!).Any(c => c["focused"]?.GetValue<bool>() == true)).IsFalse();
             await Run(appId, "type", "--key", "Enter");
             await Assert.That(await Labels(appId)).Contains("Last: remove Meeting notes");
 
@@ -73,13 +78,23 @@ public class GridRowActionsCliTests
             // Scrolled to the end, the last row's "Pin" is where the tree says, and runs for that row.
             var last = await RowNamed(appId, "hello@example.com");
             await Assert.That(last).IsNotNull();
-            await ClickCenter(appId, gridId, last!["children"]![0]!);
+            await ClickCenter(appId, gridId, Buttons(last!)[0]);
             await Assert.That(await Labels(appId)).Contains("Last: pin hello@example.com");
         }
         finally
         {
             fixture.Kill();
         }
+    }
+
+    private static List<JsonNode> Buttons(JsonNode row)
+    {
+        return [.. row["children"]!.AsArray().Where(c => c!["role"]!.GetValue<string>() == "Button").Select(c => c!)];
+    }
+
+    private static List<JsonNode> Cells(JsonNode row)
+    {
+        return [.. row["children"]!.AsArray().Where(c => c!["role"]!.GetValue<string>() == "Cell").Select(c => c!)];
     }
 
     private static float CenterY(JsonNode bounds)

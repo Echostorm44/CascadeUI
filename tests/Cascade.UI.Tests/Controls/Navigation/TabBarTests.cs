@@ -287,8 +287,11 @@ public class TabBarTests
         bar = Bars(orch)[0];
         g = TabStripLayout.Ensure(bar);
         await Assert.That(g.Hidden[9]).IsFalse();
-        await Assert.That(g.Hidden[0]).IsFalse();
         await Assert.That(g.ContentExtent).IsLessThanOrEqualTo(g.Viewport.Width);
+
+        // The leading tabs stay when they fit beside it (font metrics decide how many do).
+        bool firstFits = g.Extent[0] + g.Metrics.ItemGap + g.Extent[9] <= g.Viewport.Width;
+        await Assert.That(g.Hidden[0]).IsEqualTo(!firstFits);
     }
 
     [Test]

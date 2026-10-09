@@ -114,6 +114,11 @@ public static class Toast
         {
             activeToasts.Clear();
         }
+
+        // The hit zones are rebuilt by the next paint; until then the dismissed toasts' zones
+        // would keep taking presses meant for what is beneath them (and a window that is not
+        // painting — hidden, or a headless test — never rebuilds them).
+        HitZones.Clear();
     }
 
     /// <summary>

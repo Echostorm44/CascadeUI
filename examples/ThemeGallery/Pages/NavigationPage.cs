@@ -21,9 +21,30 @@ internal static class NavigationPage
         "M7 4 7 20M7 4 14 4 16 6 16 9 14 12 7 12M7 12 15 12 17 14 17 18 15 20 7 20",
         new Size(24, 24), 24f, "Bold");
 
+    private static readonly Icon HomeIcon = new(
+        ["M3 11L12 3L21 11", "M5 9V21H19V9", "M10 21V14H14V21"],
+        new Size(24, 24), 24f, "Home");
+
+    private static readonly Icon InboxIcon = new(
+        ["M3 4H21V20H3z", "M3 13H8L10 16H14L16 13H21"],
+        new Size(24, 24), 24f, "Inbox");
+
+    private static readonly Icon ChartIcon = new(
+        ["M3 3V21H21", "M7 15L11 10L14 13L20 6"],
+        new Size(24, 24), 24f, "Reports");
+
+    private static readonly Icon ArchiveIcon = new(
+        ["M3 8V21H21V8", "M2 3H22V8H2z", "M10 12H14"],
+        new Size(24, 24), 24f, "Archive");
+
+    private static readonly Icon FileIcon = new(
+        ["M5 2V22H19V8L13 2z", "M13 2V8H19"],
+        new Size(24, 24), 24f, "File");
+
     internal static Node Render(ThemeGalleryPage host) =>
         new Column(spacing: 32, children:
         [
+            TabBarSection(host),
             MenuBarSection(),
             BreadcrumbSection(),
             ToolBarSection(),
@@ -32,6 +53,58 @@ internal static class NavigationPage
             AccordionSection(),
             ExpanderSection(),
         ]);
+
+    // ── TabBar ───────────────────────────────────────────────────────────
+
+    static Node TabBarSection(ThemeGalleryPage host)
+    {
+        var files = host.TabFiles;
+        var editorTabs = new Tab[files.Count];
+        for (int i = 0; i < files.Count; i++)
+        {
+            string name = files[i];
+            editorTabs[i] = new Tab(FileIcon, name, i)
+                .OnClose(() => { host.CloseTabFile(name); })
+                .Dirty(name.EndsWith(".md", StringComparison.Ordinal));
+        }
+
+        return Section("TabBar",
+            "Tabs with icons, a badge and a disabled tab; closable editor tabs that scroll when they overflow; a vertical bar.",
+            new Column(spacing: 16, children:
+            [
+                new TabBar(
+                    tabs:
+                    [
+                        new Tab(HomeIcon, "Overview", 0),
+                        new Tab(InboxIcon, "Inbox", 1).Badge(12),
+                        new Tab(ChartIcon, "Reports", 2),
+                        new Tab(ArchiveIcon, "Archive", 3).Disabled(),
+                    ],
+                    selected: host.TabSection,
+                    onSelect: host.SelectTabSection)
+                    .AccessibleLabel("Sections"),
+                new TabBar(editorTabs, host.TabFile, host.SelectTabFile)
+                    .Width(560)
+                    .AccessibleLabel("Open files"),
+                new Row(spacing: 0, children:
+                [
+                    new TabBar(
+                        tabs:
+                        [
+                            new Tab(HomeIcon, "General", 0),
+                            new Tab(InboxIcon, "Notifications", 1).Badge("New"),
+                            new Tab(ChartIcon, "Usage and billing", 2),
+                        ],
+                        selected: host.TabSide,
+                        onSelect: host.SelectTabSide)
+                        .Position(TabPosition.Left)
+                        .Width(200)
+                        .Height(170)
+                        .AccessibleLabel("Settings sections"),
+                    new Label($"Showing section {host.TabSide + 1}").Padding(EdgeInsets.All(16)),
+                ]),
+            ]));
+    }
 
     // ── MenuBar ──────────────────────────────────────────────────────────
 

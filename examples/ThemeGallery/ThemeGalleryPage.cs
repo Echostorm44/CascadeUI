@@ -27,6 +27,56 @@ internal sealed partial class ThemeGalleryPage : Component
         "Feedback"
     ];
 
+    // ── Navigation page: TabBar demo state ───────────────────────────────
+    int tabSection;
+    int tabFile = 1;
+    int tabSide;
+    readonly List<string> tabFiles =
+    [
+        "Program.cs", "ThemeGalleryPage.cs", "NavigationPage.cs", "README.md",
+        "ButtonsPage.cs", "theme-system.md", "SelectionPage.cs", "ChartsPage.cs",
+    ];
+
+    internal int TabSection => tabSection;
+    internal int TabFile => tabFile;
+    internal int TabSide => tabSide;
+    internal IReadOnlyList<string> TabFiles => tabFiles;
+
+    internal void SelectTabSection(int index)
+    {
+        tabSection = index;
+        Invalidate();
+    }
+
+    internal void SelectTabFile(int index)
+    {
+        tabFile = index;
+        Invalidate();
+    }
+
+    internal void SelectTabSide(int index)
+    {
+        tabSide = index;
+        Invalidate();
+    }
+
+    internal void CloseTabFile(string name)
+    {
+        int at = tabFiles.IndexOf(name);
+        if (at < 0)
+        {
+            return;
+        }
+
+        tabFiles.RemoveAt(at);
+        if (tabFile >= tabFiles.Count)
+        {
+            tabFile = Math.Max(0, tabFiles.Count - 1);
+        }
+
+        Invalidate();
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
     void SwitchTheme(string name)

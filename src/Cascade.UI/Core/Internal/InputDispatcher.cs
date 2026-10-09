@@ -5908,6 +5908,7 @@ internal sealed partial class InputDispatcher
             bounds,
             count,
             i => sc.GetSegmentLabel(i),
+            SegmentLayout.SegmentedPaddingH,
             lastMousePosition.X);
         sc.SelectIndex(clickedIndex);
     }
@@ -6184,19 +6185,20 @@ internal sealed partial class InputDispatcher
             bounds,
             count,
             i => tg.GetOptionLabel(i),
+            SegmentLayout.ToggleGroupPaddingH,
             lastMousePosition.X);
         tg.SelectIndex(clickedIndex);
     }
 
     /// <summary>
-    /// Hit-tests a control whose segments/buttons are sized proportionally to
-    /// label text length plus a uniform horizontal padding. This must match the
-    /// layout/paint logic used by SegmentedControl and ToggleGroup.
+    /// Hit-tests a SegmentedControl or ToggleGroup: the segments are sized by
+    /// <see cref="SegmentLayout"/>, exactly as the layout and the painter size them.
     /// </summary>
-    private static int HitTestVariableWidthSegments(
+    internal static int HitTestVariableWidthSegments(
         Rect bounds,
         int count,
         Func<int, string> getLabel,
+        float paddingH,
         float absoluteX)
     {
         if (count == 0)
@@ -6204,28 +6206,13 @@ internal sealed partial class InputDispatcher
             return 0;
         }
 
-        float fontSize = LayoutSolver.BodyFontSize * 0.85f;
-        float paddingH = 16f;
-        float ratio = 0.55f;
         float[] widths = new float[count];
-        float measuredTotal = 0f;
         for (int i = 0; i < count; i++)
         {
-            string label = getLabel(i);
-            float textW = label.Length * fontSize * ratio;
-            float w = textW + paddingH * 2f;
-            widths[i] = w;
-            measuredTotal += w;
+            widths[i] = SegmentLayout.NaturalWidth(getLabel(i), paddingH);
         }
 
-        float scale = measuredTotal > 0f ? bounds.Width / measuredTotal : 1f;
-        if (MathF.Abs(scale - 1f) > 0.001f)
-        {
-            for (int i = 0; i < count; i++)
-            {
-                widths[i] *= scale;
-            }
-        }
+        SegmentLayout.ScaleToFit(widths, bounds.Width);
 
         float relX = absoluteX - bounds.X;
         float xAcc = 0f;

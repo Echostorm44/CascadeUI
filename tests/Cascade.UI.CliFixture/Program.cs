@@ -55,6 +55,14 @@ else if (string.Equals(view, "batchedit", StringComparison.OrdinalIgnoreCase))
 {
     App.Run<BatchEditView>(Configure);
 }
+else if (string.Equals(view, "controls", StringComparison.OrdinalIgnoreCase))
+{
+    App.Run<ControlsView>(config =>
+    {
+        Configure(config);
+        config.WindowSize = new Size(560, 660);
+    });
+}
 else if (string.Equals(view, "shell", StringComparison.OrdinalIgnoreCase))
 {
     App.Run<ShellView>(config =>

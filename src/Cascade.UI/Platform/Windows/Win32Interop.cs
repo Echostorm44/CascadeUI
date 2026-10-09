@@ -15,6 +15,7 @@ internal static partial class Win32
     internal const uint WM_NULL             = 0x0000;
     internal const uint WM_CREATE           = 0x0001;
     internal const uint WM_DESTROY          = 0x0002;
+    internal const uint WM_GETOBJECT        = 0x003D;
     internal const uint WM_MOVE             = 0x0003;
     internal const uint WM_SIZE             = 0x0005;
     internal const uint WM_ACTIVATE         = 0x0006;

@@ -406,6 +406,10 @@ internal sealed class FrameOrchestrator : IDisposable
         DiagnosticsHub.EndPaint();
         DiagnosticsHub.EndFrame();
 
+        // Screen readers: focus and state change events. Returns at once while no assistive
+        // technology is connected (no allocation, no tree walk).
+        AccessibilityTreeBuilder.NotifyFrameCompleted(reRendered);
+
         // 6. If nothing else needs a frame, stop the timer to save CPU/battery. A blinking caret
         // only needs a frame at its next toggle: where the platform can wake us then, sleep until
         // it; otherwise keep ticking. Spinners etc. keep the loop running.

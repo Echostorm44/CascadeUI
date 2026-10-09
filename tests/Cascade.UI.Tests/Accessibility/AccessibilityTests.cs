@@ -728,7 +728,7 @@ public class AccessibilityTests
     {
         int role = AtSpiBridge.MapRoleToAtSpiRole(AccessibleRole.Button);
 
-        await Assert.That(role).IsEqualTo(62);
+        await Assert.That(role).IsEqualTo(43);
     }
 
     [Test]
@@ -736,15 +736,15 @@ public class AccessibilityTests
     {
         int role = AtSpiBridge.MapRoleToAtSpiRole(AccessibleRole.Checkbox);
 
-        await Assert.That(role).IsEqualTo(12);
+        await Assert.That(role).IsEqualTo(7);
     }
 
     [Test]
-    public async Task AtSpi_MapRole_TextBox_ReturnsText()
+    public async Task AtSpi_MapRole_TextBox_ReturnsEntry()
     {
         int role = AtSpiBridge.MapRoleToAtSpiRole(AccessibleRole.TextBox);
 
-        await Assert.That(role).IsEqualTo(78);
+        await Assert.That(role).IsEqualTo(79);
     }
 
     [Test]
@@ -760,7 +760,7 @@ public class AccessibilityTests
     {
         int role = AtSpiBridge.MapRoleToAtSpiRole(AccessibleRole.Slider);
 
-        await Assert.That(role).IsEqualTo(73);
+        await Assert.That(role).IsEqualTo(51);
     }
 
     [Test]

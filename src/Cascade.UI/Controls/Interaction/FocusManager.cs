@@ -469,9 +469,17 @@ public static class FocusExtensions
     }
 
     /// <summary>
-    /// Traps focus within this node's subtree. Tab and Shift+Tab cycle
-    /// within the node rather than escaping to the rest of the page.
+    /// Traps keyboard focus within this node's subtree. While focus is inside it, Tab and
+    /// Shift+Tab cycle through the subtree's tab stops (wrapping at the ends) rather than
+    /// escaping to the rest of the page; with nested traps the innermost one applies.
     /// </summary>
+    /// <remarks>
+    /// The trap constrains Tab once focus is inside; it does not pull focus in. Pair it with
+    /// <see cref="InitialFocus{T, TRef}"/> (or <see cref="AutoFocus{T}"/> on a child) to move
+    /// focus in when the node mounts. A pointer press outside the trap still moves focus there,
+    /// and <see cref="FocusManager.MoveFocus"/> (registration order) ignores it. Dialogs, sheets
+    /// and popovers trap focus on their own and do not need this modifier.
+    /// </remarks>
     public static T FocusTrap<T>(this T node, bool trap = true) where T : Node
     {
         ArgumentNullException.ThrowIfNull(node);

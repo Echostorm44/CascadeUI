@@ -398,6 +398,21 @@ internal sealed class HeadlessMcpServer : IDisposable
     /// </summary>
     private InstanceEntry? FindLiveInstance()
     {
+        // "Name#pid" / "#pid" (what `cascade mcp info` prints) pins one process: never fall back
+        // to another instance, which would silently drive the wrong app.
+        var selector = InstanceSelector.Parse(appId);
+        if (selector.Pid is not null)
+        {
+            try
+            {
+                return selector.Resolve(DevTools.McpHost.GlobalRegistryId);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                return null;
+            }
+        }
+
         // Try primary appId first (fastest path for same-app connections)
         var entry = TryFindInstance(appId);
         if (entry is not null)

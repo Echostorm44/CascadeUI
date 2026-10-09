@@ -455,6 +455,7 @@ internal sealed partial class InputDispatcher
     internal void SetRoot(Node? root)
     {
         rootNode = root;
+        mainRoot = root;
         current = this;
     }
 
@@ -470,6 +471,8 @@ internal sealed partial class InputDispatcher
         {
             return;
         }
+
+        self.Overlays?.NotifyNodeReplaced(oldNode, newNode);
 
         if (ReferenceEquals(self.pressedNode, oldNode))
         {
@@ -546,6 +549,26 @@ internal sealed partial class InputDispatcher
 
         // An open menu is modal for the pointer: it hovers, activates or dismisses first.
         if (HandleMenuMouse(evt))
+        {
+            return;
+        }
+
+        // Open dialogs, sheets and popovers take the pointer next (see InputDispatcher.Overlays).
+        if (RouteOverlayMouse(evt))
+        {
+            return;
+        }
+
+        DispatchMouse(evt);
+    }
+
+    /// <summary>
+    /// Pointer dispatch against <see cref="rootNode"/> — the page, or an overlay's tree while
+    /// <see cref="RouteOverlayMouse"/> has swapped it in.
+    /// </summary>
+    private void DispatchMouse(NativeMouseEvent evt)
+    {
+        if (rootNode is null)
         {
             return;
         }
@@ -2517,6 +2540,22 @@ internal sealed partial class InputDispatcher
             return;
         }
 
+        if (RouteOverlayScroll(evt))
+        {
+            return;
+        }
+
+        DispatchScroll(evt);
+    }
+
+    /// <summary>Wheel dispatch against <see cref="rootNode"/> (the page or an overlay's tree).</summary>
+    private void DispatchScroll(NativeScrollEvent evt)
+    {
+        if (rootNode is null)
+        {
+            return;
+        }
+
         // Scroll within an open Select dropdown
         if (openSelect != null)
         {
@@ -2769,7 +2808,7 @@ internal sealed partial class InputDispatcher
 
         if (evt.Type != NativeKeyEventType.KeyDown)
         {
-            DispatchKeyUp(evt);
+            RouteKeyUp(evt);
             return;
         }
 
@@ -2806,6 +2845,21 @@ internal sealed partial class InputDispatcher
             return;
         }
 
+        // Then the overlay that owns the keyboard (a modal one, or the one holding focus).
+        if (RouteOverlayKey(evt))
+        {
+            return;
+        }
+
+        DispatchKey(evt);
+    }
+
+    /// <summary>
+    /// Key-down dispatch against <see cref="rootNode"/> — the page, or an overlay's tree while
+    /// <see cref="RouteOverlayKey"/> has swapped it in.
+    /// </summary>
+    private void DispatchKey(NativeKeyEvent evt)
+    {
         // CommandPalette intercepts all input when open
         if (CommandPalette.IsOpen && CommandPalette.Instance != null)
         {
@@ -2924,6 +2978,14 @@ internal sealed partial class InputDispatcher
 
             // An app's own Escape binding (close a panel, hide a launcher) wins over the default.
             if (DispatchKeyBinding(evt))
+            {
+                RequestRepaint?.Invoke();
+                return;
+            }
+
+            // Inside a dialog, sheet or popover: Escape dismisses it (or does nothing when it
+            // is not dismissable) instead of clearing focus out of it.
+            if (HandleOverlayEscape())
             {
                 RequestRepaint?.Invoke();
                 return;

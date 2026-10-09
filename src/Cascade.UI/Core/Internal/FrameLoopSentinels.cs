@@ -44,6 +44,9 @@ internal readonly struct FrameLoopSentinels
     /// <summary>True if <see cref="ControlStateAnimator"/> has in-flight hover/press/focus transitions.</summary>
     internal bool StateTransitionsActive { get; }
 
+    /// <summary>True while a dialog, sheet or popover is animating open or closed (or a sheet is snapping back).</summary>
+    internal bool OverlayAnimationsActive { get; }
+
     internal FrameLoopSentinels(
         bool framesInFlight,
         int renderDirtyCount,
@@ -56,7 +59,8 @@ internal readonly struct FrameLoopSentinels
         bool chartAnimationsActive,
         bool toastsActive,
         bool continuousCanvasesActive,
-        bool stateTransitionsActive)
+        bool stateTransitionsActive,
+        bool overlayAnimationsActive)
     {
         FramesInFlight = framesInFlight;
         RenderDirtyCount = renderDirtyCount;
@@ -70,6 +74,7 @@ internal readonly struct FrameLoopSentinels
         ToastsActive = toastsActive;
         ContinuousCanvasesActive = continuousCanvasesActive;
         StateTransitionsActive = stateTransitionsActive;
+        OverlayAnimationsActive = overlayAnimationsActive;
     }
 
     /// <summary>
@@ -85,5 +90,6 @@ internal readonly struct FrameLoopSentinels
         || ChartAnimationsActive
         || ToastsActive
         || ContinuousCanvasesActive
-        || StateTransitionsActive;
+        || StateTransitionsActive
+        || OverlayAnimationsActive;
 }

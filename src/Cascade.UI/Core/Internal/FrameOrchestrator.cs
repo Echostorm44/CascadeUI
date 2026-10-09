@@ -15,6 +15,7 @@ internal sealed class FrameOrchestrator : IDisposable
     private readonly AnimationScheduler animationScheduler;
     private readonly LayoutEngine layoutEngine;
     private readonly InputDispatcher inputDispatcher;
+    private readonly OverlayManager overlays;
 
     private readonly Action requestFrame;
     private readonly Action cancelFrame;
@@ -112,6 +113,7 @@ internal sealed class FrameOrchestrator : IDisposable
     internal AnimationScheduler Animations => animationScheduler;
     internal LayoutEngine LayoutEngine => layoutEngine;
     internal InputDispatcher Input => inputDispatcher;
+    internal OverlayManager Overlays => overlays;
     internal ComponentHost? RootHost => rootHost;
     internal bool IsFrameRequested => frameRequested;
 
@@ -140,7 +142,7 @@ internal sealed class FrameOrchestrator : IDisposable
         suspended = value;
         if (value)
         {
-            inputDispatcher.HandleWindowDeactivated();
+            inputDispatcher.HandleWindowDeactivation();
             frameRequested = false;
             cancelFrame();
             CancelWake?.Invoke();
@@ -180,7 +182,8 @@ internal sealed class FrameOrchestrator : IDisposable
         chartAnimationsActive:     NodePainter.HasActiveChartAnimations,
         toastsActive:              NodePainter.HasActiveToasts,
         continuousCanvasesActive:  NodePainter.HasActiveContinuousCanvases,
-        stateTransitionsActive:    ControlStateAnimator.HasActiveTransitions);
+        stateTransitionsActive:    ControlStateAnimator.HasActiveTransitions,
+        overlayAnimationsActive:   overlays.IsAnimating);
 
     /// <param name="requestFrame">
     /// Called when the orchestrator needs the platform to start delivering frame ticks.
@@ -199,6 +202,8 @@ internal sealed class FrameOrchestrator : IDisposable
         animationScheduler = new AnimationScheduler();
         layoutEngine = new LayoutEngine();
         inputDispatcher = new InputDispatcher();
+        overlays = new OverlayManager(renderScheduler, inputDispatcher);
+        inputDispatcher.Overlays = overlays;
 
         renderScheduler.FrameRequested += OnFrameRequested;
         animationScheduler.FrameRequested += OnFrameRequested;
@@ -214,6 +219,10 @@ internal sealed class FrameOrchestrator : IDisposable
         windowWidth = width;
         windowHeight = height;
 
+        // Make this window the one the static APIs (Dialog, ContextMenu, ...) talk to before the
+        // root mounts, so OnMounted can already open a dialog.
+        inputDispatcher.SetRoot(null);
+
         var root = new TRoot();
         rootHost = new ComponentHost(root, renderScheduler, treeDepth: 0);
         rootHost.Mount();
@@ -228,6 +237,7 @@ internal sealed class FrameOrchestrator : IDisposable
         // Initial layout after first render
         PerformLayout();
         FocusManager.ApplyMountFocus();
+        overlays.ApplyFocus();
 
         // Request a frame so the first paint happens
         OnFrameRequested();
@@ -272,6 +282,7 @@ internal sealed class FrameOrchestrator : IDisposable
         // 1. Advance animations
         animationScheduler.Tick(deltaTime);
         SharedScheduler.Instance.Tick(deltaTime);
+        overlays.Advance(deltaTime);
 
         // 2. Process dirty re-renders (depth-sorted)
 #if DEBUG
@@ -297,6 +308,11 @@ internal sealed class FrameOrchestrator : IDisposable
             MarkAllScrollLayersDirty(rootHost.RenderedTree);
         }
 
+        if (reRendered)
+        {
+            overlays.MarkScrollLayersDirty();
+        }
+
 #if CASCADE_DEVTOOLS
         // 2.5 Rebuild DevTools node index after render commits
         DevTools.NodeTreeWalker.RebuildIndex();
@@ -310,15 +326,13 @@ internal sealed class FrameOrchestrator : IDisposable
         PerformLayout();
         DiagnosticsHub.EndLayout();
         FocusManager.ApplyMountFocus();
+        overlays.ApplyFocus();
 #if DEBUG
         float layoutTimeMs = (float)Stopwatch.GetElapsedTime(layoutStart).TotalMilliseconds;
 #endif
 
-        // 4. Update input dispatcher's root for hit testing, and the window geometry menus are
-        // placed in.
-        inputDispatcher.SetRoot(rootHost.RenderedTree);
-        inputDispatcher.ViewportSize = new Size(windowWidth, windowHeight);
-        inputDispatcher.PixelRatio = PixelRatio;
+        // 4. The input dispatcher's root and the window geometry menus are placed in were set
+        // by PerformLayout, which lays the overlays out against them.
 
         NodePainter.NextCaretToggle = 0;
 
@@ -356,6 +370,7 @@ internal sealed class FrameOrchestrator : IDisposable
                     DiagnosticsHub.MarkPhase("paint.painter_begin");
                     var painter = cachedPainter ??= new NodePainter(ctx, Theme, deltaTime);
                     painter.BeginFrame(Theme, deltaTime);
+                    painter.Overlays = overlays;
                     painter.Menu = inputDispatcher.Menu;
                     DiagnosticsHub.MarkPhase("paint.painter_paint");
                     painter.Paint(rootHost.RenderedTree);
@@ -403,7 +418,8 @@ internal sealed class FrameOrchestrator : IDisposable
             && !NodePainter.HasActiveChartAnimations
             && !NodePainter.HasActiveToasts
             && !NodePainter.HasActiveContinuousCanvases
-            && !ControlStateAnimator.HasActiveTransitions)
+            && !ControlStateAnimator.HasActiveTransitions
+            && !overlays.IsAnimating)
         {
             frameRequested = false;
             cancelFrame();
@@ -438,6 +454,7 @@ internal sealed class FrameOrchestrator : IDisposable
             MarkAllScrollLayersDirty(rootHost.RenderedTree);
         }
 
+        overlays.MarkScrollLayersDirty();
         OnFrameRequested();
     }
 
@@ -499,6 +516,17 @@ internal sealed class FrameOrchestrator : IDisposable
             var constraints = LayoutConstraints.Tight(
                 new Size(windowWidth, windowHeight));
             layoutEngine.Layout(rootHost.RenderedTree, constraints);
+
+            // The dispatcher hit-tests this tree and places menus in this window; overlays are
+            // laid out after the page so their anchors have their final positions.
+            DiagnosticsHub.MarkPhase("layout.overlays");
+            inputDispatcher.SetRoot(rootHost.RenderedTree);
+            inputDispatcher.ViewportSize = new Size(windowWidth, windowHeight);
+            inputDispatcher.PixelRatio = PixelRatio;
+            if (overlays.HasEntries)
+            {
+                overlays.Layout(new Size(windowWidth, windowHeight), PixelRatio);
+            }
             DiagnosticsHub.EndPhase();
         }
     }
@@ -631,6 +659,8 @@ internal sealed class FrameOrchestrator : IDisposable
         renderScheduler.FrameRequested -= OnFrameRequested;
         animationScheduler.FrameRequested -= OnFrameRequested;
         SharedScheduler.Instance.FrameRequested -= OnFrameRequested;
+
+        overlays.CloseAll();
 
         if (rootHost != null)
         {

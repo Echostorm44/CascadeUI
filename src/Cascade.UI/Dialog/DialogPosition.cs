@@ -5,34 +5,44 @@ namespace Cascade.UI;
 /// </summary>
 public class DialogPosition
 {
-    private DialogPosition()
+    private DialogPosition(DialogPositionKind kind, Node? anchor = null)
     {
+        Kind = kind;
+        Anchor = anchor;
     }
 
-    internal Node? Anchor { get; private init; }
+    internal DialogPositionKind Kind { get; }
+
+    internal Node? Anchor { get; }
 
     /// <summary>Centered in the window (default).</summary>
-    public static DialogPosition Center { get; } = new();
+    public static DialogPosition Center { get; } = new(DialogPositionKind.Center);
 
-    /// <summary>Slides up from the bottom edge — "bottom sheet" positioning.</summary>
-    public static DialogPosition Bottom { get; } = new();
+    /// <summary>Against the bottom edge, horizontally centered — "bottom sheet" positioning.</summary>
+    public static DialogPosition Bottom { get; } = new(DialogPositionKind.Bottom);
 
-    /// <summary>Slides down from the top edge.</summary>
-    public static DialogPosition Top { get; } = new();
+    /// <summary>Near the top edge, horizontally centered.</summary>
+    public static DialogPosition Top { get; } = new(DialogPositionKind.Top);
 
     /// <summary>
-    /// Positioned relative to a specific node's bounding box — foundation
-    /// for popovers and context menus. Flips to the opposite side if there
-    /// is insufficient space.
+    /// Positioned against a node's bounding box: below it, or above it when there is more room
+    /// there, centered on it and kept inside the window. The node must be in the rendered tree
+    /// when the dialog opens.
     /// </summary>
     /// <param name="anchor">The node to anchor the dialog to.</param>
     public static DialogPosition Anchored(Node anchor)
     {
         ArgumentNullException.ThrowIfNull(anchor);
 
-        return new DialogPosition
-        {
-            Anchor = anchor
-        };
+        return new DialogPosition(DialogPositionKind.Anchored, anchor);
     }
+}
+
+/// <summary>Which <see cref="DialogPosition"/> a dialog uses.</summary>
+internal enum DialogPositionKind
+{
+    Center,
+    Bottom,
+    Top,
+    Anchored,
 }

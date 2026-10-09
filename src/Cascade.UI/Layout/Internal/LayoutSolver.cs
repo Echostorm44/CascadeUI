@@ -1782,7 +1782,21 @@ internal static class LayoutSolver
         // button with it (glyph at the default half-footprint proportion), so
         // "make the icon bigger" stays a one-number change. Falls back to 40.
         float size = ib.Size
-            ?? (ib.IconSizeOverride is float glyph ? glyph * 2f : 40f);
+            ?? (ib.IconSizeOverride is float glyph ? glyph * 2f : IconButton.DefaultFootprint);
+
+        // Stay square inside the room the parent offers: a 40px button in a 28px row becomes a
+        // 28px button rather than a 40x28 pill. (Tight constraints, e.g. .Width(120), still win;
+        // the painter then draws the circle in the largest square the bounds hold.)
+        if (constraints.MaxWidth < size)
+        {
+            size = Math.Max(0f, constraints.MaxWidth);
+        }
+
+        if (constraints.MaxHeight < size)
+        {
+            size = Math.Max(0f, constraints.MaxHeight);
+        }
+
         return new Size(
             constraints.ConstrainWidth(size),
             constraints.ConstrainHeight(size));

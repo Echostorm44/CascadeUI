@@ -6243,12 +6243,20 @@ internal sealed partial class NodePainter
 
     // ── IconButton ─────────────────────────────────────────────────────
 
-    private void PaintIconButton(IconButton ib, Rect bounds)
+    private void PaintIconButton(IconButton ib, Rect laidOutBounds)
     {
         var bt = theme.Button;
 
-        // Icon buttons have a circular or rounded background
-        float radius = Math.Min(bounds.Width, bounds.Height) / 2f;
+        // An icon button is round: draw it in the largest square the laid-out bounds hold,
+        // centred, so bounds stretched by the parent (a fixed width, a stretched cross axis) give
+        // a wider hit target, never a pill. The tooltip still anchors to the full bounds.
+        float side = Math.Min(laidOutBounds.Width, laidOutBounds.Height);
+        var bounds = new Rect(
+            laidOutBounds.X + ((laidOutBounds.Width - side) / 2f),
+            laidOutBounds.Y + ((laidOutBounds.Height - side) / 2f),
+            side,
+            side);
+        float radius = side / 2f;
 
         // Animated state transitions — bouncy release for spring-back overshoot
         bool isDisabled = ib.IsDisabled;
@@ -6308,12 +6316,6 @@ internal sealed partial class NodePainter
             return;
         }
 
-        float iconSize = ib.Size ?? icon.DefaultSize;
-        if (iconSize <= 0)
-        {
-            iconSize = 20f;
-        }
-
         // Icon-specific scale: grows 1.1x on hover, shrinks 0.9x on press. The scale is
         // applied to the blit, not the rasterization, so the cached bitmap stays stable
         // (and high-res) through the whole animation.
@@ -6324,12 +6326,11 @@ internal sealed partial class NodePainter
             iconScale = LerpF(iconScale, 0.9f, Math.Clamp(pressT, 0f, 1f));
         }
 
-        // Glyph size defaults to half the footprint; an explicit IconSize
-        // overrides it (scaled with the press animation so the icon still
-        // compresses with the button).
-        float baseDrawSize = ib.IconSizeOverride is float glyphSize
-            ? glyphSize * (paintBounds.Height / Math.Max(bounds.Height, 0.001f))
-            : Math.Min(paintBounds.Width, paintBounds.Height) * 0.5f;
+        // Glyph size follows the footprint (IconButton.GlyphSizeFor: half at the default 40px,
+        // proportionally larger on small buttons); an explicit IconSize overrides it. Either is
+        // scaled with the press animation so the icon compresses with the button.
+        float pressRatio = paintBounds.Height / Math.Max(bounds.Height, 0.001f);
+        float baseDrawSize = (ib.IconSizeOverride ?? IconButton.GlyphSizeFor(side)) * pressRatio;
         float iconCx = paintBounds.X + paintBounds.Width / 2f;
         float iconCy = paintBounds.Y + paintBounds.Height / 2f;
 
@@ -6371,7 +6372,7 @@ internal sealed partial class NodePainter
         }
 
         // Tooltip overlay (deferred)
-        DeferTooltipIfHovered(ib, ib.TooltipText.Resolve(), bounds);
+        DeferTooltipIfHovered(ib, ib.TooltipText.Resolve(), laidOutBounds);
     }
 
     // ── IconView ──────────────────────────────────────────────────────

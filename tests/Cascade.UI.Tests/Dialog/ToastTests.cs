@@ -14,6 +14,27 @@ public sealed class ToastTests
         Toast.DismissAll();
     }
 
+    // Toasts are process-wide: a toast left open here is painted (and its hit zone registered) by
+    // any later test that paints a frame, and that zone then swallows presses in tests that do not.
+    [After(Test)]
+    public void DismissLeftoverToasts()
+    {
+        Toast.DismissAll();
+    }
+
+    [Test]
+    public async Task DismissAll_ForgetsTheToastsHitZones()
+    {
+        // Zones are rebuilt by the next paint; a window that does not paint (hidden, or headless)
+        // kept the dismissed toasts' zones, and they swallowed presses meant for the content.
+        Toast.Show("Saved");
+        Toast.HitZones.Add(new ToastHitZone { Id = Toast.ActiveToasts[0].Id, Bounds = new Rect(0, 0, 100, 40) });
+
+        Toast.DismissAll();
+
+        await Assert.That(Toast.HitZones.Count).IsEqualTo(0);
+    }
+
     [Test]
     public async Task Show_AddsToast()
     {

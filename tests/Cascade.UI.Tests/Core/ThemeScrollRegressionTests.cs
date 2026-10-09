@@ -13,7 +13,7 @@ namespace Cascade.UI.Tests;
 /// - Theme not applied (App wrote to no-op setter, read back default FluentTheme)
 /// - Scroll-to-top on click (Reconciler didn't transfer ScrollView.OffsetY)
 /// </summary>
-[NotInParallel("ThemeSwitcher")]
+[NotInParallel(["ThemeSwitcher", "FocusManager"])]
 public class ThemeScrollRegressionTests
 {
     // ── ThemeSwitcher.Apply tests ────────────────────────────────

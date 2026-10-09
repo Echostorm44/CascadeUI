@@ -5,6 +5,8 @@ namespace Cascade.UI.Tests.Core;
 /// modifier-change events, auto-repeat, and a consumed key-down not typing its character.
 /// Key events mirror Win32: WM_KEYDOWN (Key, no character) then WM_CHAR (Key.None + character).
 /// </summary>
+// FocusManager and the input dispatcher's hover/press state are process-wide.
+[NotInParallel("FocusManager")]
 public class KeyDispatchTests
 {
     private InputDispatcher dispatcher = null!;

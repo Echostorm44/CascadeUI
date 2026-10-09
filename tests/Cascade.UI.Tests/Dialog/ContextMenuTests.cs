@@ -12,7 +12,7 @@ namespace Cascade.UI.Tests;
 /// geometry. Layout runs through a real <see cref="FrameOrchestrator"/>; nothing is painted, so
 /// these exercise the same geometry the painter draws and hit-testing reads.
 /// </summary>
-[NotInParallel("ContextMenu")]
+[NotInParallel(["ContextMenu", "FocusManager"])]
 public sealed class ContextMenuTests
 {
     private static readonly List<string> Log = [];

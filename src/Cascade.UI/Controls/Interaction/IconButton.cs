@@ -32,6 +32,30 @@ public sealed class IconButton : Node
     internal float? IconSizeOverride { get; set; }
     internal float? IconStrokeOverride { get; set; }
     internal LocKey TooltipText { get; set; }
+
+    /// <summary>The footprint of an icon button without <c>.Size()</c> or <c>.IconSize()</c>.</summary>
+    internal const float DefaultFootprint = 40f;
+
+    /// <summary>
+    /// The glyph size for a footprint, when <c>.IconSize()</c> does not set one:
+    /// <c>min(footprint / 4 + 10, footprint × 3/4)</c>.
+    /// </summary>
+    /// <remarks>
+    /// Half the footprint at the default 40px (20px glyph), but the inset around the glyph grows
+    /// more slowly than the button, as platform icon buttons do: Fluent's 24/32px buttons carry
+    /// 16/20px glyphs and Material 3's 32/40/56px buttons 20/24/24px. A flat half made a 24px
+    /// row-action button draw a 12px glyph lost in its circle. The 3/4 cap keeps very small
+    /// buttons (under 16px) from filling their circle edge to edge.
+    /// </remarks>
+    internal static float GlyphSizeFor(float footprint)
+    {
+        if (footprint <= 0f)
+        {
+            return 0f;
+        }
+
+        return MathF.Min((footprint / 4f) + 10f, footprint * 0.75f);
+    }
 }
 
 /// <summary>
@@ -62,9 +86,16 @@ public static class IconButtonExtensions
 
     /// <summary>
     /// Overrides the button's square footprint (background circle and hit
-    /// target) in logical pixels. The glyph defaults to half this size — use
-    /// <see cref="IconSize"/> to size the glyph independently.
+    /// target) in logical pixels; the default is 40. The glyph scales with it —
+    /// half the footprint at 40, proportionally larger on smaller buttons (16 at
+    /// 24, 18 at 32) — use <see cref="IconSize"/> to size the glyph independently.
     /// </summary>
+    /// <remarks>
+    /// The footprint is a preference, not a promise: a parent that offers less
+    /// room (a 28px table row, a tight toolbar) gets a smaller square that fits,
+    /// and the circle is drawn in the largest square the laid-out bounds hold, so
+    /// an icon button is never stretched into a pill.
+    /// </remarks>
     public static IconButton Size(this IconButton button, float size)
     {
         button.Size = size;

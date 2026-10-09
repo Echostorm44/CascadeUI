@@ -68,6 +68,8 @@ jobs:
   # MCP host (and, for the UIA tests, from another process through UI Automation). Hosted Windows
   # runners run the job in an interactive desktop session, and with no GPU the app renders through
   # WARP or the CPU path, so these run here rather than only on a developer desktop.
+  # Debug, as on a developer desktop: the fixture app is driven through the MCP host, which only a
+  # DevTools build carries (Release leaves it out unless -p:CascadeDevTools=true).
   integration-tests:
     name: Integration Tests
     needs: build
@@ -79,8 +81,8 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - run: dotnet restore cascade-ui.sln
-      - run: dotnet build cascade-ui.sln -c Release --no-restore
-      - run: dotnet test tests/Cascade.UI.Integration/Cascade.UI.Integration.csproj -c Release --no-build --logger "trx;LogFileName=integration-results.trx"
+      - run: dotnet build cascade-ui.sln -c Debug --no-restore
+      - run: dotnet test tests/Cascade.UI.Integration/Cascade.UI.Integration.csproj -c Debug --no-build --logger "trx;LogFileName=integration-results.trx"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

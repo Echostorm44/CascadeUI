@@ -12,6 +12,8 @@ namespace Cascade.UI.Tests;
 /// so the resize cursor could never appear for a column, and could never go away if it somehow
 /// had. It is now evaluated on every move.
 /// </summary>
+// FocusManager and the input dispatcher's hover/press state are process-wide.
+[NotInParallel("FocusManager")]
 public class ColumnResizeCursorTests
 {
     private sealed class Row

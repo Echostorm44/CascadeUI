@@ -15,7 +15,7 @@ namespace Cascade.UI.Tests;
 /// <see cref="AccessibleRole.MenuItem"/> per labelled item (disabled, highlighted = focused,
 /// shortcut and submenu state, and window bounds an agent can click).
 /// </summary>
-[NotInParallel(["ContextMenu", "DevToolsIntegration"])]
+[NotInParallel(["ContextMenu", "DevToolsIntegration", "FocusManager"])]
 public class ContextMenuAccessibilityTests
 {
     private sealed class MenuTargetView : Component

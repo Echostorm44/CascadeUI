@@ -8,7 +8,7 @@ namespace Cascade.UI.Tests.DevTools;
 /// The MCP key tool presses keys the way Win32 delivers them (down, character, up, modifier
 /// release), and the CLI rejects options it does not know instead of silently dropping them.
 /// </summary>
-[NotInParallel(nameof(NodeTreeWalker))]
+[NotInParallel([nameof(NodeTreeWalker), "FocusManager"])]
 public class KeySimulationAndCliArgsTests
 {
     [Before(Test)]

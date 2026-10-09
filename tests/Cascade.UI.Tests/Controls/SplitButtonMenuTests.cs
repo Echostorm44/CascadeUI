@@ -11,7 +11,7 @@ namespace Cascade.UI.Tests.Controls;
 /// button (keyboard navigation, disabled items and submenus included); the primary zone still
 /// runs the primary action.
 /// </summary>
-[NotInParallel("ContextMenu")]
+[NotInParallel(["ContextMenu", "FocusManager"])]
 public class SplitButtonMenuTests
 {
     private static readonly List<string> Log = [];

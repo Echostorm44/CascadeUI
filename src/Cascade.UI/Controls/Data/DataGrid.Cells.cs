@@ -620,7 +620,7 @@ public sealed partial class DataGrid<T>
             blocks[i] = new CellBlockState(block.Rows is null ? null : [.. block.Rows], block.ColA, block.ColB);
         }
 
-        return new GridCellState(currentCol, anchorCol, blocks, editingRow, editingCol, editBuffer, editCursorPos);
+        return new GridCellState(currentCol, anchorCol, blocks, editingRow, editingCol, editBuffer, editCursorPos, editOriginal);
     }
 
     /// <summary>The cell part of <see cref="ITabularDataNode.RestoreInteractionState"/>, clamped to this grid.</summary>
@@ -662,6 +662,7 @@ public sealed partial class DataGrid<T>
             editingRow = state.EditingRow;
             editingCol = state.EditingCol;
             editBuffer = state.EditBuffer;
+            editOriginal = state.EditOriginal;
             editCursorPos = Math.Clamp(state.EditCursor, 0, editBuffer.Length);
         }
     }
@@ -709,4 +710,5 @@ internal sealed record GridCellState(
     int EditingRow,
     int EditingCol,
     string EditBuffer,
-    int EditCursor);
+    int EditCursor,
+    string EditOriginal);

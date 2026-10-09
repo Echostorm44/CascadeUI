@@ -770,6 +770,10 @@ internal sealed partial class NodePainter
                 PaintSegmentedControl(sc, bounds);
                 break;
 
+            case TabBar tabBar:
+                PaintTabBar(tabBar, bounds);
+                break;
+
             case Breadcrumb bc:
                 PaintBreadcrumb(bc, bounds);
                 break;
@@ -968,6 +972,15 @@ internal sealed partial class NodePainter
     {
         bool hasActive = ControlStateAnimator.HasActiveAnimationsForNode(root);
         bool hasPersistent = ControlStateAnimator.HasActivePersistentAnimationsForNode(root);
+
+        // A tab bar animates its own indicator, scroll offset and hover fade. They end in a new
+        // visual state (the indicator under another tab, the strip scrolled), so they count as
+        // persistent: the layer direct-paints while they run and recaptures once they settle.
+        if (root is TabBar { State.IsAnimating: true })
+        {
+            hasActive = true;
+            hasPersistent = true;
+        }
 
         if (hasActive && hasPersistent)
         {

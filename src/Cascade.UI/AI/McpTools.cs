@@ -1292,6 +1292,7 @@ internal static class McpTools
             ScrollTargetKind.ListView => "list_view",
             ScrollTargetKind.ScrollView => "scroll_view",
             ScrollTargetKind.Gesture => "gesture",
+            ScrollTargetKind.TabBar => "tab_bar",
             _ => "none",
         };
 

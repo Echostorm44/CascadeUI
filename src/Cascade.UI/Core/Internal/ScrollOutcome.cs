@@ -29,6 +29,9 @@ internal enum ScrollTargetKind
 
     /// <summary>A node's own <c>OnScroll</c> gesture handler.</summary>
     Gesture,
+
+    /// <summary>A TabBar whose tabs overflow; the offset is along the strip (horizontal for a top/bottom bar).</summary>
+    TabBar,
 }
 
 /// <summary>

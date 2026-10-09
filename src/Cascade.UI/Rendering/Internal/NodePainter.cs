@@ -1576,11 +1576,7 @@ internal sealed partial class NodePainter
             textColor = textColor.Opacity(textOpacity);
         }
 
-        // Honor a per-button Style() override for the text size/weight. The layout
-        // solver already sizes the button using StyleOverride; the renderer must
-        // match or the text is drawn at the theme size inside a differently-sized
-        // box (e.g. clipping). fontSize 0 falls back to PaintText's default (Body),
-        // so buttons without an override render exactly as before.
+        // Label in the variant's TextStyle (or .Style()), as MeasureButton sized it.
         PaintButtonContent(btn, bounds, bt, textColor);
 
         // Tooltip overlay (deferred)
@@ -1600,12 +1596,14 @@ internal sealed partial class NodePainter
     private void PaintButtonContent(Button btn, Rect bounds, ButtonTheme bt, ColorValue textColor)
     {
         string label = btn.Label.Resolve();
-        float fontSize = btn.StyleOverride?.Size ?? 0f;
-        var weight = btn.StyleOverride?.Weight ?? bt.TextStyle.Weight;
+        // The variant's label style (or .Style()), the same one MeasureButton sized the button for.
+        var style = ButtonLabelStyle.StyleFor(bt, btn.StyleOverride);
+        float fontSize = style.Size;
+        var weight = style.Weight;
         var icon = btn.Icon;
         bool hasIcon = icon.Paths.Length > 0;
 
-        float effectiveSize = fontSize > 0f ? fontSize : theme.Typography.Scale.Body.Size;
+        float effectiveSize = fontSize;
         float labelWidth = 0f;
         if (!string.IsNullOrEmpty(label))
         {
@@ -1662,14 +1660,7 @@ internal sealed partial class NodePainter
 
     private ButtonTheme ResolveButtonTheme(Button btn)
     {
-        var bt = theme.Button;
-        if (btn.VariantName is not null
-            && bt.Variants.TryGetValue(btn.VariantName, out var variant))
-        {
-            return variant;
-        }
-
-        return bt;
+        return ButtonLabelStyle.ThemeFor(theme.Button, btn.VariantName);
     }
 
     // ── SplitButton ────────────────────────────────────────────────────
@@ -1783,7 +1774,9 @@ internal sealed partial class NodePainter
         // Primary label text
         var primaryBounds = new Rect(bounds.X, bounds.Y, bounds.Width - arrowZoneWidth, bounds.Height);
         PaintText(sb.Label.Resolve(), primaryBounds, bt.PaddingH, textColor,
+            fontSize: bt.TextStyle.Size,
             alignment: TextAlignment.Center,
+            overflow: TextOverflow.Ellipsis,
             fontWeight: bt.TextStyle.Weight);
 
         // Chevron in arrow zone — the 90° Apple chevron used by dropdowns/steppers.

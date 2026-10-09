@@ -21,20 +21,16 @@ internal static class LayoutSolver
     internal static string? SemiBoldFontPath { get; set; }
 
     /// <summary>
-    /// Per-side horizontal padding for buttons, from the current theme's ButtonTheme.
-    /// Default 12 matches FluentTheme; AppleTheme uses 16.
+    /// The current theme's button tokens (synced by FrameOrchestrator). Buttons are measured with
+    /// the same variant tokens and label style the painter draws them with
+    /// (<see cref="ButtonLabelStyle"/>). Null before a theme is applied: layout then uses
+    /// <see cref="FallbackButtonStyle"/>, 12px padding and a 32px minimum height.
     /// </summary>
-    internal static float ButtonPaddingH { get; set; } = 12f;
+    internal static ButtonTheme? ButtonTokens { get; set; }
 
-    /// <summary>
-    /// Minimum button height from the current theme's ButtonTheme.
-    /// </summary>
-    internal static float ButtonMinHeight { get; set; } = 32f;
-
-    /// <summary>
-    /// Whether the current theme uses semibold text for buttons.
-    /// </summary>
-    internal static bool ButtonUseSemiBold { get; set; } = true;
+    private static readonly TextStyle FallbackButtonStyle = new(14f, FontWeight.SemiBold, 1.4f);
+    private const float FallbackButtonPaddingH = 12f;
+    private const float FallbackButtonMinHeight = 32f;
 
     /// <summary>
     /// Body text font size from the current theme's typography scale.
@@ -66,12 +62,6 @@ internal static class LayoutSolver
     /// Default 16 matches typical Md spacing.
     /// </summary>
     internal static float CardPadding { get; set; } = 16f;
-
-    /// <summary>
-    /// Font size for button labels from the current theme's ButtonTheme.TextStyle.
-    /// Default 14 matches FluentTheme Body1Strong; AppleTheme uses 17 (Body).
-    /// </summary>
-    internal static float ButtonFontSize { get; set; } = 14f;
 
     /// <summary>Heading 1 font size from the current theme's typography scale.</summary>
     internal static float H1FontSize { get; set; } = 28f;
@@ -671,6 +661,55 @@ internal static class LayoutSolver
     /// <summary>Gap between a button's leading icon and its label, in logical pixels.</summary>
     internal const float ButtonIconGap = 8f;
 
+    // Font file per (regular path, weight), as DrawContext.ResolveFontPath caches it for the painter;
+    // resolving probes the file system. Layout can run on more than one thread in tests.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(string Path, FontWeight Weight), string> weightFontPaths = new();
+
+    /// <summary>
+    /// The label style, padding and minimum height a button is measured with — the same variant
+    /// tokens and style the painter uses (<see cref="ButtonLabelStyle"/>).
+    /// </summary>
+    private static (TextStyle Style, float PaddingH, float MinHeight) ButtonMetrics(string? variant, TextStyle? styleOverride)
+    {
+        if (ButtonTokens is not { } tokens)
+        {
+            return (styleOverride ?? FallbackButtonStyle, FallbackButtonPaddingH, FallbackButtonMinHeight);
+        }
+
+        var theme = ButtonLabelStyle.ThemeFor(tokens, variant);
+        return (ButtonLabelStyle.StyleFor(theme, styleOverride), theme.PaddingH, theme.Height);
+    }
+
+    /// <summary>
+    /// The one-line size of a button label in <paramref name="style"/>, shaped with the font file
+    /// for its weight (the one the painter draws it with).
+    /// </summary>
+    private static Size MeasureButtonLabel(string text, TextStyle style)
+    {
+        float lineHeight = style.Size * (style.LineHeight > 0f ? style.LineHeight : DefaultLineHeightMultiplier);
+        if (string.IsNullOrEmpty(text))
+        {
+            return new Size(0f, lineHeight);
+        }
+
+        if (DefaultFontPath is not { } regular)
+        {
+            return new Size(text.Length * style.Size * AverageCharWidthRatio, lineHeight);
+        }
+
+        string fontPath = style.Weight is FontWeight.Regular or FontWeight.None
+            ? regular
+            : weightFontPaths.GetOrAdd((regular, style.Weight), static key => FontFallback.ResolveFontForWeight(key.Path, key.Weight));
+        var result = TextLayoutEngine.Layout(text, new TextLayoutOptions
+        {
+            FontPath = fontPath,
+            FontSize = style.Size,
+            MaxLines = 1,
+            NoWrap = true,
+        });
+        return result.BoundingBox;
+    }
+
     /// <summary>
     /// Measures a Button by computing its label text size plus standard padding.
     /// Buttons have a minimum size to ensure they're tappable.
@@ -679,49 +718,24 @@ internal static class LayoutSolver
     /// The label is one line: the button asks for its whole caption, and when the parent gives it
     /// less (a fixed width, an Expand share of a tight row) the painter ellipsizes the caption
     /// inside the button. Measuring the caption wrapped to the narrower width made such a button
-    /// grow taller while still painting a single line.
+    /// grow taller while still painting a single line. Size, weight and padding come from the
+    /// button's variant tokens and <c>.Style()</c>, exactly as the painter draws them.
     /// </remarks>
     private static Size MeasureButton(Button btn, LayoutConstraints constraints)
     {
         string text = btn.Label.Resolve();
-        float fontSize = btn.StyleOverride?.Size ?? ButtonFontSize;
-        float lineHeight = btn.StyleOverride?.LineHeight ?? (fontSize * DefaultLineHeightMultiplier);
+        var (style, paddingH, minHeight) = ButtonMetrics(btn.VariantName, btn.StyleOverride);
+        const float verticalPadding = 12f;
 
-        // Use theme-aware padding (per-side × 2 for total).
-        float horizontalPadding = ButtonPaddingH * 2f;
-        float verticalPadding = 12f;
-
-        float textWidth;
-        float textHeight;
-
-        // Use semibold font for measurement when the theme specifies it
-        string? fontPath = (ButtonUseSemiBold ? SemiBoldFontPath : null) ?? DefaultFontPath;
-        if (fontPath != null && !string.IsNullOrEmpty(text))
-        {
-            var options = new TextLayoutOptions
-            {
-                FontPath = fontPath,
-                FontSize = fontSize,
-                MaxLines = 1,
-                NoWrap = true,
-            };
-            var result = TextLayoutEngine.Layout(text, options);
-            textWidth = result.BoundingBox.Width;
-            textHeight = result.BoundingBox.Height;
-        }
-        else
-        {
-            textWidth = (text?.Length ?? 0) * fontSize * AverageCharWidthRatio;
-            textHeight = lineHeight;
-        }
+        var label = MeasureButtonLabel(text, style);
 
         // Include icon width if present
         float iconWidth = btn.Icon.Paths.Length == 0
             ? 0f
-            : fontSize + (string.IsNullOrEmpty(text) ? 0f : ButtonIconGap);
+            : style.Size + (string.IsNullOrEmpty(text) ? 0f : ButtonIconGap);
 
-        float desiredWidth = Math.Max(64f, textWidth + iconWidth + horizontalPadding);
-        float desiredHeight = Math.Max(ButtonMinHeight, textHeight + verticalPadding);
+        float desiredWidth = Math.Max(64f, label.Width + iconWidth + (paddingH * 2f));
+        float desiredHeight = Math.Max(minHeight, label.Height + verticalPadding);
 
         return new Size(
             constraints.ConstrainWidth(desiredWidth),
@@ -729,45 +743,22 @@ internal static class LayoutSolver
     }
 
     /// <summary>
-    /// Measures a SplitButton: primary label zone + divider + arrow zone.
+    /// Measures a SplitButton: primary label zone + divider + arrow zone. The label uses the base
+    /// button tokens, as <c>PaintSplitButton</c> does.
     /// </summary>
     private static Size MeasureSplitButton(SplitButton sb, LayoutConstraints constraints)
     {
         string text = sb.Label.Resolve();
-        float fontSize = ButtonFontSize;
-        float lineHeight = fontSize * DefaultLineHeightMultiplier;
-        float horizontalPadding = ButtonPaddingH * 2f;
-        float verticalPadding = 12f;
-        float arrowZoneWidth = 36f;
+        var (style, paddingH, minHeight) = ButtonMetrics(null, null);
+        const float verticalPadding = 12f;
+        const float arrowZoneWidth = 36f;
 
-        float textWidth;
-        float textHeight;
+        var label = MeasureButtonLabel(text, style);
 
-        string? fontPath = (ButtonUseSemiBold ? SemiBoldFontPath : null) ?? DefaultFontPath;
-        if (fontPath != null && !string.IsNullOrEmpty(text))
-        {
-            var options = new TextLayoutOptions
-            {
-                FontPath = fontPath,
-                FontSize = fontSize,
-                MaxWidth = float.IsPositiveInfinity(constraints.MaxWidth)
-                    ? float.PositiveInfinity
-                    : Math.Max(0, constraints.MaxWidth - horizontalPadding - arrowZoneWidth),
-            };
-            var result = TextLayoutEngine.Layout(text, options);
-            textWidth = result.BoundingBox.Width;
-            textHeight = result.BoundingBox.Height;
-        }
-        else
-        {
-            textWidth = (text?.Length ?? 0) * fontSize * AverageCharWidthRatio;
-            textHeight = lineHeight;
-        }
-
-        float iconWidth = sb.Icon != default ? fontSize + 8f : 0f;
-        float primaryWidth = Math.Max(64f, textWidth + iconWidth + horizontalPadding);
+        float iconWidth = sb.Icon.Paths.Length > 0 ? style.Size + ButtonIconGap : 0f;
+        float primaryWidth = Math.Max(64f, label.Width + iconWidth + (paddingH * 2f));
         float desiredWidth = primaryWidth + arrowZoneWidth;
-        float desiredHeight = Math.Max(ButtonMinHeight, textHeight + verticalPadding);
+        float desiredHeight = Math.Max(minHeight, label.Height + verticalPadding);
 
         return new Size(
             constraints.ConstrainWidth(desiredWidth),

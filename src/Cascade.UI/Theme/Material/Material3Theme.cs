@@ -120,7 +120,7 @@ public class Material3Theme : CascadeTheme
         Border     = null,
         BorderWidth = 0,
         Shadow     = Shadows.Sm,
-        TextStyle  = Typography.Heading3,
+        TextStyle  = MaterialTokens.LabelLarge,
 
         // M3 state layers: translucent overlay driven by StateLayerOpacity
         Hover = new ButtonStateStyle
@@ -159,7 +159,7 @@ public class Material3Theme : CascadeTheme
                 Border      = Brush.Solid(Colors.Border),
                 BorderWidth = 1,
                 Shadow      = ShadowSpec.None,
-                TextStyle   = Typography.Heading3,
+                TextStyle   = MaterialTokens.LabelLarge,
                 Hover    = new ButtonStateStyle { StateLayerOpacity = 0.08f, StateLayerColor = Colors.Primary },
                 Pressed  = new ButtonStateStyle { StateLayerOpacity = 0.12f, StateLayerColor = Colors.Primary },
                 Focused  = new ButtonStateStyle
@@ -183,7 +183,7 @@ public class Material3Theme : CascadeTheme
                 Border      = null,
                 BorderWidth = 0,
                 Shadow      = ShadowSpec.None,
-                TextStyle   = Typography.Heading3,
+                TextStyle   = MaterialTokens.LabelLarge,
                 Hover    = new ButtonStateStyle { StateLayerOpacity = 0.08f, StateLayerColor = Colors.Primary },
                 Pressed  = new ButtonStateStyle { StateLayerOpacity = 0.12f, StateLayerColor = Colors.Primary },
                 Focused  = new ButtonStateStyle
@@ -211,7 +211,7 @@ public class Material3Theme : CascadeTheme
                 Border      = null,
                 BorderWidth = 0,
                 Shadow      = Shadows.Sm,
-                TextStyle   = Typography.Heading3,
+                TextStyle   = MaterialTokens.LabelLarge,
                 Hover    = new ButtonStateStyle { StateLayerOpacity = 0.08f },
                 Pressed  = new ButtonStateStyle { StateLayerOpacity = 0.12f },
                 Focused  = new ButtonStateStyle
@@ -235,7 +235,7 @@ public class Material3Theme : CascadeTheme
                 Border      = null,
                 BorderWidth = 0,
                 Shadow      = Shadows.Sm,
-                TextStyle   = Typography.Heading3,
+                TextStyle   = MaterialTokens.LabelLarge,
                 Hover    = new ButtonStateStyle { StateLayerOpacity = 0.08f },
                 Pressed  = new ButtonStateStyle { StateLayerOpacity = 0.12f },
                 Focused  = new ButtonStateStyle

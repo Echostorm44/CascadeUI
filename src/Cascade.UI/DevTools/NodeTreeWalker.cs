@@ -452,14 +452,7 @@ internal static class NodeTreeWalker
     private static ScrollView? FindAncestorScrollView(Node target)
     {
         var path = new List<Node>();
-        if (rootHost?.RenderedTree is Node rootNode)
-        {
-            FindPathToNode(rootNode, target, path);
-        }
-        else if (mountedRoot is Node plainRoot)
-        {
-            FindPathToNode(plainRoot, target, path);
-        }
+        FindPathFromRoots(target, path);
 
         // Walk the path and find the last ScrollView before the target
         ScrollView? result = null;
@@ -483,14 +476,7 @@ internal static class NodeTreeWalker
     {
         // Build path from root to target by searching the tree
         var path = new List<Node>();
-        if (rootHost?.RenderedTree is Node rootNode)
-        {
-            FindPathToNode(rootNode, target, path);
-        }
-        else if (mountedRoot is Node plainRoot)
-        {
-            FindPathToNode(plainRoot, target, path);
-        }
+        FindPathFromRoots(target, path);
 
         // Sum up all bounds.X/Y along the path (each is relative to its parent).
         // When we encounter a ScrollView that is an ANCESTOR of the target
@@ -518,6 +504,57 @@ internal static class NodeTreeWalker
                 absY -= sv.OffsetY;
             }
         }
+    }
+
+    /// <summary>
+    /// The path from the page's root to <paramref name="target"/>, or — for a node inside an open
+    /// dialog, sheet or popover — from that overlay's chrome (whose panel is laid out in window
+    /// coordinates). Empty when the node is in neither.
+    /// </summary>
+    private static void FindPathFromRoots(Node target, List<Node> path)
+    {
+        if (rootHost?.RenderedTree is Node rootNode)
+        {
+            if (FindPathToNode(rootNode, target, path))
+            {
+                return;
+            }
+        }
+        else if (mountedRoot is Node plainRoot && FindPathToNode(plainRoot, target, path))
+        {
+            return;
+        }
+
+        foreach (var chrome in OverlayChromes())
+        {
+            path.Clear();
+            if (FindPathToNode(chrome, target, path))
+            {
+                return;
+            }
+        }
+
+        path.Clear();
+    }
+
+    /// <summary>The chrome components of the open (not closing) overlays, bottom first.</summary>
+    private static List<Component> OverlayChromes()
+    {
+        var result = new List<Component>();
+        if (inputDispatcher?.Overlays is not { HasEntries: true } overlays)
+        {
+            return result;
+        }
+
+        foreach (var entry in overlays.Entries)
+        {
+            if (!entry.IsClosing && entry.Host?.RenderedTree is not null)
+            {
+                result.Add(entry.Chrome);
+            }
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -1265,6 +1302,18 @@ internal static class NodeTreeWalker
             return;
         }
         MapComponentHost(rootHost);
+
+        // Open dialogs, sheets and popovers are hosted beside the root, not under it.
+        if (inputDispatcher?.Overlays is { } overlays)
+        {
+            foreach (var entry in overlays.Entries)
+            {
+                if (entry.Host is { } host)
+                {
+                    MapComponentHost(host);
+                }
+            }
+        }
     }
 
     private static void MapComponentHost(ComponentHost host)
@@ -1371,6 +1420,14 @@ internal static class NodeTreeWalker
         {
             if (componentHostMap.TryGetValue(component, out var host) && host.RenderedTree is not null)
             {
+                if (ReferenceEquals(component, mountedRoot) && OverlayChromes() is { Count: > 0 } chromes)
+                {
+                    // The overlay layer sits above the page: list it after the page's tree.
+                    var withOverlays = new List<object>(chromes.Count + 1) { host.RenderedTree };
+                    withOverlays.AddRange(chromes);
+                    return withOverlays;
+                }
+
                 return [host.RenderedTree];
             }
             return [];
@@ -1647,6 +1704,31 @@ internal static class NodeTreeWalker
         foreach (var child in GetChildren(node))
         {
             children.Add(BuildAccessibilityNode(child));
+        }
+
+        // An open dialog, sheet or popover: say whether it is modal, and give its window bounds
+        // (the panel is laid out in window coordinates, unlike nodes in the page).
+        if (node is Node panel && inputDispatcher?.Overlays?.FindByTree(panel) is { } overlay)
+        {
+            return new AccessibleNode
+            {
+                NodeId = info.id,
+                Role = info.role ?? AccessibleRole.None,
+                Label = info.accessibleLabel,
+                Children = children,
+                StateProperties = new Dictionary<string, string>
+                {
+                    ["modal"] = overlay.BlocksInput ? "true" : "false",
+                    ["overlay"] = overlay.Kind switch
+                    {
+                        OverlayKind.Popover => "popover",
+                        OverlayKind.Sheet => "sheet",
+                        _ => "dialog",
+                    },
+                    ["topmost"] = overlay.Manager.IsTopmost(overlay) ? "true" : "false",
+                },
+                Bounds = overlay.PanelBounds,
+            };
         }
 
         return new AccessibleNode

@@ -47,6 +47,10 @@ else if (string.Equals(view, "dialogs", StringComparison.OrdinalIgnoreCase))
 {
     App.Run<DialogsView>(Configure);
 }
+else if (string.Equals(view, "batchedit", StringComparison.OrdinalIgnoreCase))
+{
+    App.Run<BatchEditView>(Configure);
+}
 else if (string.Equals(view, "shell", StringComparison.OrdinalIgnoreCase))
 {
     App.Run<ShellView>(config =>

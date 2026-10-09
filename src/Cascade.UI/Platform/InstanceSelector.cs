@@ -62,6 +62,23 @@ internal readonly record struct InstanceSelector(string? AppId, int? Pid)
             return registry.FindTarget();
         }
 
-        return registry.FindAll().Find(e => e.Pid == pid);
+        // One process can have several windows: among them, the focused one, else the most recent.
+        InstanceEntry? best = null;
+        foreach (var entry in registry.FindAll())
+        {
+            if (entry.Pid != pid)
+            {
+                continue;
+            }
+
+            if (best is null
+                || (entry.Focused && !best.Focused)
+                || (entry.Focused == best.Focused && entry.ActivatedAt > best.ActivatedAt))
+            {
+                best = entry;
+            }
+        }
+
+        return best;
     }
 }

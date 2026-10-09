@@ -60,9 +60,14 @@ internal sealed class SharedInstanceRegistry : IDisposable
         {
             var entries = ReadEntries();
 
-            // Remove any stale entry from a crashed previous run with the same window ID
+            // Remove any stale entry from a crashed previous run with the same window ID, and every
+            // row whose process is gone: killed apps never unregister, and only reads used to
+            // prune, so on a machine that starts and kills many apps (test fixtures) the
+            // fixed-size map filled with dead rows and the next Register threw — which McpHost
+            // swallows for the global registry, leaving a live app that `--app #pid` and
+            // auto-detect could not find.
             entries.RemoveAll(e =>
-                string.Equals(e.WindowId, entry.WindowId, StringComparison.Ordinal));
+                string.Equals(e.WindowId, entry.WindowId, StringComparison.Ordinal) || !IsLive(e));
 
             entries.Add(entry);
             WriteEntries(entries);
@@ -97,7 +102,7 @@ internal sealed class SharedInstanceRegistry : IDisposable
 
             for (int i = entries.Count - 1; i >= 0; i--)
             {
-                if (!IsProcessAlive(entries[i].Pid))
+                if (!IsLive(entries[i]))
                 {
                     entries.RemoveAt(i);
                     pruned = true;
@@ -275,16 +280,40 @@ internal sealed class SharedInstanceRegistry : IDisposable
         }
     }
 
-    private static bool IsProcessAlive(int pid)
+    /// <summary>
+    /// Whether <paramref name="entry"/> was registered by a process that is still running. A live
+    /// process is not enough: Windows reuses process ids, so a row left by a killed app (killed
+    /// processes never unregister) looked alive again once a new process got its id, and a lookup
+    /// by pid could pick the dead app's row and port. A row registered before its process started
+    /// belongs to an earlier process with the same id.
+    /// </summary>
+    internal static bool IsLive(InstanceEntry entry)
     {
+        ArgumentNullException.ThrowIfNull(entry);
         try
         {
-            var process = System.Diagnostics.Process.GetProcessById(pid);
-            return !process.HasExited;
+            using var process = System.Diagnostics.Process.GetProcessById(entry.Pid);
+            if (process.HasExited)
+            {
+                return false;
+            }
+
+            long startedAt = new DateTimeOffset(process.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds();
+            // A second of slack: ActivatedAt and StartTime come from different clocks' rounding.
+            return entry.ActivatedAt <= 0 || entry.ActivatedAt + 1000 >= startedAt;
         }
-        catch
+        catch (ArgumentException)
         {
             return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            // Running but not inspectable (another user's or an elevated process): keep the row.
+            return true;
         }
     }
 }

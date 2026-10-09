@@ -176,7 +176,8 @@ internal sealed class UiaProvider : IPlatformAccessibilityBridge
 
     /// <summary>
     /// What has focus, compared frame to frame without building the tree: the focused node, the
-    /// selected row of a focused list, or the highlighted item of an open menu.
+    /// selected row of a focused list, the keyboard tab of a focused tab bar, or the highlighted
+    /// item of an open menu.
     /// </summary>
     private readonly record struct FocusKey(Node? Node, int Row, MenuLevel? MenuLevel, int MenuItem);
 
@@ -189,7 +190,12 @@ internal sealed class UiaProvider : IPlatformAccessibilityBridge
         }
 
         var focused = FocusManager.FocusedElement;
-        int row = focused is IListViewNode { SectionCount: 0 } list ? list.SelectedIndex : -1;
+        int row = focused switch
+        {
+            IListViewNode { SectionCount: 0 } list => list.SelectedIndex,
+            TabBar bar => TabStripLayout.KeyboardPosition(bar),
+            _ => -1,
+        };
         return new FocusKey(focused, row, null, -1);
     }
 

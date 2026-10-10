@@ -99,6 +99,8 @@ internal interface IListViewNode
     bool IsSelectable { get; }
     /// <summary>Whether a click on a row moves keyboard focus to the list (see <see cref="ListView{T}.FocusOnClick"/>).</summary>
     bool FocusesOnClick { get; }
+    /// <summary>Whether moving the pointer over a row selects it (see <see cref="ListView{T}.SelectOnHover"/>).</summary>
+    bool SelectsOnHover { get; }
     /// <summary>Index of the selected item in the flat list, or -1.</summary>
     int SelectedIndex { get; }
     /// <summary>Selects the item at <paramref name="index"/>: updates the binding and raises OnSelect.</summary>
@@ -215,6 +217,7 @@ public sealed class ListView<T> : Node, IListViewNode
     internal bool selectionHighlight = true;
     private bool plain;
     private bool focusOnClick = true;
+    private bool selectOnHover;
     internal int scrollIntoViewIndex = -1;
     private int lastScrolledIntoView = -1;
 
@@ -349,6 +352,20 @@ public sealed class ListView<T> : Node, IListViewNode
     }
 
     bool IListViewNode.FocusesOnClick => focusOnClick;
+
+    /// <summary>
+    /// Makes the selection follow the mouse: moving the pointer over a row selects it, as in a
+    /// launcher or command palette where one highlight is driven by both the arrow keys and the
+    /// mouse. Only real pointer movement selects: a row arriving under a still pointer (the list
+    /// scrolled by the keyboard, the window shown under it) leaves the selection alone.
+    /// </summary>
+    public ListView<T> SelectOnHover(bool selectOnHover = true)
+    {
+        this.selectOnHover = selectOnHover;
+        return this;
+    }
+
+    bool IListViewNode.SelectsOnHover => selectOnHover;
 
     /// <summary>
     /// Scrolls the item at <paramref name="index"/> into view whenever the index changes — e.g. pass

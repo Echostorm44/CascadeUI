@@ -59,6 +59,16 @@ internal sealed class UiaProvider : IPlatformAccessibilityBridge
 
     public void Shutdown()
     {
+        Shutdown(disconnectAllProviders: true);
+    }
+
+    /// <summary>
+    /// Releases the window's providers. <paramref name="disconnectAllProviders"/> also disconnects
+    /// every provider in the process — right for the main window at exit, wrong for a short-lived
+    /// window (the tray menu) whose closing must not cut a screen reader off the main window.
+    /// </summary>
+    internal void Shutdown(bool disconnectAllProviders)
+    {
         if (!initialized)
         {
             return;
@@ -68,7 +78,19 @@ internal sealed class UiaProvider : IPlatformAccessibilityBridge
         {
             // Releases the providers UIA holds for this window (documented for WM_DESTROY).
             _ = UiaNative.UiaReturnRawElementProvider(windowHandle, 0, 0, 0);
-            _ = UiaNative.UiaDisconnectAllProviders();
+            if (disconnectAllProviders)
+            {
+                _ = UiaNative.UiaDisconnectAllProviders();
+            }
+            else if (context?.HasRoot == true)
+            {
+                nint root = UiaComObjects.Simple(context.Root);
+                if (root != 0)
+                {
+                    _ = UiaNative.UiaDisconnectProvider(root);
+                    Marshal.Release(root);
+                }
+            }
         }
 
         connected = false;

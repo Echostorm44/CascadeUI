@@ -421,7 +421,11 @@ internal sealed partial class InputDispatcher
 
         var point = new Point(evt.X, evt.Y);
         lastMousePosition = point;
-        CurrentMousePosition = point;
+        if (!isMenuHost)
+        {
+            // The window pointer position; a menu host's coordinates are its own.
+            CurrentMousePosition = point;
+        }
 
         // A menu bar's menu: the bar's labels switch or close it.
         if (open.Owner is MenuBar ownerBar && HandleMenuBarPointer(ownerBar, evt, point))
@@ -530,7 +534,21 @@ internal sealed partial class InputDispatcher
 
         if (evt.Character is { } character && evt.Key == Key.None)
         {
-            if (!char.IsControl(character) && open.HighlightByLetter(character))
+            if (char.IsControl(character))
+            {
+                return true;
+            }
+
+            bool moved = open.HighlightByLetter(character, out bool unique);
+            if (unique && isMenuHost)
+            {
+                // A native menu runs the only item with that access key at once.
+                int topLevel = open.Levels.Count - 1;
+                ActivateMenuItem(topLevel, open.Levels[topLevel].Highlighted, fromKeyboard: true);
+                return true;
+            }
+
+            if (moved)
             {
                 RequestRepaint?.Invoke();
             }

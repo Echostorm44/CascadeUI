@@ -126,7 +126,10 @@ internal sealed partial class InputDispatcher
     /// <summary>Runs (or, for a submenu, opens) item <paramref name="item"/> of open menu panel <paramref name="level"/>.</summary>
     internal void AutomationActivateMenuItem(int level, int item)
     {
-        current = this;
+        if (!isMenuHost)
+        {
+            current = this;
+        }
         ActivateMenuItem(level, item, fromKeyboard: true);
     }
 

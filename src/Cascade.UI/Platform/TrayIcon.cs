@@ -81,6 +81,14 @@ public sealed class TrayIcon : IDisposable
     public Func<TrayMenuDefinition>? MenuProvider { get; set; }
 
     /// <summary>
+    /// Whether the context menu is drawn light or dark. <see cref="ThemeMode.System"/> (the default)
+    /// draws it dark when the app's theme is dark or the taskbar is (Windows' "default Windows mode"),
+    /// like the shell's own menus; <see cref="ThemeMode.Light"/> or <see cref="ThemeMode.Dark"/> fixes it.
+    /// The menu uses the app's theme in that mode (high contrast uses the system colours).
+    /// </summary>
+    public ThemeMode MenuThemeMode { get; set; } = ThemeMode.System;
+
+    /// <summary>
     /// Shows a balloon notification near the tray icon using the Win32
     /// Shell_NotifyIcon balloon mechanism.
     /// </summary>
@@ -150,7 +158,7 @@ public sealed class TrayIcon : IDisposable
             nid.cbSize          = (uint)sizeof(Win32.NOTIFYICONDATAW);
             nid.hWnd            = hwnd;
             nid.uID             = iconId;
-            nid.uFlags          = Win32.NIF_ICON | Win32.NIF_TIP | Win32.NIF_MESSAGE;
+            nid.uFlags          = Win32.NIF_ICON | Win32.NIF_TIP | Win32.NIF_MESSAGE | Win32.NIF_SHOWTIP;
             nid.uCallbackMessage = Win32.WM_TRAYICON;
             nid.hIcon           = ResolveIcon();
 
@@ -158,6 +166,15 @@ public sealed class TrayIcon : IDisposable
 
             if (Win32.Shell_NotifyIconW(Win32.NIM_ADD, &nid))
             {
+                // Version 4: messages carry the click point (the menu opens there) and the shell
+                // sends WM_CONTEXTMENU / NIN_KEYSELECT when the icon is used from the keyboard.
+                // Version 4 hides the standard tooltip unless NIF_SHOWTIP is set (it is, above).
+                nid.uVersion = Win32.NOTIFYICON_VERSION_4;
+                if (!Win32.Shell_NotifyIconW(Win32.NIM_SETVERSION, &nid))
+                {
+                    TrayMenuLog.Write("Shell_NotifyIcon(NIM_SETVERSION, 4) failed; keyboard access to the tray icon is limited.");
+                }
+
                 isShown = true;
                 lock (registryLock)
                 {
@@ -228,6 +245,7 @@ public sealed class TrayIcon : IDisposable
 
             Win32.Shell_NotifyIconW(Win32.NIM_DELETE, &nid);
             isShown = false;
+            TrayMenuPopup.CloseCurrent();
             ReleaseOwnedIcon();
 
             lock (registryLock)
@@ -287,10 +305,14 @@ public sealed class TrayIcon : IDisposable
     // ── Internal message routing ──────────────────────────────────────
 
     /// <summary>
-    /// Handles WM_TRAYICON messages routed from the App message loop.
+    /// Handles a WM_TRAYICON callback routed from the App message loop. The icon uses
+    /// NOTIFYICON_VERSION_4: LOWORD(lParam) is the event, HIWORD(lParam) the icon id, and wParam
+    /// the anchor point in screen pixels (the click point, or the icon for keyboard events).
     /// </summary>
-    internal static void HandleTrayMessage(uint iconId, uint notifyMsg)
+    internal static void HandleTrayMessage(nuint wParam, nint lParam)
     {
+        uint notifyMsg = (uint)(lParam.ToInt64() & 0xFFFF);
+        uint iconId = (uint)((lParam.ToInt64() >> 16) & 0xFFFF);
         TrayIcon? target;
         lock (registryLock)
         {
@@ -300,21 +322,56 @@ public sealed class TrayIcon : IDisposable
             }
         }
 
-        if (notifyMsg == Win32.WM_LBUTTONUP)
+        var anchor = new Win32.POINT { x = Win32.GetXLParam((nint)wParam), y = Win32.GetYLParam((nint)wParam) };
+        switch (notifyMsg)
         {
-            if (target.OnClick is { } onClick)
-            {
-                onClick();
-            }
-            else
-            {
-                target.ShowMenu();
-            }
+            case Win32.WM_LBUTTONUP:
+                target.Activate(anchor, fromKeyboard: false);
+                break;
+
+            case Win32.NIN_KEYSELECT:
+                // Enter or Space on the focused icon. The shell sends Enter's twice.
+                long now = Environment.TickCount64;
+                if (now - target.lastKeySelect > KeySelectRepeatMs)
+                {
+                    target.Activate(anchor, fromKeyboard: true);
+                }
+                target.lastKeySelect = now;
+                break;
+
+            case Win32.WM_RBUTTONUP:
+                // The shell follows a right-click with WM_CONTEXTMENU, which opens the menu.
+                target.lastRightButtonUp = Environment.TickCount64;
+                break;
+
+            case Win32.WM_CONTEXTMENU:
+                // A right-click, or the context-menu key / Shift+F10 on the focused icon.
+                bool fromMouse = Environment.TickCount64 - target.lastRightButtonUp <= ContextMenuAfterClickMs;
+                target.lastRightButtonUp = 0;
+                target.ShowMenu(anchor, fromKeyboard: !fromMouse);
+                break;
         }
-        else if (notifyMsg is Win32.WM_RBUTTONUP or Win32.WM_CONTEXTMENU)
+    }
+
+    // A second NIN_KEYSELECT this soon after the first is Enter's duplicate.
+    private const long KeySelectRepeatMs = 400;
+
+    // WM_CONTEXTMENU this soon after WM_RBUTTONUP came from that click.
+    private const long ContextMenuAfterClickMs = 1000;
+
+    private long lastKeySelect;
+    private long lastRightButtonUp;
+
+    /// <summary>The icon was clicked or activated from the keyboard: OnClick, or the menu without one.</summary>
+    private void Activate(Win32.POINT anchor, bool fromKeyboard)
+    {
+        if (OnClick is { } onClick)
         {
-            target.ShowMenu();
+            onClick();
+            return;
         }
+
+        ShowMenu(anchor, fromKeyboard);
     }
 
     /// <summary>
@@ -351,7 +408,7 @@ public sealed class TrayIcon : IDisposable
         nid.cbSize  = (uint)sizeof(Win32.NOTIFYICONDATAW);
         nid.hWnd    = hwnd;
         nid.uID     = iconId;
-        nid.uFlags  = flags;
+        nid.uFlags  = flags | Win32.NIF_SHOWTIP;
         if ((flags & Win32.NIF_ICON) != 0)
         {
             nid.hIcon = ResolveIcon();
@@ -449,14 +506,40 @@ public sealed class TrayIcon : IDisposable
         return hIcon;
     }
 
-    // Shows the Win32 context menu at the cursor and runs the chosen item. The owner window must be
-    // foreground for the menu to close when the user clicks elsewhere, and the posted WM_NULL
-    // makes the next click after it work (both documented TrackPopupMenu requirements).
-    private void ShowMenu()
+    /// <summary>
+    /// Opens the context menu at <paramref name="anchor"/> (physical screen pixels; the cursor when
+    /// the shell sent none): Cascade's own menu (<see cref="TrayMenuPopup"/>), or the native Win32
+    /// menu if that could not be created.
+    /// </summary>
+    private void ShowMenu(Win32.POINT anchor, bool fromKeyboard)
     {
         var definition = MenuProvider?.Invoke() ?? Menu;
+        if (definition is null || definition.Items.Count == 0)
+        {
+            return;
+        }
+
+        if (anchor.x == 0 && anchor.y == 0)
+        {
+            Win32.GetCursorPos(out anchor);
+        }
+
+        if (TrayMenuPopup.TryShow(definition.Items, anchor, fromKeyboard, MenuThemeMode, Tooltip))
+        {
+            return;
+        }
+
+        ShowNativeMenu(definition, anchor);
+    }
+
+    // The fallback: a Win32 popup menu, run modally, that then runs the chosen item. The owner
+    // window must be foreground for the menu to close when the user clicks elsewhere, and the
+    // posted WM_NULL makes the next click after it work (both documented TrackPopupMenu
+    // requirements).
+    private static void ShowNativeMenu(TrayMenuDefinition definition, Win32.POINT anchor)
+    {
         nint hwnd = App.nativeWindow?.Handle ?? 0;
-        if (definition is null || definition.Items.Count == 0 || hwnd == 0)
+        if (hwnd == 0)
         {
             return;
         }
@@ -465,9 +548,8 @@ public sealed class TrayIcon : IDisposable
         nint menu = BuildMenu(definition.Items, actions);
         try
         {
-            Win32.GetCursorPos(out Win32.POINT pt);
             Win32.SetForegroundWindow(hwnd);
-            int command = Win32.TrackPopupMenu(menu, Win32.TPM_RIGHTBUTTON | Win32.TPM_RETURNCMD | Win32.TPM_NONOTIFY, pt.x, pt.y, 0, hwnd, 0);
+            int command = Win32.TrackPopupMenu(menu, Win32.TPM_RIGHTBUTTON | Win32.TPM_RETURNCMD | Win32.TPM_NONOTIFY, anchor.x, anchor.y, 0, hwnd, 0);
             Win32.PostMessageW(hwnd, Win32.WM_NULL, 0, 0);
             if (command > 0 && command <= actions.Count)
             {
@@ -490,12 +572,13 @@ public sealed class TrayIcon : IDisposable
                 Win32.AppendMenuW(menu, Win32.MF_SEPARATOR, 0, null);
                 continue;
             }
-            if (item.CustomNode is not null && item.Label is null)
+            if (item.Kind == TrayMenuItemKind.Custom)
             {
                 continue; // a native menu cannot host a Cascade node
             }
 
-            uint flags = (item.Enabled ? 0 : Win32.MF_GRAYED) | (item.Checked ? Win32.MF_CHECKED : 0);
+            bool enabled = item.Enabled && item.Kind is not (TrayMenuItemKind.Header or TrayMenuItemKind.Info);
+            uint flags = (enabled ? 0 : Win32.MF_GRAYED) | (item.Checked ? Win32.MF_CHECKED : 0);
             string label = item.Label ?? "";
             if (item.SubItems is { Count: > 0 } subItems)
             {
@@ -519,96 +602,6 @@ public sealed class TrayIcon : IDisposable
             dest[i] = value[i];
         }
         dest[len] = '\0';
-    }
-}
-
-/// <summary>
-/// Definition of a tray context menu, containing a list of menu items.
-/// </summary>
-public sealed class TrayMenuDefinition
-{
-    /// <summary>The items in the tray menu.</summary>
-    public IReadOnlyList<TrayMenuItem> Items { get; init; } = [];
-}
-
-/// <summary>
-/// A single item in a tray context menu. Use the static factory methods
-/// to create action items, separators, submenus, or custom-rendered items.
-/// </summary>
-public sealed class TrayMenuItem
-{
-    private TrayMenuItem() { }
-
-    /// <summary>The display label.</summary>
-    public string? Label { get; private init; }
-
-    /// <summary>Optional icon.</summary>
-    public ImageSource? Icon { get; private init; }
-
-    /// <summary>Whether this item is enabled and clickable. Default: true.</summary>
-    public bool Enabled { get; private init; } = true;
-
-    /// <summary>Whether this item shows a check mark. Default: false.</summary>
-    public bool Checked { get; private init; }
-
-    /// <summary>Click handler for action items.</summary>
-    public Action? OnClick { get; private init; }
-
-    /// <summary>Sub-items for submenu items.</summary>
-    public IReadOnlyList<TrayMenuItem>? SubItems { get; private init; }
-
-    /// <summary>Custom node content (Windows and macOS only).</summary>
-    public Node? CustomNode { get; private init; }
-
-    /// <summary>True if this is a separator item.</summary>
-    public bool IsSeparator { get; private init; }
-
-    /// <summary>Creates a clickable action menu item.</summary>
-    public static TrayMenuItem Action(
-        string label,
-        Action? onClick = null,
-        ImageSource? icon = null,
-        bool enabled = true,
-        bool @checked = false)
-    {
-        return new TrayMenuItem
-        {
-            Label = label,
-            OnClick = onClick,
-            Icon = icon,
-            Enabled = enabled,
-            Checked = @checked
-        };
-    }
-
-    /// <summary>Creates a visual separator line.</summary>
-    public static TrayMenuItem Separator()
-    {
-        return new TrayMenuItem { IsSeparator = true };
-    }
-
-    /// <summary>Creates a submenu containing nested items.</summary>
-    public static TrayMenuItem Submenu(
-        string label,
-        IEnumerable<TrayMenuItem> items,
-        ImageSource? icon = null)
-    {
-        return new TrayMenuItem
-        {
-            Label = label,
-            SubItems = items.ToArray(),
-            Icon = icon
-        };
-    }
-
-    /// <summary>
-    /// Creates a menu item that renders a fully custom Cascade node.
-    /// Not rendered by native menus (the Windows tray menu skips it; Linux SNI substitutes a text
-    /// item).
-    /// </summary>
-    public static TrayMenuItem Custom(Node node)
-    {
-        return new TrayMenuItem { CustomNode = node };
     }
 }
 

@@ -105,6 +105,68 @@ public class ListViewSelectionTests
         await Assert.That(LayoutSolver.ScrollToReveal(offset: 50, rowTop: 140, rowHeight: 30, viewport: 100)).IsEqualTo(70f);
     }
 
+    [Test]
+    public async Task SelectOnHover_PointerMovingOverARow_SelectsIt()
+    {
+        BuildList(10).SelectOnHover();
+
+        Move(y: 5);                       // first event in the window: only records the position
+        await Assert.That(selected).IsNull();
+
+        Move(y: 2 * RowHeight + 5);
+        await Assert.That(selected).IsEqualTo("item2");
+        Move(y: RowHeight + 5);
+        await Assert.That(selected).IsEqualTo("item1");
+    }
+
+    [Test]
+    public async Task SelectOnHover_KeyboardMovesSelection_AStillPointerDoesNotTakeItBack()
+    {
+        var list = BuildList(10).SelectOnHover();
+        FocusManager.RequestFocus(list);
+        Move(y: 2);
+        Move(y: 5);                       // over row 0
+        await Assert.That(selected).IsEqualTo("item0");
+
+        Press(Key.Down);
+        Press(Key.Down);
+        // Windows reports a move at an unchanged position when a window is shown or re-stacked
+        // under the pointer: that is not the user moving the mouse.
+        Move(y: 5);
+
+        await Assert.That(selected).IsEqualTo("item2");
+    }
+
+    [Test]
+    public async Task SelectOnHover_AfterThePointerLeft_TheFirstMoveBackDoesNotSelect()
+    {
+        var list = BuildList(10).SelectOnHover();
+        FocusManager.RequestFocus(list);
+        Move(y: 2);
+        Move(y: 5);
+        dispatcher.HandleMouseEvent(new NativeMouseEvent { X = 20, Y = 5, Type = NativeMouseEventType.MouseLeave });
+        Press(Key.Down);
+
+        Move(y: 3 * RowHeight + 5);       // re-entering lands somewhere: not a hover-select yet
+
+        await Assert.That(selected).IsEqualTo("item1");
+    }
+
+    [Test]
+    public async Task WithoutSelectOnHover_PointerMovesDoNotSelect()
+    {
+        BuildList(10);
+        Move(y: 2);
+        Move(y: 2 * RowHeight + 5);
+
+        await Assert.That(selected).IsNull();
+    }
+
+    private void Move(float y)
+    {
+        dispatcher.HandleMouseEvent(new NativeMouseEvent { X = 20, Y = y, Type = NativeMouseEventType.MouseMove });
+    }
+
     private void Click(float y, int clickCount = 1)
     {
         dispatcher.HandleMouseEvent(new NativeMouseEvent { X = 20, Y = y, Type = NativeMouseEventType.MouseDown, Button = NativeMouseButton.Left, ClickCount = clickCount });

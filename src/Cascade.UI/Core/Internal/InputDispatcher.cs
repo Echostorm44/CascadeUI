@@ -17,6 +17,10 @@ internal sealed partial class InputDispatcher
     private Node? hoveredNode;
     private Node? pressedNode;
     private Point lastMousePosition;
+
+    // Whether lastMousePosition is where the pointer was on the previous event inside the window
+    // (false before the first event and after the pointer left), so a move can be told from a jump.
+    private bool pointerPositionKnown;
     private bool isMouseDown;
 
     // Slider drag state — tracked across MouseDown/Move/Up
@@ -767,6 +771,12 @@ internal sealed partial class InputDispatcher
             }
         }
 
+        // Real pointer movement, as opposed to a move Windows reports at an unchanged position (a
+        // window shown or re-stacked under a still pointer) or the first move after entering.
+        bool pointerMoved = evt.Type == NativeMouseEventType.MouseMove && pointerPositionKnown
+            && (evt.X != lastMousePosition.X || evt.Y != lastMousePosition.Y);
+        pointerPositionKnown = evt.Type != NativeMouseEventType.MouseLeave;
+
         lastMousePosition = new Point(evt.X, evt.Y);
         CurrentMousePosition = lastMousePosition;
         var hitNode = HitTester.HitTest(rootNode, evt.X, evt.Y);
@@ -775,6 +785,10 @@ internal sealed partial class InputDispatcher
         {
             case NativeMouseEventType.MouseMove:
                 HandleMouseMove(hitNode, evt);
+                if (pointerMoved)
+                {
+                    SelectListRowUnderPointer(evt);
+                }
                 break;
 
             case NativeMouseEventType.MouseDown:
@@ -793,6 +807,26 @@ internal sealed partial class InputDispatcher
                 HandleMouseLeave();
                 break;
         }
+    }
+
+    /// <summary>
+    /// <see cref="ListView{T}.SelectOnHover"/>: the pointer moved over a row of such a list, so that
+    /// row becomes the selection (unless it already is, or a button is held for a drag).
+    /// </summary>
+    private void SelectListRowUnderPointer(NativeMouseEvent evt)
+    {
+        if (rootNode is null || isMouseDown
+            || HitTester.FindSelectableListViewAt(rootNode, evt.X, evt.Y) is not { SelectsOnHover: true } list)
+        {
+            return;
+        }
+        int row = list.RowIndexAt(evt.Y - list.ReorderBounds.Y);
+        if (row < 0 || row == list.SelectedIndex)
+        {
+            return;
+        }
+        list.SelectIndex(row);
+        RequestRepaint?.Invoke();
     }
 
     private void HandleMouseMove(Node? hitNode, NativeMouseEvent evt)

@@ -75,10 +75,11 @@ internal sealed class EtchBackendProvider : IDisposable
         _width = width;
         _height = height;
 
-        // CASCADE_FORCE_CPU=1 (or CASCADE_GPU=cpu) simulates GPU init failure so the CPU fallback
+        // GpuPreference.Cpu (AppConfig.Gpu, or CASCADE_GPU=cpu) renders with no GPU at all.
+        // CASCADE_FORCE_CPU=1 does the same, simulating GPU init failure so the CPU fallback
         // (including the GDI blit path) is exercisable on machines with a working GPU.
         if (Environment.GetEnvironmentVariable("CASCADE_FORCE_CPU") == "1"
-            || string.Equals(Environment.GetEnvironmentVariable("CASCADE_GPU")?.Trim(), "cpu", StringComparison.OrdinalIgnoreCase))
+            || ResolveGpuPreference(GpuPreference) == GpuPreference.Cpu)
         {
             _useGpu = false;
             return;
@@ -100,10 +101,9 @@ internal sealed class EtchBackendProvider : IDisposable
         }
     }
 
-    // CASCADE_GPU=auto|lowpower|highperformance|software overrides AppConfig.Gpu (cpu: no GPU at all, see
-    // CreateSurface), so a specific
-    // adapter can be exercised (goldens recorded on one GPU, a user report from another) without a
-    // rebuild. Unset or unrecognised values keep the configured preference.
+    // CASCADE_GPU=auto|lowpower|highperformance|software|cpu overrides AppConfig.Gpu, so a specific
+    // adapter (or none) can be exercised (goldens recorded on one GPU, a user report from another)
+    // without a rebuild. Unset or unrecognised values keep the configured preference.
     private static GpuPreference ResolveGpuPreference(GpuPreference configured)
     {
         string? value = Environment.GetEnvironmentVariable("CASCADE_GPU")?.Trim();
@@ -123,7 +123,11 @@ internal sealed class EtchBackendProvider : IDisposable
         {
             return GpuPreference.Software;
         }
-        if (!string.IsNullOrEmpty(value) && !string.Equals(value, "cpu", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(value, "cpu", StringComparison.OrdinalIgnoreCase))
+        {
+            return GpuPreference.Cpu;
+        }
+        if (!string.IsNullOrEmpty(value))
         {
             // A typo must not silently run on a different adapter than the one being tested.
             Console.Error.WriteLine($"[Cascade] Ignoring CASCADE_GPU='{value}'. Valid: auto, lowpower, highperformance, software, cpu.");

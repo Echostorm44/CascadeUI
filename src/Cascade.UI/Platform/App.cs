@@ -1611,10 +1611,19 @@ public enum GpuPreference
     HighPerformance,
 
     /// <summary>
-    /// Render on the CPU through the platform's software GPU (WARP on Windows). No graphics driver
-    /// is loaded, which minimises memory for small, mostly-idle windows.
+    /// Render through the platform's software GPU (WARP on Windows): the GPU pipeline, run on the
+    /// CPU. No graphics driver is loaded.
     /// </summary>
     Software,
+
+    /// <summary>
+    /// No GPU at all: Etch's CPU composer renders only the changed tiles and the window is
+    /// presented with GDI. No graphics device, driver or swapchain is created, which makes this
+    /// the leanest choice for small, mostly-idle windows such as tray popups (a hidden 820×520
+    /// popup holds about 15 MB instead of about 60 MB on a discrete GPU). Frames cost a little
+    /// more CPU than on a GPU.
+    /// </summary>
+    Cpu,
 }
 
 

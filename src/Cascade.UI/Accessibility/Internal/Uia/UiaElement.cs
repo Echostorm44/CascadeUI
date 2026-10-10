@@ -433,7 +433,7 @@ internal sealed partial class UiaElement : UiaFragment,
         {
             SplitButton owner => owner.Label.Resolve(),
             MenuBar { OpenMenuIndex: >= 0 } bar when bar.OpenMenuIndex < bar.Menus.Count => bar.Menus[bar.OpenMenuIndex].DisplayLabel,
-            _ => "Context menu",
+            _ => menu.AccessibleName ?? "Context menu",
         };
     }
 

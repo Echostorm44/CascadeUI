@@ -219,7 +219,7 @@ public sealed class Menu
     {
         Label = label;
         Items = items;
-        (DisplayLabel, AccessKeyIndex) = ParseAccessKey(label);
+        (DisplayLabel, AccessKeyIndex) = AccessKeyText.Parse(label, firstLetterFallback: true);
     }
 
     /// <summary>Display label for the top-level menu, as written (access-key marker included).</summary>
@@ -247,49 +247,6 @@ public sealed class Menu
         }
 
         return result;
-    }
-
-    private static (string Display, int AccessKey) ParseAccessKey(string label)
-    {
-        if (string.IsNullOrEmpty(label))
-        {
-            return ("", -1);
-        }
-
-        var sb = new System.Text.StringBuilder(label.Length);
-        int accessKey = -1;
-        for (int i = 0; i < label.Length; i++)
-        {
-            char ch = label[i];
-            if (ch == '&' && i + 1 < label.Length)
-            {
-                i++;
-                if (label[i] != '&' && accessKey < 0)
-                {
-                    accessKey = sb.Length;
-                }
-
-                sb.Append(label[i]);
-                continue;
-            }
-
-            sb.Append(ch);
-        }
-
-        string display = sb.ToString();
-        if (accessKey < 0)
-        {
-            for (int i = 0; i < display.Length; i++)
-            {
-                if (char.IsLetterOrDigit(display[i]))
-                {
-                    accessKey = i;
-                    break;
-                }
-            }
-        }
-
-        return (display, accessKey);
     }
 }
 

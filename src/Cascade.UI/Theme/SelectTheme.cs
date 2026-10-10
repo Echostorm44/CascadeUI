@@ -96,6 +96,14 @@ public class SelectTheme
     /// <summary>Selected item background color.</summary>
     public required ColorValue ItemSelectedBackground { get; init; }
 
+    /// <summary>
+    /// Text style of menu item labels in a window — context menus, list and table row menus,
+    /// split-button and menu-bar menus. Null uses <see cref="TypographySet.Body"/>. Menus read
+    /// best a step below body text in themes whose body size is large (Apple's 17 px), so the
+    /// label stays in proportion with a 16 px item icon.
+    /// </summary>
+    public TextStyle? MenuTextStyle { get; init; }
+
     // ── States ────────────────────────────────────────────────────────
 
     /// <summary>Focus ring color.</summary>

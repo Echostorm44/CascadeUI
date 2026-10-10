@@ -7,7 +7,7 @@ namespace Cascade.UI;
 /// rectangle (a row or control opened from the keyboard, a split button's arrow). Window-logical
 /// coordinates.
 /// </summary>
-internal readonly record struct MenuPlacement(Rect Anchor, bool IsPoint)
+internal readonly record struct MenuPlacement(Rect Anchor, bool IsPoint, ScreenEdge Edge = ScreenEdge.None, float EdgeLine = 0f)
 {
     /// <summary>Top-left corner at <paramref name="point"/>, flipped left/up when it does not fit.</summary>
     internal static MenuPlacement AtPoint(Point point)
@@ -20,6 +20,47 @@ internal readonly record struct MenuPlacement(Rect Anchor, bool IsPoint)
     {
         return new MenuPlacement(anchor, IsPoint: false);
     }
+
+    /// <summary>
+    /// A menu opened from a taskbar at <paramref name="edge"/> of the screen, whose inner side is
+    /// at <paramref name="edgeLine"/> (an x for a left/right taskbar, a y for a top/bottom one): when
+    /// <paramref name="point"/> is on the taskbar, the panel opens away from it, against that line,
+    /// and is lined up with the point along it. A point off the taskbar (the hidden-icons flyout, a
+    /// keyboard invocation) is placed as <see cref="AtPoint"/>.
+    /// </summary>
+    internal static MenuPlacement FromTaskbar(Point point, ScreenEdge edge, float edgeLine)
+    {
+        return new MenuPlacement(new Rect(point.X, point.Y, 0f, 0f), IsPoint: true, edge, edgeLine);
+    }
+
+    /// <summary>Whether the anchor point lies on the taskbar side of <see cref="EdgeLine"/>.</summary>
+    internal bool IsOnTaskbar => Edge switch
+    {
+        ScreenEdge.Bottom => Anchor.Y >= EdgeLine,
+        ScreenEdge.Top => Anchor.Y <= EdgeLine,
+        ScreenEdge.Left => Anchor.X <= EdgeLine,
+        ScreenEdge.Right => Anchor.X >= EdgeLine,
+        _ => false,
+    };
+}
+
+/// <summary>An edge of a screen (where a taskbar is docked).</summary>
+internal enum ScreenEdge
+{
+    /// <summary>No edge: not docked, or unknown.</summary>
+    None,
+
+    /// <summary>The left edge.</summary>
+    Left,
+
+    /// <summary>The top edge.</summary>
+    Top,
+
+    /// <summary>The right edge.</summary>
+    Right,
+
+    /// <summary>The bottom edge.</summary>
+    Bottom,
 }
 
 /// <summary>
@@ -49,7 +90,7 @@ internal readonly record struct MenuMetrics(
         return new MenuMetrics(
             ItemHeight:        select.ItemHeight,
             ItemPaddingH:      select.ItemPaddingH,
-            FontSize:          theme.Typography.Body.Size,
+            FontSize:          select.MenuTextStyle?.Size ?? theme.Typography.Body.Size,
             ShortcutFontSize:  12f,
             SeparatorHeight:   9f,
             PaddingV:          6f,
@@ -59,6 +100,30 @@ internal readonly record struct MenuMetrics(
             SubmenuArrowWidth: 16f,
             MinWidth:          160f,
             HeaderHeight:      Math.Max(20f, MathF.Round(select.ItemHeight * 0.75f)),
+            HeaderFontSize:    12f,
+            CheckColumn:       22f);
+    }
+
+    /// <summary>
+    /// A system tray menu: the roomy rhythm of a shell menu — 34 px rows, 13 px text (the size of
+    /// the shell's own menu text), a 16 px icon with room around it — rather than the denser in-window
+    /// dropdown. It is the same for every theme: the menu belongs to the taskbar, not to a window.
+    /// </summary>
+    internal static MenuMetrics ForTray()
+    {
+        return new MenuMetrics(
+            ItemHeight:        34f,
+            ItemPaddingH:      8f,
+            FontSize:          13f,
+            ShortcutFontSize:  12f,
+            SeparatorHeight:   7f,
+            PaddingV:          4f,
+            InsetH:            4f,
+            IconColumn:        24f,
+            ShortcutGap:       24f,
+            SubmenuArrowWidth: 16f,
+            MinWidth:          200f,
+            HeaderHeight:      26f,
             HeaderFontSize:    12f,
             CheckColumn:       22f);
     }
@@ -299,6 +364,15 @@ internal sealed class MenuOverlay
     internal bool PressStartedInside { get; set; }
 
     /// <summary>
+    /// Whether access keys are underlined: the menu was opened from the keyboard, or the system
+    /// "underline access keys" setting is on. Set by the host after opening.
+    /// </summary>
+    internal bool ShowAccessKeys { get; set; }
+
+    /// <summary>The name screen readers announce for the root panel; null for "Context menu".</summary>
+    internal string? AccessibleName { get; set; }
+
+    /// <summary>
     /// Replaces the text measurer (tests use a deterministic one). The default shapes with the
     /// window's default font and falls back to an estimate when no font is loaded.
     /// </summary>
@@ -327,6 +401,7 @@ internal sealed class MenuOverlay
         Owner = null;
         PressStartedInside = false;
         PointerTravelled = false;
+        ShowAccessKeys = false;
 
         if (!HasVisibleItem(items))
         {
@@ -503,31 +578,52 @@ internal sealed class MenuOverlay
     /// </summary>
     internal bool HighlightByLetter(char letter)
     {
+        return HighlightByLetter(letter, out _);
+    }
+
+    /// <summary>
+    /// Highlights the next selectable item of the top-most panel whose access key (an explicit
+    /// <see cref="ContextMenuItem.AccessKeyIndex"/>, else the label's first letter) is
+    /// <paramref name="letter"/>, cycling through the matches. <paramref name="unique"/> reports
+    /// whether exactly one item matches — native menus run such an item at once.
+    /// </summary>
+    internal bool HighlightByLetter(char letter, out bool unique)
+    {
+        unique = false;
         if (levels.Count == 0 || char.IsWhiteSpace(letter))
         {
             return false;
         }
 
         var level = levels[^1];
+        char wanted = char.ToUpperInvariant(letter);
         int n = level.Items.Length;
         int start = level.Highlighted;
+        int first = -1;
+        int matches = 0;
         for (int step = 1; step <= n; step++)
         {
             int i = (((start + step) % n) + n) % n;
             var item = level.Items[i];
-            if (!IsActionable(item))
+            if (!IsActionable(item) || item.AccessKey != wanted)
             {
                 continue;
             }
 
-            string label = item.Label!.TrimStart();
-            if (label.Length > 0 && char.ToUpperInvariant(label[0]) == char.ToUpperInvariant(letter))
+            matches++;
+            if (first < 0)
             {
-                return SetHighlight(level, i);
+                first = i;
             }
         }
 
-        return false;
+        if (first < 0)
+        {
+            return false;
+        }
+
+        unique = matches == 1;
+        return SetHighlight(level, first);
     }
 
     /// <summary>
@@ -681,6 +777,11 @@ internal sealed class MenuOverlay
         float x;
         float y;
 
+        if (placement.IsOnTaskbar)
+        {
+            return Snap(Clamp(PlaceAgainstTaskbar(panel, placement, viewport), viewport), pixelRatio);
+        }
+
         if (placement.IsPoint)
         {
             x = a.X;
@@ -709,6 +810,46 @@ internal sealed class MenuOverlay
         }
 
         return Snap(Clamp(new Rect(x, y, w, h), viewport), pixelRatio);
+    }
+
+    /// <summary>
+    /// A tray menu opened on the taskbar: against the taskbar's inner edge (one
+    /// <see cref="EdgeMargin"/> off it), lined up with the point along the taskbar — starting at the
+    /// point and flipped to end at it when it would cross the far side, as native tray menus do.
+    /// </summary>
+    private static Rect PlaceAgainstTaskbar(Size panel, MenuPlacement placement, Size viewport)
+    {
+        var a = placement.Anchor;
+        float w = panel.Width;
+        float h = panel.Height;
+        float line = placement.EdgeLine;
+        float x = a.X;
+        float y = a.Y;
+        switch (placement.Edge)
+        {
+            case ScreenEdge.Bottom:
+            case ScreenEdge.Top:
+                y = placement.Edge == ScreenEdge.Bottom
+                    ? Math.Min(line, viewport.Height > 0f ? viewport.Height : line) - EdgeMargin - h
+                    : Math.Max(line, 0f) + EdgeMargin;
+                if (viewport.Width > 0f && x + w > viewport.Width - EdgeMargin)
+                {
+                    x = a.X - w;
+                }
+                break;
+
+            default:
+                x = placement.Edge == ScreenEdge.Right
+                    ? Math.Min(line, viewport.Width > 0f ? viewport.Width : line) - EdgeMargin - w
+                    : Math.Max(line, 0f) + EdgeMargin;
+                if (viewport.Height > 0f && y + h > viewport.Height - EdgeMargin)
+                {
+                    y = a.Y - h;
+                }
+                break;
+        }
+
+        return new Rect(x, y, w, h);
     }
 
     /// <summary>

@@ -36,9 +36,10 @@ internal sealed partial class NodePainter
         }
 #endif
         var levels = open.Levels;
+        var palette = MenuPalette.FromTheme(theme);
         for (int i = 0; i < levels.Count; i++)
         {
-            PaintMenuLevel(open, levels[i]);
+            PaintMenuLevel(open, levels[i], palette, MenuPanelChrome.InWindow);
         }
 #if CASCADE_DEVTOOLS
         if (DrawProvenance.CaptureEnabled)
@@ -49,15 +50,34 @@ internal sealed partial class NodePainter
 #endif
     }
 
-    private void PaintMenuLevel(MenuOverlay open, MenuLevel level)
+    /// <summary>
+    /// Paints panel <paramref name="levelIndex"/> of <paramref name="menu"/> as the whole content of
+    /// its own popup window (the tray menu): the caller has translated the panel's top-left corner
+    /// to the window origin. No shadow and no rounded panel — the window is the panel, and the
+    /// window manager rounds, borders and shadows it (<see cref="MenuPanelChrome.SystemFramed"/>);
+    /// where it cannot, a square 1 px border is drawn (<see cref="MenuPanelChrome.Framed"/>).
+    /// </summary>
+    internal void PaintMenuWindow(MenuOverlay menu, int levelIndex, MenuPalette palette, MenuPanelChrome chrome)
+    {
+        if (levelIndex < 0 || levelIndex >= menu.Levels.Count)
+        {
+            return;
+        }
+
+        PaintMenuLevel(menu, menu.Levels[levelIndex], palette, chrome);
+    }
+
+    private void PaintMenuLevel(MenuOverlay open, MenuLevel level, MenuPalette palette, MenuPanelChrome chrome)
     {
         var st = theme.Select;
         var m = open.Metrics;
         var b = level.Bounds;
+        bool inWindow = chrome == MenuPanelChrome.InWindow;
+        float panelRadius = inWindow ? st.DropdownRadius : 0f;
 
         ScopeGuard opacityScope = default;
         ScopeGuard scaleScope = default;
-        if (!ControlStateAnimator.ReducedMotion)
+        if (inWindow && !ControlStateAnimator.ReducedMotion)
         {
             float t = Math.Clamp((float)Stopwatch.GetElapsedTime(level.OpenedAt).TotalMilliseconds / MenuEntranceMs, 0f, 1f);
             t = 1f - ((1f - t) * (1f - t));
@@ -72,11 +92,17 @@ internal sealed partial class NodePainter
 
         try
         {
-            PaintShadow(st.DropdownShadow, b, st.DropdownRadius);
-            ctx.DrawRect(b, st.DropdownBackground, radius: st.DropdownRadius);
-            if (st.BorderWidth > 0)
+            if (inWindow)
             {
-                ctx.DrawRect(b, stroke: new Stroke(st.BorderColor, st.BorderWidth), radius: st.DropdownRadius);
+                PaintShadow(st.DropdownShadow, b, panelRadius);
+            }
+
+            ctx.DrawRect(b, palette.Background, radius: panelRadius);
+            if (chrome != MenuPanelChrome.SystemFramed && palette.BorderWidth > 0)
+            {
+                // A square window frame sits inside the window: inset by half the stroke so all of it shows.
+                var frame = inWindow ? b : Inset(b, palette.BorderWidth / 2f);
+                ctx.DrawRect(frame, stroke: new Stroke(palette.Border, palette.BorderWidth), radius: panelRadius);
             }
 
             if (level.HasIcons && !level.IconsLaidOut)
@@ -121,13 +147,13 @@ internal sealed partial class NodePainter
                         ctx.DrawLine(
                             new Point(b.X + m.InsetH + 4f, sepY),
                             new Point(b.Right - m.InsetH - 4f, sepY),
-                            new Stroke(st.BorderColor, 1f));
+                            new Stroke(palette.Separator, 1f));
                         continue;
                     }
 
                     case MenuItemKind.Header:
                         PaintText(item.Label ?? "", new Rect(b.X + textInset, y, Math.Max(0f, b.Width - (textInset * 2f)), h), 0f,
-                            st.TextColor.ScaleAlpha(0.55f), fontSize: m.HeaderFontSize, overflow: TextOverflow.Ellipsis);
+                            palette.MutedText, fontSize: m.HeaderFontSize, overflow: TextOverflow.Ellipsis);
                         continue;
 
                     case MenuItemKind.Custom:
@@ -136,18 +162,20 @@ internal sealed partial class NodePainter
                 }
 
                 bool enabled = !item.Disabled;
-                if (i == level.Highlighted && enabled)
+                bool highlighted = i == level.Highlighted && enabled;
+                if (highlighted)
                 {
                     var highlight = new Rect(b.X + m.InsetH, y, b.Width - (m.InsetH * 2f), h);
-                    ctx.DrawRect(highlight, st.ItemHoverBackground, radius: Math.Min(8f, st.DropdownRadius));
+                    ctx.DrawRect(highlight, palette.HighlightBackground, radius: Math.Min(inWindow ? 8f : 5f, st.DropdownRadius));
                 }
 
-                float alpha = enabled ? 1f : 0.4f;
-                var textColor = (item.Style == MenuItemStyle.Destructive ? theme.Colors.Danger : st.TextColor).ScaleAlpha(alpha);
+                var textColor = MenuItemTextColor(item, highlighted, palette);
+                float alpha = enabled || palette.IsSystemColors ? 1f : MenuPalette.DisabledAlpha;
 
                 if (item.IsChecked && item.Kind is MenuItemKind.Toggle or MenuItemKind.Radio)
                 {
-                    PaintMenuCheck(item.Kind, checkX, y, h, m, theme.Colors.Primary.ScaleAlpha(alpha));
+                    var checkColor = highlighted && palette.IsSystemColors ? palette.HighlightText : palette.Accent;
+                    PaintMenuCheck(item.Kind, checkX, y, h, m, enabled ? checkColor : palette.DisabledText);
                 }
 
                 if (item.Icon is { IsLayoutEmpty: false } icon)
@@ -157,13 +185,19 @@ internal sealed partial class NodePainter
 
                 // A label with no shortcut may run into the (empty) shortcut column.
                 float labelEnd = string.IsNullOrEmpty(item.Shortcut) ? shortcutRight : labelRight;
-                PaintText(item.Label ?? "", new Rect(labelX, y, Math.Max(0f, labelEnd - labelX), h), 0f, textColor,
-                    fontSize: m.FontSize, overflow: TextOverflow.Ellipsis);
+                string label = item.Label ?? "";
+                var labelRect = new Rect(labelX, y, Math.Max(0f, labelEnd - labelX), h);
+                PaintText(label, labelRect, 0f, textColor, fontSize: m.FontSize, overflow: TextOverflow.Ellipsis);
+                if (open.ShowAccessKeys && item.AccessKeyIndex >= 0 && item.AccessKeyIndex < label.Length)
+                {
+                    PaintAccessKeyUnderline(label, item.AccessKeyIndex, labelRect, m.FontSize, textColor);
+                }
 
                 if (!string.IsNullOrEmpty(item.Shortcut))
                 {
+                    var shortcutColor = palette.IsSystemColors ? textColor : textColor.ScaleAlpha(0.5f);
                     PaintText(item.Shortcut, new Rect(labelRight, y, Math.Max(0f, shortcutRight - labelRight), h), 0f,
-                        st.TextColor.ScaleAlpha(0.5f * alpha), fontSize: m.ShortcutFontSize, alignment: TextAlignment.End);
+                        shortcutColor, fontSize: m.ShortcutFontSize, alignment: TextAlignment.End);
                 }
 
                 if (item.Items is not null)
@@ -174,7 +208,7 @@ internal sealed partial class NodePainter
 
             if (level.MaxScroll > 0f)
             {
-                PaintMenuScrollThumb(level, viewTop, viewBottom - viewTop);
+                PaintMenuScrollThumb(level, viewTop, viewBottom - viewTop, palette);
             }
         }
         finally
@@ -182,6 +216,42 @@ internal sealed partial class NodePainter
             opacityScope.Dispose();
             scaleScope.Dispose();
         }
+    }
+
+    /// <summary>An item's label colour: destructive, disabled, the highlight pair (system colours), or plain text.</summary>
+    private static ColorValue MenuItemTextColor(ContextMenuItem item, bool highlighted, MenuPalette palette)
+    {
+        if (item.Disabled)
+        {
+            return palette.DisabledText;
+        }
+
+        if (highlighted && palette.IsSystemColors)
+        {
+            return palette.HighlightText;
+        }
+
+        if (item.Style == MenuItemStyle.Destructive)
+        {
+            return palette.Danger;
+        }
+
+        return highlighted ? palette.HighlightText : palette.Text;
+    }
+
+    /// <summary>Underlines the access key of a label painted at the start of <paramref name="labelRect"/>.</summary>
+    private void PaintAccessKeyUnderline(string label, int index, Rect labelRect, float fontSize, ColorValue color)
+    {
+        float before = index > 0 ? ctx.MeasureText(label[..index], fontSize).Width : 0f;
+        float keyWidth = ctx.MeasureText(label.Substring(index, 1), fontSize).Width;
+        float underlineY = MathF.Round(labelRect.Y + (labelRect.Height / 2f) + (fontSize * 0.55f)) + 0.5f;
+        float startX = labelRect.X + before;
+        ctx.DrawLine(new Point(startX, underlineY), new Point(startX + keyWidth, underlineY), new Stroke(color, 1f));
+    }
+
+    private static Rect Inset(Rect r, float by)
+    {
+        return new Rect(r.X + by, r.Y + by, Math.Max(0f, r.Width - (by * 2f)), Math.Max(0f, r.Height - (by * 2f)));
     }
 
     /// <summary>Lays custom content rows out at the panel's inner width, once per opened panel.</summary>
@@ -273,12 +343,12 @@ internal sealed partial class NodePainter
         ctx.DrawLine(new Point(centerX + (half / 2f), centerY), new Point(centerX - (half / 2f), centerY + half), stroke);
     }
 
-    private void PaintMenuScrollThumb(MenuLevel level, float trackTop, float trackHeight)
+    private void PaintMenuScrollThumb(MenuLevel level, float trackTop, float trackHeight, MenuPalette palette)
     {
         float content = level.ContentHeight;
         float thumbHeight = Math.Max(16f, trackHeight * (trackHeight / content));
         float thumbTop = trackTop + ((trackHeight - thumbHeight) * (level.ScrollOffset / level.MaxScroll));
         var thumb = new Rect(level.Bounds.Right - 5f, thumbTop, 3f, thumbHeight);
-        ctx.DrawRect(thumb, theme.Select.TextColor.ScaleAlpha(0.3f), radius: 1.5f);
+        ctx.DrawRect(thumb, palette.IsSystemColors ? palette.Text : palette.Text.ScaleAlpha(0.3f), radius: 1.5f);
     }
 }

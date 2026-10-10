@@ -101,6 +101,14 @@ else if (string.Equals(view, "buttons", StringComparison.OrdinalIgnoreCase))
         config.WindowSize = new Size(680, 300);
     });
 }
+else if (string.Equals(view, "caret", StringComparison.OrdinalIgnoreCase))
+{
+    App.Run<CaretView>(config =>
+    {
+        Configure(config);
+        CaretView.Configure(config);
+    });
+}
 else if (string.Equals(view, "shell", StringComparison.OrdinalIgnoreCase))
 {
     App.Run<ShellView>(config =>

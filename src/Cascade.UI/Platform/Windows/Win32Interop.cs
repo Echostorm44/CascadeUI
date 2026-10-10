@@ -27,6 +27,7 @@ internal static partial class Win32
     internal const uint WM_QUIT             = 0x0012;
     internal const uint WM_ERASEBKGND       = 0x0014;
     internal const uint WM_SHOWWINDOW       = 0x0018;
+    internal const uint WM_SETTINGCHANGE    = 0x001A;
     internal const uint WM_ACTIVATEAPP      = 0x001C;
     internal const uint WM_SETCURSOR        = 0x0020;
     internal const uint WM_GETMINMAXINFO    = 0x0024;

@@ -26,8 +26,11 @@ internal readonly struct FrameLoopSentinels
     /// <summary>Count of live entries in the shared animation scheduler.</summary>
     internal int SharedAnimationsCount { get; }
 
-    /// <summary>True while a <c>TextInput</c> or <c>MentionInput</c> has focus (caret blinking).</summary>
+    /// <summary>True while a text-editing control has focus.</summary>
     internal bool CaretActive { get; }
+
+    /// <summary>True when the last paint drew a caret that will toggle (it has not stopped blinking).</summary>
+    internal bool CaretBlinkPending { get; }
 
     /// <summary>True if any <c>Spinner</c> rendered this frame.</summary>
     internal bool SpinnersActive { get; }
@@ -35,7 +38,7 @@ internal readonly struct FrameLoopSentinels
     /// <summary>True if any chart reported an in-progress enter/data animation this frame.</summary>
     internal bool ChartAnimationsActive { get; }
 
-    /// <summary>True if any toast was rendered this frame (auto-dismiss requires ticks).</summary>
+    /// <summary>True if any toast was rendered this frame.</summary>
     internal bool ToastsActive { get; }
 
     /// <summary>True if any <c>Canvas</c> with a continuous onFrame callback rendered this frame.</summary>
@@ -47,6 +50,15 @@ internal readonly struct FrameLoopSentinels
     /// <summary>True while a dialog, sheet or popover is animating open or closed (or a sheet is snapping back).</summary>
     internal bool OverlayAnimationsActive { get; }
 
+    /// <summary>
+    /// True when the platform can wake the loop at a set time. Then a blinking caret and a settled
+    /// toast do not hold the loop: it sleeps until the next toggle or expiry.
+    /// </summary>
+    internal bool TimedWakesSupported { get; }
+
+    /// <summary>Milliseconds until the pending timed wake; -1 when none is scheduled.</summary>
+    internal double NextWakeInMs { get; }
+
     internal FrameLoopSentinels(
         bool framesInFlight,
         int renderDirtyCount,
@@ -55,12 +67,15 @@ internal readonly struct FrameLoopSentinels
         bool sharedAnimationsActive,
         int sharedAnimationsCount,
         bool caretActive,
+        bool caretBlinkPending,
         bool spinnersActive,
         bool chartAnimationsActive,
         bool toastsActive,
         bool continuousCanvasesActive,
         bool stateTransitionsActive,
-        bool overlayAnimationsActive)
+        bool overlayAnimationsActive,
+        bool timedWakesSupported,
+        double nextWakeInMs)
     {
         FramesInFlight = framesInFlight;
         RenderDirtyCount = renderDirtyCount;
@@ -69,26 +84,27 @@ internal readonly struct FrameLoopSentinels
         SharedAnimationsActive = sharedAnimationsActive;
         SharedAnimationsCount = sharedAnimationsCount;
         CaretActive = caretActive;
+        CaretBlinkPending = caretBlinkPending;
         SpinnersActive = spinnersActive;
         ChartAnimationsActive = chartAnimationsActive;
         ToastsActive = toastsActive;
         ContinuousCanvasesActive = continuousCanvasesActive;
         StateTransitionsActive = stateTransitionsActive;
         OverlayAnimationsActive = overlayAnimationsActive;
+        TimedWakesSupported = timedWakesSupported;
+        NextWakeInMs = nextWakeInMs;
     }
 
-    /// <summary>
-    /// True if any single sentinel would keep the frame loop ticking. Matches
-    /// the condition in <see cref="FrameOrchestrator.Tick"/> exactly.
-    /// </summary>
+    /// <summary>True when a blinking caret or a toast keeps the loop ticking because it cannot be woken at a set time.</summary>
+    internal bool TimedFramesHoldLoop => !TimedWakesSupported && (CaretBlinkPending || ToastsActive);
+
     internal bool WouldHoldFrameLoop =>
         AnimationsActive
         || SharedAnimationsActive
         || RenderDirtyCount > 0
-        || CaretActive
+        || TimedFramesHoldLoop
         || SpinnersActive
         || ChartAnimationsActive
-        || ToastsActive
         || ContinuousCanvasesActive
         || StateTransitionsActive
         || OverlayAnimationsActive;

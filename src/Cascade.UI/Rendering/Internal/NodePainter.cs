@@ -198,9 +198,25 @@ internal sealed partial class NodePainter
     // Checked by FrameOrchestrator to keep the frame loop running.
     internal static bool HasActiveChartAnimations { get; private set; }
 
-    // Set to true during painting when active toast notifications are present.
-    // Checked by FrameOrchestrator to keep the frame loop running for auto-dismiss.
+    // Set to true during painting when active toast notifications are present. Where the platform
+    // cannot wake the frame loop at a toast's expiry (see NextRepaintDue), this keeps it running.
     internal static bool HasActiveToasts { get; private set; }
+
+    /// <summary>
+    /// When something painted this frame next needs a full repaint that nothing will request
+    /// (Stopwatch timestamp; 0 = none), e.g. a toast's auto-dismiss. Where the platform can wake the
+    /// frame loop it sleeps until then instead of ticking every vblank.
+    /// </summary>
+    internal static long NextRepaintDue { get; set; }
+
+    /// <summary>Asks for a full repaint at <paramref name="timestamp"/> (Stopwatch ticks); the earliest request wins.</summary>
+    internal static void RequestRepaintAt(long timestamp)
+    {
+        if (NextRepaintDue == 0 || timestamp < NextRepaintDue)
+        {
+            NextRepaintDue = timestamp;
+        }
+    }
 
     // Set to true during painting when any CanvasNode with an onFrame callback is encountered.
     // Checked by FrameOrchestrator to keep the frame loop running for continuous canvas animations.
@@ -291,6 +307,7 @@ internal sealed partial class NodePainter
     /// </summary>
     internal void Paint(Node node)
     {
+        paintedCarets.Clear();
         HasActiveSpinners = false;
         HasActiveChartAnimations = false;
         HasActiveToasts = false;
@@ -1820,44 +1837,6 @@ internal sealed partial class NodePainter
 
     // ── TextInput ──────────────────────────────────────────────────────
 
-    /// <summary>
-    /// When the earliest caret painted this frame next changes (Stopwatch timestamp; 0 = none).
-    /// The frame loop sleeps until then instead of repainting every vblank for a blinking caret.
-    /// </summary>
-    internal static long NextCaretToggle { get; set; }
-
-    /// <summary>
-    /// Caret opacity: solid for one blink interval after input, then a hard on/off blink of half an
-    /// interval each, like the native Windows caret. A smooth fade needed a frame every vblank;
-    /// this needs one per toggle. Records the next toggle in <see cref="NextCaretToggle"/>.
-    /// </summary>
-    internal static float CaretBlink(double intervalMs, long resetTimestamp)
-    {
-        long now = Stopwatch.GetTimestamp();
-        double elapsed = Stopwatch.GetElapsedTime(resetTimestamp, now).TotalMilliseconds;
-        double half = intervalMs / 2.0;
-        float opacity;
-        double nextChangeMs;
-        if (elapsed < intervalMs)
-        {
-            opacity = 1f;
-            nextChangeMs = intervalMs;
-        }
-        else
-        {
-            long step = (long)((elapsed - intervalMs) / half);
-            opacity = (step & 1) == 0 ? 0f : 1f;
-            nextChangeMs = intervalMs + ((step + 1) * half);
-        }
-
-        long toggle = resetTimestamp + (long)(nextChangeMs * Stopwatch.Frequency / 1000.0);
-        if (NextCaretToggle == 0 || toggle < NextCaretToggle)
-        {
-            NextCaretToggle = toggle;
-        }
-        return opacity;
-    }
-
     private void PaintTextInput(TextInput ti, Rect bounds)
     {
         var t = theme.TextInput;
@@ -2003,38 +1982,31 @@ internal sealed partial class NodePainter
                 maxWidth: float.PositiveInfinity, maxLines: 1);
         }
 
-        // Caret when focused — a hard blink (see CaretBlink)
+        // Caret when focused — a hard blink (see DrawCaret)
         if (focused && !disabled)
         {
             var caret = theme.Caret;
-            float caretOpacity = CaretBlink(caret.BlinkInterval.TotalMilliseconds, InputDispatcher.CaretResetTimestamp);
+            int caretIdx = Math.Clamp(InputDispatcher.TextInputCaretIndex, 0, text.Length);
+            string beforeCaret = text[..caretIdx];
+            float caretTextWidth = string.IsNullOrEmpty(beforeCaret)
+                ? 0f
+                : ctx.MeasureTextAdvance(beforeCaret, fontSize).Width;
+            float caretX = bounds.X + contentLeft + caretTextWidth - scrollX;
+            float caretPadY = 6f;
+            float caretY = bounds.Y + caretPadY;
+            float caretH = bounds.Height - caretPadY * 2;
 
-            if (caretOpacity > 0.01f)
+            DrawCaret(new Rect(caretX, caretY, caret.Width, caretH), caret.Color);
+
+            // Auto-scroll horizontally to keep caret visible
+            float caretRelX = caretTextWidth;
+            if (caretRelX - scrollX > availableWidth)
             {
-                int caretIdx = Math.Clamp(InputDispatcher.TextInputCaretIndex, 0, text.Length);
-                string beforeCaret = text[..caretIdx];
-                float caretTextWidth = string.IsNullOrEmpty(beforeCaret)
-                    ? 0f
-                    : ctx.MeasureTextAdvance(beforeCaret, fontSize).Width;
-                float caretX = bounds.X + contentLeft + caretTextWidth - scrollX;
-                float caretPadY = 6f;
-                float caretY = bounds.Y + caretPadY;
-                float caretH = bounds.Height - caretPadY * 2;
-
-                ctx.DrawRect(
-                    new Rect(caretX, caretY, caret.Width, caretH),
-                    caret.Color.Opacity(caretOpacity));
-
-                // Auto-scroll horizontally to keep caret visible
-                float caretRelX = caretTextWidth;
-                if (caretRelX - scrollX > availableWidth)
-                {
-                    InputDispatcher.TextInputScrollOffsetX = caretRelX - availableWidth;
-                }
-                else if (caretRelX < scrollX)
-                {
-                    InputDispatcher.TextInputScrollOffsetX = caretRelX;
-                }
+                InputDispatcher.TextInputScrollOffsetX = caretRelX - availableWidth;
+            }
+            else if (caretRelX < scrollX)
+            {
+                InputDispatcher.TextInputScrollOffsetX = caretRelX;
             }
         }
     }
@@ -3997,23 +3969,15 @@ internal sealed partial class NodePainter
         if (focused && !disabled)
         {
             var caret = theme.Caret;
-            double blinkMs = caret.BlinkInterval.TotalMilliseconds;
-            double elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(InputDispatcher.CaretResetTimestamp).TotalMilliseconds;
-            bool caretVisible = elapsed < blinkMs || (elapsed % blinkMs) < (blinkMs / 2.0);
-
-            if (caretVisible)
-            {
-                string beforeCaret = inputText.Length > 0 && ti.CaretIndex > 0
-                    ? inputText[..Math.Min(ti.CaretIndex, inputText.Length)]
-                    : "";
-                float caretXOffset = string.IsNullOrEmpty(beforeCaret)
-                    ? 0f
-                    : ctx.MeasureText(beforeCaret, fontSize).Width;
-                float caretX = inputX + caretXOffset;
-                float caretPadY = 2f;
-                ctx.DrawRect(new Rect(caretX, inputY + caretPadY, caret.Width, inputH - caretPadY * 2),
-                    caret.Color);
-            }
+            string beforeCaret = inputText.Length > 0 && ti.CaretIndex > 0
+                ? inputText[..Math.Min(ti.CaretIndex, inputText.Length)]
+                : "";
+            float caretXOffset = string.IsNullOrEmpty(beforeCaret)
+                ? 0f
+                : ctx.MeasureText(beforeCaret, fontSize).Width;
+            float caretX = inputX + caretXOffset;
+            float caretPadY = 2f;
+            DrawCaret(new Rect(caretX, inputY + caretPadY, caret.Width, inputH - caretPadY * 2), caret.Color);
         }
     }
 
@@ -4149,23 +4113,14 @@ internal sealed partial class NodePainter
         if (focused && !disabled)
         {
             var caret = theme.Caret;
-            double blinkMs = caret.BlinkInterval.TotalMilliseconds;
-            double elapsed = Stopwatch.GetElapsedTime(InputDispatcher.CaretResetTimestamp).TotalMilliseconds;
-            bool caretVisible = elapsed < blinkMs || (elapsed % blinkMs) < (blinkMs / 2.0);
-
-            if (caretVisible)
-            {
-                int caretIdx = Math.Clamp(InputDispatcher.MentionInputCaretIndex, 0, text.Length);
-                string beforeCaret = text[..caretIdx];
-                float textWidth = string.IsNullOrEmpty(beforeCaret)
-                    ? 0f
-                    : ctx.MeasureText(beforeCaret, fontSize).Width;
-                float caretX = bounds.X + t.PaddingH + textWidth;
-                float caretPadY = 6f;
-                ctx.DrawRect(
-                    new Rect(caretX, bounds.Y + caretPadY, caret.Width, bounds.Height - caretPadY * 2),
-                    caret.Color);
-            }
+            int caretIdx = Math.Clamp(InputDispatcher.MentionInputCaretIndex, 0, text.Length);
+            string beforeCaret = text[..caretIdx];
+            float textWidth = string.IsNullOrEmpty(beforeCaret)
+                ? 0f
+                : ctx.MeasureText(beforeCaret, fontSize).Width;
+            float caretX = bounds.X + t.PaddingH + textWidth;
+            float caretPadY = 6f;
+            DrawCaret(new Rect(caretX, bounds.Y + caretPadY, caret.Width, bounds.Height - caretPadY * 2), caret.Color);
         }
 
         // Suggestion popup overlay — check the focused element (may be the stale node
@@ -4786,8 +4741,7 @@ internal sealed partial class NodePainter
         ctx.DrawText("⌘", panelX + searchPadding, iconY,
             bodySize, colors.Text.Opacity(0.4f));
 
-        // Blinking cursor (solid under reduced motion).
-        float caretOpacity = cpReducedMotion ? 1f : CaretBlink(theme.Caret.BlinkInterval.TotalMilliseconds, InputDispatcher.CaretResetTimestamp);
+        // Blinking cursor (solid under reduced motion; see DrawCaret).
         if (!string.IsNullOrEmpty(cp.SearchText))
         {
             var cursorTextSize = ctx.MeasureTextAdvance(cp.SearchText, bodySize);
@@ -4795,14 +4749,14 @@ internal sealed partial class NodePainter
             float cursorPadY = 6f;
             float cursorTop = searchY + cursorPadY;
             float cursorH = searchHeight - cursorPadY * 2;
-            ctx.DrawRect(new Rect(cursorX, cursorTop, 1.5f, cursorH), colors.Text.Opacity(caretOpacity));
+            DrawCaret(new Rect(cursorX, cursorTop, 1.5f, cursorH), colors.Text);
         }
         else
         {
             float cursorPadY = 6f;
             float cursorTop = searchY + cursorPadY;
             float cursorH = searchHeight - cursorPadY * 2;
-            ctx.DrawRect(new Rect(textX, cursorTop, 1.5f, cursorH), colors.Text.Opacity(caretOpacity));
+            DrawCaret(new Rect(textX, cursorTop, 1.5f, cursorH), colors.Text);
         }
 
         if (resultCount == 0)
@@ -11045,11 +10999,7 @@ internal sealed partial class NodePainter
                     float cursorX = textX + ctx.MeasureText(beforeCursor, cellFontSize).Width;
                     float cursorTop = editRect.Y + 4f;
                     float cursorBot = editRect.Bottom - 4f;
-                    float caretOpacity = tabReducedMotion ? 1f : CaretBlink(theme.Caret.BlinkInterval.TotalMilliseconds, InputDispatcher.CaretResetTimestamp);
-                    ctx.DrawLine(
-                        new Point(cursorX, cursorTop),
-                        new Point(cursorX, cursorBot),
-                        new Stroke(editTextColor.Opacity(caretOpacity), 1.5f));
+                    DrawCaretLine(new Point(cursorX, cursorTop), new Point(cursorX, cursorBot), editTextColor, 1.5f);
                 }
                 else
                 {
@@ -12131,19 +12081,11 @@ internal sealed partial class NodePainter
             }
             else if (isActiveCell)
             {
-                // Smooth caret blink in active cell
-                float caretOpacity = CaretBlink(theme.Caret.BlinkInterval.TotalMilliseconds, InputDispatcher.CaretResetTimestamp);
-
-                if (caretOpacity > 0.01f)
-                {
-                    float caretX = paintCellBounds.X + paintCellBounds.Width / 2f;
-                    float caretTop = paintCellBounds.Y + 10f;
-                    float caretBottom = paintCellBounds.Y + paintCellBounds.Height - 10f;
-                    ctx.DrawLine(
-                        new Point(caretX, caretTop),
-                        new Point(caretX, caretBottom),
-                        new Stroke(theme.Caret.Color.Opacity(caretOpacity), theme.Caret.Width));
-                }
+                // Blinking caret in the active cell (see DrawCaret)
+                float caretX = paintCellBounds.X + paintCellBounds.Width / 2f;
+                float caretTop = paintCellBounds.Y + 10f;
+                float caretBottom = paintCellBounds.Y + paintCellBounds.Height - 10f;
+                DrawCaretLine(new Point(caretX, caretTop), new Point(caretX, caretBottom), theme.Caret.Color, theme.Caret.Width);
             }
 
             x += cellWidth + gap;
@@ -13397,21 +13339,14 @@ internal sealed partial class NodePainter
         string text = InputDispatcher.PropertyGridEditBuffer;
         PaintText(text, editorRect, 0f, textColor, fontSize: fontSize);
 
-        // Draw caret (blinking)
-        const double blinkMs = 530.0;
-        double elapsed = Stopwatch.GetElapsedTime(InputDispatcher.CaretResetTimestamp).TotalMilliseconds;
-        bool caretVisible = elapsed < blinkMs || (elapsed % blinkMs) < (blinkMs / 2.0);
-        if (caretVisible)
-        {
-            int caretPos = Math.Clamp(InputDispatcher.PropertyGridEditCaret, 0, text.Length);
-            string beforeCaret = text[..caretPos];
-            var beforeSize = ctx.MeasureText(beforeCaret, fontSize);
-            float caretX = editorRect.X + beforeSize.Width;
-            float caretY1 = editorRect.Y + (editorRect.Height - fontSize) / 2f;
-            float caretY2 = caretY1 + fontSize;
-            ctx.DrawLine(new Point(caretX, caretY1), new Point(caretX, caretY2),
-                new Stroke(primaryColor, 1.5f));
-        }
+        // Caret (blinking; see DrawCaret)
+        int caretPos = Math.Clamp(InputDispatcher.PropertyGridEditCaret, 0, text.Length);
+        string beforeCaret = text[..caretPos];
+        var beforeSize = ctx.MeasureText(beforeCaret, fontSize);
+        float caretX = editorRect.X + beforeSize.Width;
+        float caretY1 = editorRect.Y + (editorRect.Height - fontSize) / 2f;
+        float caretY2 = caretY1 + fontSize;
+        DrawCaretLine(new Point(caretX, caretY1), new Point(caretX, caretY2), primaryColor, 1.5f);
     }
 
     // ── EmojiPicker ──────────────────────────────────────────────────
@@ -14990,35 +14925,29 @@ internal sealed partial class NodePainter
                 maxWidth: float.PositiveInfinity, maxLines: 1);
         }
 
-        // Smooth caret blink — inside clip so caret doesn't overlap the eye icon
+        // Blinking caret (see DrawCaret) — inside clip so caret doesn't overlap the eye icon
         if (focused && !disabled)
         {
             var caret = theme.Caret;
-            float caretOpacity = CaretBlink(caret.BlinkInterval.TotalMilliseconds, InputDispatcher.CaretResetTimestamp);
+            string displayText = masked ? new string('●', text.Length) : text;
+            float caretTextWidth = string.IsNullOrEmpty(displayText)
+                ? 0f
+                : ctx.MeasureTextAdvance(displayText, fontSize).Width;
+            float caretX = inputBounds.X + t.PaddingH + caretTextWidth - scrollX;
+            float caretPadY = 6f;
+            float caretY = inputBounds.Y + caretPadY;
+            float caretH = inputHeight - caretPadY * 2;
+            DrawCaret(new Rect(caretX, caretY, caret.Width, caretH), caret.Color);
 
-            if (caretOpacity > 0.01f)
+            // Auto-scroll horizontally to keep caret visible
+            float caretRelX = caretTextWidth;
+            if (caretRelX - scrollX > availableTextWidth)
             {
-                string displayText = masked ? new string('●', text.Length) : text;
-                float caretTextWidth = string.IsNullOrEmpty(displayText)
-                    ? 0f
-                    : ctx.MeasureTextAdvance(displayText, fontSize).Width;
-                float caretX = inputBounds.X + t.PaddingH + caretTextWidth - scrollX;
-                float caretPadY = 6f;
-                float caretY = inputBounds.Y + caretPadY;
-                float caretH = inputHeight - caretPadY * 2;
-                ctx.DrawRect(new Rect(caretX, caretY, caret.Width, caretH),
-                    caret.Color.Opacity(caretOpacity));
-
-                // Auto-scroll horizontally to keep caret visible
-                float caretRelX = caretTextWidth;
-                if (caretRelX - scrollX > availableTextWidth)
-                {
-                    InputDispatcher.PasswordScrollOffsetX = caretRelX - availableTextWidth;
-                }
-                else if (caretRelX < scrollX)
-                {
-                    InputDispatcher.PasswordScrollOffsetX = caretRelX;
-                }
+                InputDispatcher.PasswordScrollOffsetX = caretRelX - availableTextWidth;
+            }
+            else if (caretRelX < scrollX)
+            {
+                InputDispatcher.PasswordScrollOffsetX = caretRelX;
             }
         }
 
@@ -15403,89 +15332,82 @@ internal sealed partial class NodePainter
             }
         }
 
-        // Smooth caret blink
+        // Blinking caret (see DrawCaret)
         if (focused && !disabled)
         {
             var caret = theme.Caret;
-            float caretOpacity = CaretBlink(caret.BlinkInterval.TotalMilliseconds, InputDispatcher.CaretResetTimestamp);
-
-            if (caretOpacity > 0.01f)
+            // Caret geometry from the same wrapped layout so it lands exactly at
+            // the visual position of the character index (soft-wrap aware).
+            string caretBuf = text ?? "";
+            int caretIdx = Math.Clamp(InputDispatcher.TextAreaCaretIndex, 0, caretBuf.Length);
+            float caretRelX;
+            float caretRelY;
+            float caretH;
+            if (layout is not null && layout.Lines.Count > 0)
             {
-                // Caret geometry from the same wrapped layout so it lands exactly at
-                // the visual position of the character index (soft-wrap aware).
-                string caretBuf = text ?? "";
-                int caretIdx = Math.Clamp(InputDispatcher.TextAreaCaretIndex, 0, caretBuf.Length);
-                float caretRelX;
-                float caretRelY;
-                float caretH;
-                if (layout is not null && layout.Lines.Count > 0)
+                // A caret right after a newline always belongs at the START of the
+                // next row (downstream affinity). GetCaretInfo can't express this:
+                // the previous line's TextLength includes the '\n', so its range
+                // overlaps the next line's start and GetCaretInfo returns the
+                // previous line — leaving the caret stuck at the end of the old
+                // line after pressing Enter until a character is typed. Handle it
+                // explicitly: jump to the line that starts at the caret, or (for a
+                // trailing '\n' the engine emits no line for) a fresh row below.
+                int lineAtCaret = caretIdx > 0 && caretBuf[caretIdx - 1] == '\n'
+                    ? LayoutLineStartingAt(layout, caretIdx)
+                    : -2;
+                if (lineAtCaret >= 0)
                 {
-                    // A caret right after a newline always belongs at the START of the
-                    // next row (downstream affinity). GetCaretInfo can't express this:
-                    // the previous line's TextLength includes the '\n', so its range
-                    // overlaps the next line's start and GetCaretInfo returns the
-                    // previous line — leaving the caret stuck at the end of the old
-                    // line after pressing Enter until a character is typed. Handle it
-                    // explicitly: jump to the line that starts at the caret, or (for a
-                    // trailing '\n' the engine emits no line for) a fresh row below.
-                    int lineAtCaret = caretIdx > 0 && caretBuf[caretIdx - 1] == '\n'
-                        ? LayoutLineStartingAt(layout, caretIdx)
-                        : -2;
-                    if (lineAtCaret >= 0)
-                    {
-                        var startLine = layout.Lines[lineAtCaret];
-                        caretRelX = 0f;
-                        caretRelY = startLine.Y;
-                        caretH = startLine.Height;
-                    }
-                    else if (lineAtCaret == -1)
-                    {
-                        var prevLine = layout.Lines[layout.GetLineIndexForOffset(caretIdx - 1)];
-                        caretRelX = 0f;
-                        caretRelY = prevLine.Y + prevLine.Height;
-                        caretH = prevLine.Height;
-                    }
-                    else
-                    {
-                        var caretInfo = layout.GetCaretInfo(caretIdx);
-                        caretRelX = caretInfo.X;
-                        caretRelY = caretInfo.Y;
-                        caretH = caretInfo.Height;
-                    }
+                    var startLine = layout.Lines[lineAtCaret];
+                    caretRelX = 0f;
+                    caretRelY = startLine.Y;
+                    caretH = startLine.Height;
+                }
+                else if (lineAtCaret == -1)
+                {
+                    var prevLine = layout.Lines[layout.GetLineIndexForOffset(caretIdx - 1)];
+                    caretRelX = 0f;
+                    caretRelY = prevLine.Y + prevLine.Height;
+                    caretH = prevLine.Height;
                 }
                 else
                 {
-                    caretRelX = 0f;
-                    caretRelY = 0f;
-                    caretH = lineHeight;
+                    var caretInfo = layout.GetCaretInfo(caretIdx);
+                    caretRelX = caretInfo.X;
+                    caretRelY = caretInfo.Y;
+                    caretH = caretInfo.Height;
                 }
+            }
+            else
+            {
+                caretRelX = 0f;
+                caretRelY = 0f;
+                caretH = lineHeight;
+            }
 
-                float caretX = contentLeft + caretRelX;
-                float caretY = contentTop + caretRelY - scrollY;
+            float caretX = contentLeft + caretRelX;
+            float caretY = contentTop + caretRelY - scrollY;
 
-                // Only draw if caret is within viewport
-                if (caretY + caretH > bounds.Y && caretY < bounds.Y + bounds.Height)
+            // Only draw if caret is within viewport
+            if (caretY + caretH > bounds.Y && caretY < bounds.Y + bounds.Height)
+            {
+                DrawCaret(new Rect(caretX, caretY, caret.Width, caretH), caret.Color);
+            }
+
+            // Auto-scroll to keep caret visible — only when caret has moved
+            // (prevents mouse wheel scroll from being undone by auto-scroll)
+            if (caretIdx != InputDispatcher.TextAreaLastAutoScrollCaret)
+            {
+                float viewportH = bounds.Height - paddingV * 2;
+                if (caretRelY < scrollY)
                 {
-                    ctx.DrawRect(
-                        new Rect(caretX, caretY, caret.Width, caretH),
-                        caret.Color.Opacity(caretOpacity));
+                    InputDispatcher.TextAreaScrollOffsetY = caretRelY;
                 }
-
-                // Auto-scroll to keep caret visible — only when caret has moved
-                // (prevents mouse wheel scroll from being undone by auto-scroll)
-                if (caretIdx != InputDispatcher.TextAreaLastAutoScrollCaret)
+                else if (caretRelY + caretH > scrollY + viewportH)
                 {
-                    float viewportH = bounds.Height - paddingV * 2;
-                    if (caretRelY < scrollY)
-                    {
-                        InputDispatcher.TextAreaScrollOffsetY = caretRelY;
-                    }
-                    else if (caretRelY + caretH > scrollY + viewportH)
-                    {
-                        InputDispatcher.TextAreaScrollOffsetY = caretRelY + caretH - viewportH;
-                    }
-                    InputDispatcher.TextAreaLastAutoScrollCaret = caretIdx;
+                    InputDispatcher.TextAreaScrollOffsetY = caretRelY + caretH - viewportH;
                 }
+                InputDispatcher.TextAreaLastAutoScrollCaret = caretIdx;
             }
         }
 
@@ -15575,6 +15497,30 @@ internal sealed partial class NodePainter
 
     // ── Toast Overlay Painting ──────────────────────────────────────────
 
+    // The earliest auto-dismiss among the shown toasts: the frame that removes it is the only one a
+    // settled toast needs.
+    private static void RequestRepaintAtToastExpiry(IReadOnlyList<ToastEntry> toasts)
+    {
+        long nowTick = Environment.TickCount64;
+        long earliest = long.MaxValue;
+        for (int i = 0; i < toasts.Count; i++)
+        {
+            var entry = toasts[i];
+            if (entry.Options.Duration.IsPersistent)
+            {
+                continue;
+            }
+            earliest = Math.Min(earliest, entry.CreatedTick + (long)entry.Options.Duration.TotalMilliseconds);
+        }
+        if (earliest == long.MaxValue)
+        {
+            return;
+        }
+        // One ms late rather than early: Toast.RemoveExpired keeps a toast until its full duration has passed.
+        long remainingMs = Math.Max(0, earliest - nowTick) + 1;
+        RequestRepaintAt(System.Diagnostics.Stopwatch.GetTimestamp() + (remainingMs * System.Diagnostics.Stopwatch.Frequency / 1000));
+    }
+
     private void PaintToasts()
     {
         // Remove expired toasts
@@ -15589,6 +15535,7 @@ internal sealed partial class NodePainter
 
         HasActiveToasts = true;
         Toast.HitZones.Clear();
+        RequestRepaintAtToastExpiry(toasts);
 
         var tt = theme.Toast;
         float viewportW = ViewportLogicalWidth;

@@ -52,7 +52,8 @@ internal sealed class ShellView : Component
     internal static void Configure(AppConfig config)
     {
         App.Window.Chrome = WindowChrome.None;
-        App.Window.Resizable = false;
+        App.Window.Resizable = true;
+        App.Window.MinimumSize = new Size(400, 300);
         App.Window.ShowOnStartup = false;
         App.Window.ShowInTaskbar = false;
         App.Window.HideOnClose = true;

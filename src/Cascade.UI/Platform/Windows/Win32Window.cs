@@ -43,6 +43,12 @@ internal sealed class Win32Window : IDisposable
     // resizable frameless window keeps resize hit-testing along its edges.
     private bool frameless;
     private bool framelessResizable;
+    private bool framelessApplied; // what the native window currently has
+
+    // Smallest client size the user can resize to, in logical pixels (0 = no limit); applied per
+    // DPI in WM_GETMINMAXINFO.
+    private float minimumWidth;
+    private float minimumHeight;
 
     // Broadcast when Explorer (re)creates the taskbar — tray icons must be re-added — and when this
     // window's taskbar button exists (taskbar progress can only be set after that).
@@ -110,6 +116,52 @@ internal sealed class Win32Window : IDisposable
                 (rect.right - rect.left) / scale,
                 (rect.bottom - rect.top) / scale);
         }
+    }
+
+    /// <summary>The window rect in physical pixels, virtual-desktop coordinates (as <see cref="ScreenInfo"/>).</summary>
+    internal Rect ScreenBounds
+    {
+        get
+        {
+            if (handle == 0)
+            {
+                return default;
+            }
+
+            Win32.GetWindowRect(handle, out Win32.RECT rect);
+            return new Rect(rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top);
+        }
+    }
+
+    /// <summary>
+    /// Moves the window's top-left corner to (<paramref name="x"/>, <paramref name="y"/>) in
+    /// physical pixels. Landing on a monitor with a different DPI rescales the window
+    /// (WM_DPICHANGED) and the suggested rect can shift it, so it is placed again.
+    /// </summary>
+    internal void SetScreenPosition(int x, int y)
+    {
+        if (handle == 0)
+        {
+            return;
+        }
+
+        for (int pass = 0; pass < 2; pass++)
+        {
+            uint dpiBefore = currentDpi;
+            Win32.SetWindowPos(handle, 0, x, y, 0, 0,
+                Win32.SWP_NOSIZE | Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE);
+            if (currentDpi == dpiBefore)
+            {
+                break;
+            }
+        }
+    }
+
+    /// <summary>Sets the smallest client size the user can resize to, in logical pixels (0 = no limit).</summary>
+    internal void SetMinimumSize(float width, float height)
+    {
+        minimumWidth = Math.Max(0, width);
+        minimumHeight = Math.Max(0, height);
     }
 
     internal Rect ClientBounds
@@ -498,6 +550,12 @@ internal sealed class Win32Window : IDisposable
         {
             return;
         }
+        bool changed = framelessApplied != enabled;
+        framelessApplied = enabled;
+
+        // The client keeps its size across the switch: without this the frame a window was created
+        // with became client area, and a frameless 820×520 window came out 835×557.
+        Win32.GetClientRect(handle, out Win32.RECT client);
 
         if (enabled)
         {
@@ -510,6 +568,14 @@ internal sealed class Win32Window : IDisposable
         Win32.DwmExtendFrameIntoClientArea(handle, ref margins);
         Win32.SetWindowPos(handle, 0, 0, 0, 0, 0,
             Win32.SWP_FRAMECHANGED | Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE);
+
+        if (changed && !Win32.IsZoomed(handle))
+        {
+            Win32.RECT rect = new() { right = client.right - client.left, bottom = client.bottom - client.top };
+            AdjustForFrame(ref rect);
+            Win32.SetWindowPos(handle, 0, 0, 0, rect.right - rect.left, rect.bottom - rect.top,
+                Win32.SWP_NOMOVE | Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE);
+        }
     }
 
     /// <summary>
@@ -621,17 +687,28 @@ internal sealed class Win32Window : IDisposable
         int physicalWidth = (int)(width * scale);
         int physicalHeight = (int)(height * scale);
 
-        // Adjust for non-client area.
-        uint wsStyle = (uint)Win32.GetWindowLongPtrW(handle, Win32.GWL_STYLE);
-        uint wsExStyle = (uint)Win32.GetWindowLongPtrW(handle, Win32.GWL_EXSTYLE);
         Win32.RECT rect = new() { right = physicalWidth, bottom = physicalHeight };
-        Win32.AdjustWindowRectEx(ref rect, wsStyle, false, wsExStyle);
+        AdjustForFrame(ref rect);
 
         Win32.SetWindowPos(handle, 0,
             0, 0,
             rect.right - rect.left,
             rect.bottom - rect.top,
             Win32.SWP_NOMOVE | Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE);
+    }
+
+    // Grows a client rect to the window rect around it. A frameless window is all client area
+    // (WM_NCCALCSIZE), so there is nothing to add even though its frame styles remain.
+    private void AdjustForFrame(ref Win32.RECT rect)
+    {
+        if (frameless)
+        {
+            return;
+        }
+
+        uint wsStyle = (uint)Win32.GetWindowLongPtrW(handle, Win32.GWL_STYLE);
+        uint wsExStyle = (uint)Win32.GetWindowLongPtrW(handle, Win32.GWL_EXSTYLE);
+        Win32.AdjustWindowRectEx(ref rect, wsStyle, false, wsExStyle);
     }
 
     internal void SetPosition(float x, float y)
@@ -994,6 +1071,29 @@ internal sealed class Win32Window : IDisposable
                         p->rgrc0.top += frameY;
                         p->rgrc0.bottom -= frameY;
                     }
+                }
+                return 0;
+            }
+
+            case Win32.WM_GETMINMAXINFO:
+            {
+                if (minimumWidth <= 0 && minimumHeight <= 0)
+                {
+                    break;
+                }
+
+                float scale = DpiScale;
+                Win32.RECT min = new()
+                {
+                    right = (int)MathF.Ceiling(minimumWidth * scale),
+                    bottom = (int)MathF.Ceiling(minimumHeight * scale),
+                };
+                AdjustForFrame(ref min);
+                unsafe
+                {
+                    var info = (Win32.MINMAXINFO*)lParam;
+                    info->ptMinTrackSize.x = Math.Max(info->ptMinTrackSize.x, min.right - min.left);
+                    info->ptMinTrackSize.y = Math.Max(info->ptMinTrackSize.y, min.bottom - min.top);
                 }
                 return 0;
             }

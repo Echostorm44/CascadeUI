@@ -463,6 +463,12 @@ internal sealed partial class InputDispatcher
     /// </summary>
     internal Action<int>? RequestCursorChange { get; set; }
 
+    /// <summary>
+    /// Starts a window move that runs until the mouse button is released (a press on a
+    /// <c>.WindowDragArea()</c>). Null where the window cannot be moved this way.
+    /// </summary>
+    internal Action? BeginWindowDrag { get; set; }
+
     private int currentCursorKind;
 
     /// <summary>
@@ -1368,6 +1374,17 @@ internal sealed partial class InputDispatcher
         if (evt.Button == NativeMouseButton.Right && TryOpenTabularContextMenuAt(hitNode, evt))
         {
             ResetPressState();
+            return;
+        }
+
+        // A press on a window drag area (not on a control inside it) moves the window. The move
+        // loop runs to the button's release and consumes it, so the press is forgotten after.
+        if (evt.Button == NativeMouseButton.Left && BeginWindowDrag is { } beginWindowDrag
+            && rootNode is not null && HitTester.FindWindowDragAreaAt(rootNode, evt.X, evt.Y) is not null)
+        {
+            ResetPressState();
+            beginWindowDrag();
+            CancelPointerPress();
             return;
         }
 

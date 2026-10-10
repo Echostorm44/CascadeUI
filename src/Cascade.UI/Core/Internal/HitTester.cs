@@ -17,17 +17,36 @@ internal static class HitTester
             return null;
         }
 
-        return HitTestCore(root, x, y);
+        return HitTestCore(root, x, y, null);
     }
 
-    private static Node? HitTestCore(Node node, float x, float y)
+    // Hit-tests node, recording in `path` (when given) every node the search descended into that
+    // contains the point, outermost first: the press's ancestry, which nodes do not store.
+    private static Node? HitTestCore(Node node, float x, float y, List<Node>? path)
+    {
+        if (path is null)
+        {
+            return HitTestNode(node, x, y, null);
+        }
+
+        int mark = path.Count;
+        path.Add(node);
+        Node? hit = HitTestNode(node, x, y, path);
+        if (hit is null)
+        {
+            path.RemoveRange(mark, path.Count - mark);
+        }
+        return hit;
+    }
+
+    private static Node? HitTestNode(Node node, float x, float y, List<Node>? path)
     {
         // NavigationTransitionHost: only hit-test the incoming page
         if (node is NavigationTransitionHost nth)
         {
             if (nth.IncomingPage is not null)
             {
-                return HitTestCore(nth.IncomingPage, x, y);
+                return HitTestCore(nth.IncomingPage, x, y, path);
             }
 
             return null;
@@ -54,7 +73,7 @@ internal static class HitTester
 
             if (!rendered.IsLayoutEmpty && rendered.LayoutData.IsVisible)
             {
-                return HitTestCore(rendered, cx, cy);
+                return HitTestCore(rendered, cx, cy, path);
             }
 
             return null;
@@ -90,7 +109,7 @@ internal static class HitTester
                     continue;
                 }
 
-                var hit = HitTestCore(child, localX, localY);
+                var hit = HitTestCore(child, localX, localY, path);
                 if (hit != null)
                 {
                     // If the hit child is interactive, it takes priority
@@ -120,7 +139,7 @@ internal static class HitTester
                 // Content is translated by -scrollY during paint, so add scrollY
                 // to convert viewport coordinates back to content coordinates.
                 float scrollY = scrollView.OffsetY;
-                var hit = HitTestCore(content, localX, localY + scrollY);
+                var hit = HitTestCore(content, localX, localY + scrollY, path);
                 if (hit != null)
                 {
                     return hit;
@@ -136,7 +155,7 @@ internal static class HitTester
             // Test second pane first (painted last, visually on top)
             if (!splitView.Second.IsLayoutEmpty && splitView.Second.LayoutData.IsVisible)
             {
-                var hit = HitTestCore(splitView.Second, localX, localY);
+                var hit = HitTestCore(splitView.Second, localX, localY, path);
                 if (hit != null)
                 {
                     return hit;
@@ -145,7 +164,7 @@ internal static class HitTester
 
             if (!splitView.First.IsLayoutEmpty && splitView.First.LayoutData.IsVisible)
             {
-                var hit = HitTestCore(splitView.First, localX, localY);
+                var hit = HitTestCore(splitView.First, localX, localY, path);
                 if (hit != null)
                 {
                     return hit;
@@ -168,7 +187,7 @@ internal static class HitTester
                 return node;
             }
 
-            var hit = HitTestCore(singleChild, localX, localY);
+            var hit = HitTestCore(singleChild, localX, localY, path);
             if (hit != null)
             {
                 return hit;
@@ -195,6 +214,39 @@ internal static class HitTester
             current = FindParent(current);
         }
 
+        return null;
+    }
+
+    /// <summary>
+    /// The window drag area (<c>.WindowDragArea()</c>) a press at (<paramref name="x"/>,
+    /// <paramref name="y"/>) lands in, or null when there is none or an interactive node (a button,
+    /// a text box, a list) sits between the pressed node and the area: pressing a control inside a
+    /// drag area works the control.
+    /// </summary>
+    internal static Node? FindWindowDragAreaAt(Node root, float x, float y)
+    {
+        if (root.IsLayoutEmpty || !root.LayoutData.IsVisible)
+        {
+            return null;
+        }
+
+        var path = new List<Node>();
+        if (HitTestCore(root, x, y, path) is null)
+        {
+            return null;
+        }
+        for (int i = path.Count - 1; i >= 0; i--)
+        {
+            Node node = path[i];
+            if (IsInteractive(node) || node is IListViewNode)
+            {
+                return null;
+            }
+            if (node.LayoutData.GestureData is { WindowDrag: true })
+            {
+                return node;
+            }
+        }
         return null;
     }
 

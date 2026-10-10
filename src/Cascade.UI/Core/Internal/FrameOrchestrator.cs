@@ -552,12 +552,22 @@ internal sealed class FrameOrchestrator : IDisposable
             return cachedDefaultFontPath;
         }
 
-        if (Theme?.Typography.FontFamily == null)
+        cachedDefaultFontPath = ResolveFontPath(Theme);
+        return cachedDefaultFontPath;
+    }
+
+    /// <summary>
+    /// The regular font file of <paramref name="theme"/>'s font family: a bundled font from the app's
+    /// fonts directory, else a system font covering Latin. Probes the file system; callers cache it.
+    /// </summary>
+    internal static string? ResolveFontPath(CascadeTheme? theme)
+    {
+        if (theme?.Typography.FontFamily == null)
         {
             return null;
         }
 
-        var family = Theme.Typography.FontFamily;
+        var family = theme.Typography.FontFamily;
         string? fontPath = null;
 
         if (family.Kind == FontFamilyKind.SystemDefault || family.Kind == FontFamilyKind.SystemCategory)
@@ -580,7 +590,6 @@ internal sealed class FrameOrchestrator : IDisposable
             }
         }
 
-        cachedDefaultFontPath = fontPath;
         return fontPath;
     }
 

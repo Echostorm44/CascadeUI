@@ -327,7 +327,9 @@ internal sealed class EtchRecorder
     private static void RecordRect(EtchBackend.SceneOp op, DrawRecording recording)
     {
         float r = Math.Max(0f, Math.Min(op.Radius, Math.Min(op.W, op.H) * 0.5f));
-        if (op.Fill is ColorValue fill && fill.A > 0)
+        // A transparent fill is still recorded: Etch gives it its place in paint order without drawing
+        // it, so a caret blinking off (or a fill fading through zero) changes only its own pixels.
+        if (op.Fill is ColorValue fill)
         {
             var paint = ComposePaint.Solid(Straight(fill));
             if (r > 0.5f)

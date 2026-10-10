@@ -177,6 +177,19 @@ public static class GestureExtensions
         return node;
     }
 
+    /// <summary>
+    /// Makes this node a handle that moves the window, like a title bar: a left press on it, or on
+    /// any descendant that is not itself interactive (a label or icon, not a button, text box or
+    /// list), starts a window move that follows the mouse until the button is released. For
+    /// frameless windows (<see cref="WindowChrome.None"/>). Windows only.
+    /// </summary>
+    public static T WindowDragArea<T>(this T node) where T : Node
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        EnsureGestureData(node).WindowDrag = true;
+        return node;
+    }
+
     private static GestureNodeData EnsureGestureData(Node node)
     {
         node.LayoutData.GestureData ??= new GestureNodeData();
@@ -204,4 +217,5 @@ internal sealed class GestureNodeData
     internal Action? PointerEnter;
     internal Action? PointerLeave;
     internal Action<Point>? Scroll;
+    internal bool WindowDrag;
 }

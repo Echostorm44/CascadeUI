@@ -76,6 +76,18 @@ public partial class ShellIntegrationTests
             await Assert.That(client.Right - client.Left).IsEqualTo(window.Right - window.Left);
             await Assert.That(client.Bottom - client.Top).IsEqualTo(window.Bottom - window.Top);
 
+            // ...and exactly the configured 640×480: going frameless after creation must not turn
+            // the creation frame into extra client area.
+            float scale = GetDpiForWindow(hwnd) / 96f;
+            await Assert.That(client.Right - client.Left).IsEqualTo((int)(640 * scale));
+            await Assert.That(client.Bottom - client.Top).IsEqualTo((int)(480 * scale));
+
+            // MinimumSize (400×300) holds against a resize below it.
+            SetWindowPos(hwnd, 0, 0, 0, 100, 100, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+            GetClientRect(hwnd, out RECT shrunk);
+            await Assert.That(shrunk.Right - shrunk.Left).IsEqualTo((int)MathF.Ceiling(400 * scale));
+            await Assert.That(shrunk.Bottom - shrunk.Top).IsEqualTo((int)MathF.Ceiling(300 * scale));
+
             // Close button → HideOnClose: hidden, still running.
             PostMessageW(hwnd, WM_CLOSE, 0, 0);
             await WaitUntilAsync(() => !IsWindowVisible(hwnd), "window hidden on close");
@@ -362,6 +374,19 @@ public partial class ShellIntegrationTests
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [LibraryImport("user32")]
     private static partial int GetSystemMetrics(int index);
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [LibraryImport("user32")]
+    private static partial uint GetDpiForWindow(nint hWnd);
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [LibraryImport("user32")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetWindowPos(nint hWnd, nint insertAfter, int x, int y, int cx, int cy, uint flags);
+
+    private const uint SWP_NOMOVE = 0x0002;
+    private const uint SWP_NOZORDER = 0x0004;
+    private const uint SWP_NOACTIVATE = 0x0010;
 
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [LibraryImport("user32")]

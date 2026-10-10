@@ -416,6 +416,7 @@ public static class App
 
         // Wire cursor change callback so InputDispatcher can request resize cursors
         orchestrator.Input.RequestCursorChange = kind => window.SetCursorOverride(kind);
+        orchestrator.Input.BeginWindowDrag = window.BeginDrag;
 
         // Screen readers: answer WM_GETOBJECT with the window's UI Automation tree. Nothing is
         // built until assistive technology first asks; see UiaProvider.
@@ -957,6 +958,27 @@ public sealed class AppWindow
         }
     }
 
+    /// <summary>
+    /// The window rect in physical pixels, in the virtual-desktop coordinates <see cref="ScreenInfo"/>
+    /// uses — the unit to save a window position in, since with per-monitor DPI there is no logical
+    /// space shared by all monitors. Restore it with <see cref="SetScreenPosition"/>. Windows only.
+    /// </summary>
+    public Rect ScreenBounds => getWin32Window()?.ScreenBounds ?? default;
+
+    /// <summary>
+    /// The smallest client size, in logical pixels, the user can resize the window to (scaled with
+    /// the monitor's DPI). Null (the default) means no limit. Windows only.
+    /// </summary>
+    public Size? MinimumSize
+    {
+        get => minimumSize;
+        set
+        {
+            minimumSize = value;
+            getWin32Window()?.SetMinimumSize(value?.Width ?? 0, value?.Height ?? 0);
+        }
+    }
+
     /// <summary>The current client area size in logical pixels.</summary>
     public Rect ClientBounds
     {
@@ -971,6 +993,7 @@ public sealed class AppWindow
     }
 
     private WindowChrome? chrome;
+    private Size? minimumSize;
     private bool resizable = true;
     private bool alwaysOnTop;
     private float opacity = 1.0f;
@@ -1108,6 +1131,10 @@ public sealed class AppWindow
     internal void Attach(Win32Window window)
     {
         ApplyChrome(window);
+        if (minimumSize is { } min)
+        {
+            window.SetMinimumSize(min.Width, min.Height);
+        }
         if (alwaysOnTop)
         {
             window.SetAlwaysOnTop(true);
@@ -1316,6 +1343,16 @@ public sealed class AppWindow
         getCocoaWindow()?.SetPosition(x, y);
         getX11Window()?.SetPosition(x, y);
         // Wayland does not expose client-side window positioning.
+    }
+
+    /// <summary>
+    /// Moves the window's top-left corner to (<paramref name="x"/>, <paramref name="y"/>) in physical
+    /// pixels, virtual-desktop coordinates — the counterpart of <see cref="ScreenBounds"/>. Moving
+    /// onto a monitor with a different DPI keeps the window's logical size. Windows only.
+    /// </summary>
+    public void SetScreenPosition(int x, int y)
+    {
+        getWin32Window()?.SetScreenPosition(x, y);
     }
 
     /// <summary>

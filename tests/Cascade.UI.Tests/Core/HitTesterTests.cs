@@ -245,4 +245,59 @@ public class HitTesterTests
 
         await Assert.That(result).IsSameReferenceAs(inner);
     }
+
+    // A footer-like row: [label | button], 200×30, marked as a window drag area.
+    private static (Row Row, Label Label, Button Button) DragRow()
+    {
+        var label = new Label("Clipboard History");
+        label.LayoutData.Bounds = new Rect(0, 0, 100, 30);
+        label.LayoutData.IsVisible = true;
+
+        var button = new Button("Paste", () => { });
+        button.LayoutData.Bounds = new Rect(120, 0, 80, 30);
+        button.LayoutData.IsVisible = true;
+
+        var row = new Row(children: [label, button]).WindowDragArea();
+        row.LayoutData.Bounds = new Rect(0, 0, 200, 30);
+        row.LayoutData.IsVisible = true;
+        return (row, label, button);
+    }
+
+    [Test]
+    public async Task WindowDragArea_PressOnPassiveChild_FindsTheArea()
+    {
+        var (row, _, _) = DragRow();
+
+        await Assert.That(HitTester.FindWindowDragAreaAt(row, 50, 15)).IsSameReferenceAs(row);
+        await Assert.That(HitTester.FindWindowDragAreaAt(row, 110, 15)).IsSameReferenceAs(row); // the gap
+    }
+
+    [Test]
+    public async Task WindowDragArea_PressOnControlInside_IsNotADrag()
+    {
+        var (row, _, _) = DragRow();
+
+        await Assert.That(HitTester.FindWindowDragAreaAt(row, 150, 15)).IsNull();
+    }
+
+    [Test]
+    public async Task WindowDragArea_NestedInsideColumn_FoundThroughTheChain()
+    {
+        var (row, _, _) = DragRow();
+        var column = new Column(children: [row]);
+        column.LayoutData.Bounds = new Rect(0, 50, 200, 30);
+        column.LayoutData.IsVisible = true;
+
+        await Assert.That(HitTester.FindWindowDragAreaAt(column, 50, 65)).IsSameReferenceAs(row);
+        await Assert.That(HitTester.FindWindowDragAreaAt(column, 50, 10)).IsNull(); // outside
+    }
+
+    [Test]
+    public async Task WindowDragArea_DoesNotChangeOrdinaryHitTesting()
+    {
+        var (row, label, _) = DragRow();
+
+        await Assert.That(HitTester.HitTest(row, 50, 15)).IsSameReferenceAs(label);
+        await Assert.That(HitTester.IsInteractive(row)).IsFalse();
+    }
 }

@@ -227,12 +227,14 @@ public static class App
         window.TaskbarCreated = TrayIcon.ReAddAll;
         Clipboard.AttachWindow(window.Handle);
 
+        Win32CaretSettings.Refresh();
         var frameClock = new Win32FrameClock(window.Handle);
         var orchestrator = new FrameOrchestrator(
             requestFrame: () => frameClock.Start(),
             cancelFrame:  () => frameClock.Stop());
         orchestrator.ScheduleWake = frameClock.WakeAt;
         orchestrator.CancelWake = frameClock.CancelWake;
+        orchestrator.FrameClockCounters = () => (frameClock.PostedFrames, frameClock.PostedWakes);
 
         // Wire the GPU backend. Etch is the default renderer — a windowed app always
         // needs one, and forgetting to opt in used to open a blank, non-rendering
@@ -362,6 +364,12 @@ public static class App
                 {
                     frameClock.FrameHandled();
                 }
+            }
+            else if (msg == Win32.WM_SETTINGCHANGE)
+            {
+                // The caret blink rate or timeout may have changed; a blinking caret picks it up on its next frame.
+                Win32CaretSettings.Refresh();
+                orchestrator.Input.RequestRepaint?.Invoke();
             }
             else if (msg == Win32.WM_HOTKEY)
             {

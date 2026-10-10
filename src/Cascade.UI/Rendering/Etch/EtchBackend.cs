@@ -166,9 +166,16 @@ internal sealed class EtchBackend : IDisposable
         return op;
     }
 
+    /// <summary>
+    /// The op most recently added to the main stream or a layer capture this frame. The painter keeps
+    /// its carets' ops so a blink can be presented by changing their colour, without repainting.
+    /// </summary>
+    internal SceneOp? LastCommand { get; private set; }
+
     private void AddCommand(SceneOp op)
     {
         op.DebugNodeId = currentDebugNodeId;
+        LastCommand = op;
 
         if (_currentOpacity < 1f)
         {
@@ -291,6 +298,7 @@ internal sealed class EtchBackend : IDisposable
     internal void Reset()
     {
         currentDebugNodeId = null;
+        LastCommand = null;
         Commands.Clear();
         _opArenaUsed = 0;
         GlyphCommands.Clear();

@@ -44,6 +44,14 @@ internal sealed unsafe partial class Win32FrameClock : IDisposable
     private void* vblankOutput;
     private SafeWaitHandle? fallbackTimer;
     private int instantWaits;
+    private long postedFrames;
+    private long postedWakes;
+
+    /// <summary>Vblank-paced frame messages posted since creation (diagnostics).</summary>
+    internal long PostedFrames => Interlocked.Read(ref postedFrames);
+
+    /// <summary>Timed-wake frame messages posted since creation (diagnostics).</summary>
+    internal long PostedWakes => Interlocked.Read(ref postedWakes);
 
     internal Win32FrameClock(nint window)
     {
@@ -138,6 +146,7 @@ internal sealed unsafe partial class Win32FrameClock : IDisposable
                         && !disposed && Interlocked.CompareExchange(ref framePending, 1, 0) == 0)
                     {
                         Win32.PostMessageW(window, Win32.WM_FRAME, TimedWakeParam, 0);
+                        Interlocked.Increment(ref postedWakes);
                     }
                     continue;
                 }
@@ -151,6 +160,7 @@ internal sealed unsafe partial class Win32FrameClock : IDisposable
                 if (running && !disposed && Interlocked.CompareExchange(ref framePending, 1, 0) == 0)
                 {
                     Win32.PostMessageW(window, Win32.WM_FRAME, 0, 0);
+                    Interlocked.Increment(ref postedFrames);
                 }
             }
         }

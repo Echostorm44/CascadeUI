@@ -41,6 +41,36 @@ internal sealed class FrameOrchestrator : IDisposable
     internal float WindowHeight => windowHeight;
     private bool disposed;
 
+    // The last full frame's command stream is still in the backend and was presented, so a caret
+    // blink can be presented from it (see TryPresentCaretBlink). Anything that could change what that
+    // stream should contain without requesting a frame clears it.
+    private bool retainedFrameValid;
+    private ulong retainedFrameHandle;
+
+    // A full repaint is due at this Stopwatch timestamp (a toast's expiry); 0 = none.
+    private long repaintDue;
+
+    // The wake most recently handed to ScheduleWake (Stopwatch ticks; 0 = none), for diagnostics.
+    private long scheduledWake;
+
+    /// <summary>Frames that ran the whole pipeline (animate, render, layout, paint, present).</summary>
+    internal long FullFrameCount { get; private set; }
+
+    /// <summary>Frames that presented a caret blink from the retained command stream.</summary>
+    internal long CaretFrameCount { get; private set; }
+
+    /// <summary>Frames delivered by <see cref="ScheduleWake"/>.</summary>
+    internal long WakeFrameCount { get; private set; }
+
+    /// <summary>Stopwatch timestamp of the pending scheduled wake; 0 when none.</summary>
+    internal long ScheduledWake => scheduledWake;
+
+    /// <summary>
+    /// Frame messages the platform clock has posted: vblank-paced frames and timed wakes (Windows:
+    /// Win32FrameClock). Null where the platform does not count them.
+    /// </summary>
+    internal Func<(long Frames, long Wakes)>? FrameClockCounters { get; set; }
+
     // Cached across frames to avoid per-tick allocations. The DrawContext
     // and NodePainter both hold mutable per-frame state that is refreshed
     // via BeginFrame at the start of each paint pass.
@@ -77,7 +107,20 @@ internal sealed class FrameOrchestrator : IDisposable
     /// all layout coordinates are correctly scaled to the physical surface.
     /// Default is 1.0 (no scaling).
     /// </summary>
-    internal float PixelRatio { get; set; } = 1f;
+    internal float PixelRatio
+    {
+        get => pixelRatio;
+        set
+        {
+            if (pixelRatio != value)
+            {
+                pixelRatio = value;
+                retainedFrameValid = false;
+            }
+        }
+    }
+
+    private float pixelRatio = 1f;
 
     /// <summary>
     /// Callback invoked each frame to acquire a frame handle from the GPU backend.
@@ -144,6 +187,8 @@ internal sealed class FrameOrchestrator : IDisposable
         {
             inputDispatcher.HandleWindowDeactivation();
             frameRequested = false;
+            retainedFrameValid = false;
+            scheduledWake = 0;
             cancelFrame();
             CancelWake?.Invoke();
         }
@@ -153,15 +198,100 @@ internal sealed class FrameOrchestrator : IDisposable
         }
     }
 
-    /// <summary>A frame delivered by <see cref="ScheduleWake"/>: run it like a requested one.</summary>
+    /// <summary>
+    /// A frame delivered by <see cref="ScheduleWake"/>. When it is only a caret blink and nothing else
+    /// has changed, the blink is presented from the retained command stream; otherwise it runs like a
+    /// requested frame.
+    /// </summary>
     internal void TickFromWake()
     {
         if (suspended || disposed)
         {
             return;
         }
+        scheduledWake = 0;
+        WakeFrameCount++;
+        if (!frameRequested && TryPresentCaretBlink())
+        {
+            return;
+        }
         frameRequested = true;
         Tick();
+    }
+
+    /// <summary>
+    /// Presents a caret blink without re-rendering, laying out or painting: the carets the last full
+    /// paint drew change colour in place and the retained command stream is presented again. On the
+    /// CPU path only the tiles under the carets are re-rendered and blitted.
+    /// </summary>
+    private bool TryPresentCaretBlink()
+    {
+        if (!retainedFrameValid
+            || cachedPainter is not { HasPaintedCarets: true } painter
+            || PresentFrameCallback is null
+            || Theme is null
+            || !IsQuiescent()
+            || (repaintDue != 0 && Stopwatch.GetTimestamp() >= repaintDue))
+        {
+            return false;
+        }
+
+        DiagnosticsHub.BeginFrame();
+        // No layout runs; mark an empty layout pass so this frame reports none.
+        DiagnosticsHub.BeginLayout();
+        DiagnosticsHub.EndLayout();
+        DiagnosticsHub.BeginPaint();
+        DiagnosticsHub.MarkPhase("paint.caret_blink");
+        NodePainter.NextCaretToggle = 0;
+        painter.RefreshCarets();
+        DiagnosticsHub.MarkPhase("paint.present");
+        try
+        {
+            PresentFrameCallback(retainedFrameHandle, Theme.Colors.Background);
+        }
+        catch
+        {
+            retainedFrameValid = false;
+            throw;
+        }
+        DiagnosticsHub.EndPhase();
+        DiagnosticsHub.EndPaint();
+        DiagnosticsHub.EndFrame();
+        CaretFrameCount++;
+        ScheduleNextWake();
+        return true;
+    }
+
+    // Nothing animates or waits to render: the only frames needed are timed ones.
+    private bool IsQuiescent()
+    {
+        return !animationScheduler.HasActiveAnimations
+            && !SharedScheduler.Instance.HasActiveAnimations
+            && renderScheduler.DirtyCount == 0
+            && !NodePainter.HasActiveSpinners
+            && !NodePainter.HasActiveChartAnimations
+            && !NodePainter.HasActiveContinuousCanvases
+            && !ControlStateAnimator.HasActiveTransitions
+            && !overlays.IsAnimating;
+    }
+
+    // Wakes the loop at the earlier of the next caret toggle and the next due repaint, or drops a
+    // pending wake when neither is needed.
+    private void ScheduleNextWake()
+    {
+        long caret = NodePainter.NextCaretToggle;
+        long due = caret == 0 ? repaintDue : repaintDue == 0 ? caret : Math.Min(caret, repaintDue);
+        if (due == 0 || ScheduleWake is null)
+        {
+            if (scheduledWake != 0)
+            {
+                scheduledWake = 0;
+                CancelWake?.Invoke();
+            }
+            return;
+        }
+        scheduledWake = due;
+        ScheduleWake(due);
     }
 
     /// <summary>
@@ -178,12 +308,15 @@ internal sealed class FrameOrchestrator : IDisposable
         sharedAnimationsActive:    SharedScheduler.Instance.HasActiveAnimations,
         sharedAnimationsCount:     SharedScheduler.Instance.ActiveCount,
         caretActive:               InputDispatcher.IsCaretActive,
+        caretBlinkPending:         NodePainter.NextCaretToggle != 0,
         spinnersActive:            NodePainter.HasActiveSpinners,
         chartAnimationsActive:     NodePainter.HasActiveChartAnimations,
         toastsActive:              NodePainter.HasActiveToasts,
         continuousCanvasesActive:  NodePainter.HasActiveContinuousCanvases,
         stateTransitionsActive:    ControlStateAnimator.HasActiveTransitions,
-        overlayAnimationsActive:   overlays.IsAnimating);
+        overlayAnimationsActive:   overlays.IsAnimating,
+        timedWakesSupported:       ScheduleWake is not null,
+        nextWakeInMs:              scheduledWake == 0 ? -1 : Stopwatch.GetElapsedTime(Stopwatch.GetTimestamp(), scheduledWake).TotalMilliseconds);
 
     /// <param name="requestFrame">
     /// Called when the orchestrator needs the platform to start delivering frame ticks.
@@ -278,6 +411,7 @@ internal sealed class FrameOrchestrator : IDisposable
 #endif
 
         DiagnosticsHub.BeginFrame();
+        FullFrameCount++;
 
         // 1. Advance animations
         animationScheduler.Tick(deltaTime);
@@ -335,6 +469,8 @@ internal sealed class FrameOrchestrator : IDisposable
         // by PerformLayout, which lays the overlays out against them.
 
         NodePainter.NextCaretToggle = 0;
+        NodePainter.NextRepaintDue = 0;
+        retainedFrameValid = false;
 
         // 5. Paint the laid-out tree
 #if DEBUG
@@ -382,6 +518,8 @@ internal sealed class FrameOrchestrator : IDisposable
 
                     DiagnosticsHub.MarkPhase("paint.present");
                     PresentFrameCallback?.Invoke(frameHandle, Theme.Colors.Background);
+                    retainedFrameHandle = frameHandle;
+                    retainedFrameValid = PresentFrameCallback is not null;
                     DiagnosticsHub.EndPhase();
                 }
                 catch
@@ -410,27 +548,19 @@ internal sealed class FrameOrchestrator : IDisposable
         // technology is connected (no allocation, no tree walk).
         AccessibilityTreeBuilder.NotifyFrameCompleted(reRendered);
 
-        // 6. If nothing else needs a frame, stop the timer to save CPU/battery. A blinking caret
-        // only needs a frame at its next toggle: where the platform can wake us then, sleep until
-        // it; otherwise keep ticking. Spinners etc. keep the loop running.
-        bool caretBlinking = InputDispatcher.IsCaretActive && NodePainter.NextCaretToggle != 0;
-        if (!animationScheduler.HasActiveAnimations
-            && !SharedScheduler.Instance.HasActiveAnimations
-            && renderScheduler.DirtyCount == 0
-            && (!InputDispatcher.IsCaretActive || ScheduleWake is not null)
-            && !NodePainter.HasActiveSpinners
-            && !NodePainter.HasActiveChartAnimations
-            && !NodePainter.HasActiveToasts
-            && !NodePainter.HasActiveContinuousCanvases
-            && !ControlStateAnimator.HasActiveTransitions
-            && !overlays.IsAnimating)
+        // 6. If nothing else needs a frame, stop the clock to save CPU/battery. A blinking caret needs
+        // a frame only at its next toggle and a settled toast only at its expiry: where the platform
+        // can wake the loop then, it sleeps until the earlier of the two (a blink is then presented
+        // without repainting; see TryPresentCaretBlink). Otherwise those keep it ticking, as do
+        // spinners, animations and anything waiting to render.
+        repaintDue = NodePainter.NextRepaintDue;
+        bool onlyTimedFramesNeeded = ScheduleWake is not null
+            || (NodePainter.NextCaretToggle == 0 && !NodePainter.HasActiveToasts);
+        if (onlyTimedFramesNeeded && IsQuiescent())
         {
             frameRequested = false;
             cancelFrame();
-            if (caretBlinking)
-            {
-                ScheduleWake!(NodePainter.NextCaretToggle);
-            }
+            ScheduleNextWake();
         }
     }
 
@@ -441,6 +571,7 @@ internal sealed class FrameOrchestrator : IDisposable
     {
         windowWidth = width;
         windowHeight = height;
+        retainedFrameValid = false;
 
         // An open menu was placed against the old window edges; close it, as native menus do
         // when their window changes.

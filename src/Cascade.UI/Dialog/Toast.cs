@@ -92,6 +92,7 @@ public static class Toast
         {
             activeToasts.Add(entry);
         }
+        RequestFrame();
     }
 
     /// <summary>
@@ -103,6 +104,7 @@ public static class Toast
         {
             activeToasts.RemoveAll(e => e.Id == id);
         }
+        RequestFrame();
     }
 
     /// <summary>
@@ -114,11 +116,29 @@ public static class Toast
         {
             activeToasts.Clear();
         }
+        RequestFrame();
 
         // The hit zones are rebuilt by the next paint; until then the dismissed toasts' zones
         // would keep taking presses meant for what is beneath them (and a window that is not
         // painting — hidden, or a headless test — never rebuilds them).
         HitZones.Clear();
+    }
+
+    // A toast shown or dismissed outside a frame (a background task, a timer) must still reach the
+    // screen: the frame loop sleeps while nothing animates, and a settled toast only wakes it at its
+    // expiry.
+    private static void RequestFrame()
+    {
+        if (!Dispatcher.IsInitialized)
+        {
+            return;
+        }
+        if (Dispatcher.IsOnUiThread)
+        {
+            SharedScheduler.Instance.RequestFrame();
+            return;
+        }
+        Dispatcher.Post(static () => { SharedScheduler.Instance.RequestFrame(); });
     }
 
     /// <summary>

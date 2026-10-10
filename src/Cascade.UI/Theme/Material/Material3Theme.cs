@@ -27,6 +27,17 @@ public class Material3Theme : CascadeTheme
     public override ThemeMode Mode => mode;
 
     /// <inheritdoc />
+    public override CascadeTheme WithMode(ThemeMode mode)
+    {
+        if (mode == this.mode || GetType() != typeof(Material3Theme))
+        {
+            return this;
+        }
+
+        return new Material3Theme(mode);
+    }
+
+    /// <inheritdoc />
     public override ColorSet Colors => mode == ThemeMode.Dark ? DarkColors : LightColors;
     // ThemeMode.System resolves to Light until platform preference detection is available.
     // The platform layer will provide system mode resolution via PlatformServices.

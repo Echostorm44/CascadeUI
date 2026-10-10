@@ -27,6 +27,17 @@ public class AppleTheme : CascadeTheme
     public override ThemeMode Mode => mode;
 
     /// <inheritdoc />
+    public override CascadeTheme WithMode(ThemeMode mode)
+    {
+        if (mode == this.mode || GetType() != typeof(AppleTheme))
+        {
+            return this;
+        }
+
+        return new AppleTheme(mode);
+    }
+
+    /// <inheritdoc />
     public override ColorSet Colors => mode == ThemeMode.Dark ? DarkColors : LightColors;
     // ThemeMode.System resolves to Light until platform preference detection is available.
     // The platform layer will provide system mode resolution via PlatformServices.

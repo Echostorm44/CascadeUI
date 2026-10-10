@@ -62,6 +62,17 @@ public abstract class CascadeTheme
     /// </summary>
     public virtual ThemeMode Mode => ThemeMode.Light;
 
+    /// <summary>
+    /// This theme in <paramref name="mode"/>: the same design with its light or dark colour set — what a
+    /// surface that follows the system rather than the app (a tray menu in a dark taskbar) is drawn
+    /// with. The built-in themes return a new instance; a theme that cannot vary (or a subclass, whose
+    /// customisations a fresh base instance would lose) returns itself.
+    /// </summary>
+    public virtual CascadeTheme WithMode(ThemeMode mode)
+    {
+        return this;
+    }
+
     // ── Dual-mode color support ───────────────────────────────────────
 
     /// <summary>

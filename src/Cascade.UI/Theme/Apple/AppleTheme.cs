@@ -425,6 +425,10 @@ public class AppleTheme : CascadeTheme
         ItemHoverBackground  = Colors.SurfaceAlt,
         ItemSelectedBackground = Colors.Primary,
 
+        // macOS menus set their items at 13 pt — well below Apple's 17 px body text, which made
+        // menu labels look oversized beside their 16 px icons.
+        MenuTextStyle = new TextStyle(14, FontWeight.Regular, 1.4f),
+
         FocusRingColor  = Colors.Focus.Opacity(0.25f),
         FocusRingWidth  = 3,
         DisabledOpacity = 0.38f,

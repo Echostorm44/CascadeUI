@@ -48,6 +48,32 @@ public class ContextMenuItem
     internal bool IsSeparator => Kind == MenuItemKind.Separator;
 
     /// <summary>
+    /// Index in <see cref="Label"/> of an explicit access key (a tray menu label's <c>&amp;</c>
+    /// marker), or -1. Typing it picks the item; without one the label's first letter does.
+    /// </summary>
+    internal int AccessKeyIndex { get; set; } = -1;
+
+    /// <summary>The character typing which picks this item, or null when it has no label.</summary>
+    internal char? AccessKey
+    {
+        get
+        {
+            if (Label is not { Length: > 0 } label)
+            {
+                return null;
+            }
+
+            if (AccessKeyIndex >= 0 && AccessKeyIndex < label.Length)
+            {
+                return char.ToUpperInvariant(label[AccessKeyIndex]);
+            }
+
+            string trimmed = label.TrimStart();
+            return trimmed.Length > 0 ? char.ToUpperInvariant(trimmed[0]) : null;
+        }
+    }
+
+    /// <summary>
     /// Creates a clickable menu action item.
     /// </summary>
     /// <param name="label">Display label.</param>

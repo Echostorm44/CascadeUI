@@ -385,7 +385,11 @@ public static class App
                 // activation and report none on deactivation.
                 bool active = Win32.LoWord((nint)wParam) != Win32.WA_INACTIVE;
                 Keyboard.Observe(active ? Win32Input.GetAsyncModifierKeys() : ModifierKeys.None);
-                if (!active)
+                if (active)
+                {
+                    orchestrator.Input.RestartCaretBlink();
+                }
+                else
                 {
                     // Menus close when the window loses activation, as native menus do.
                     orchestrator.Input.HandleWindowDeactivation();

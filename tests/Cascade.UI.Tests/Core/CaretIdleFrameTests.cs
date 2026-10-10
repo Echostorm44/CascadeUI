@@ -192,6 +192,23 @@ public class CaretIdleFrameTests
     }
 
     [Test]
+    public async Task WindowActivation_RestartsABlinkThatTimedOut()
+    {
+        CaretSettings.Set(halfPeriodMs: 530, timeoutMs: 5000);
+        using var harness = new Harness();
+        harness.Run(20_000);
+        int wakes = harness.WakeFrames;
+
+        harness.Orchestrator.Input.RestartCaretBlink();
+        harness.Run(1600);
+
+        // One full frame for the activation, then the blink runs again: off at 1060, on at 1590.
+        await Assert.That(harness.VblankFrames).IsEqualTo(2);
+        await Assert.That(harness.WakeFrames).IsEqualTo(wakes + 2);
+        await Assert.That(harness.HasPendingWake).IsTrue();
+    }
+
+    [Test]
     public async Task BlinkTurnedOff_DrawsASolidCaret_AndSchedulesNothing()
     {
         CaretSettings.Set(halfPeriodMs: -1, timeoutMs: 0);

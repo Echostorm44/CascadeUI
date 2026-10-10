@@ -152,6 +152,21 @@ internal sealed partial class InputDispatcher
     // is always visible immediately after user action, then starts blinking.
     internal static long CaretResetTimestamp { get; private set; }
 
+    /// <summary>
+    /// Restarts the caret blink (solid for one interval, then blinking until the platform's caret
+    /// timeout) and repaints: called when the window is activated, as a native caret is recreated
+    /// when its window regains focus. Without it a caret that stopped blinking at the timeout stayed
+    /// solid after switching back until the next key press.
+    /// </summary>
+    internal void RestartCaretBlink()
+    {
+        CaretResetTimestamp = CaretSettings.Now();
+        if (IsCaretActive)
+        {
+            RequestRepaint?.Invoke();
+        }
+    }
+
     // PropertyGrid inline editing state — stored here (not on the node) because
     // PropertyGrid is a Node that gets recreated on every re-render.
     internal static int PropertyGridEditingRow { get; set; } = -1;

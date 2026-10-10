@@ -47,6 +47,15 @@ public class CpuPresentationTests
     }
 
     [Test]
+    public async Task CpuPreference_CreatesNoGpuPresenter()
+    {
+        using var provider = new EtchBackendProvider { GpuPreference = GpuPreference.Cpu };
+        // The CPU path never touches the window handle while creating the surface.
+        provider.CreateSurface(0, 256, 256);
+        await Assert.That(provider.GpuPresenter).IsNull();
+    }
+
+    [Test]
     public async Task FailedGpuPresent_PresentsTheWholeFrameNext()
     {
         using var provider = new EtchBackendProvider();

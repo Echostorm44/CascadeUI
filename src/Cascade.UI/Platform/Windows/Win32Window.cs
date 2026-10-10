@@ -1205,6 +1205,7 @@ internal sealed class Win32Window : IDisposable
             case Win32.WM_TRAYICON:
             case Win32.WM_DISPATCH:
             case Win32.WM_FRAME:
+            case Win32.WM_SETTINGCHANGE:
             {
                 MessageReceived?.Invoke(msg, wParam, lParam);
                 break;

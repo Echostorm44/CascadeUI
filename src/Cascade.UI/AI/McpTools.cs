@@ -641,12 +641,15 @@ internal static class McpTools
             sb.Append($",\"shared_animations_active\":{BoolStr(s.SharedAnimationsActive)}");
             sb.Append($",\"shared_animations_count\":{s.SharedAnimationsCount}");
             sb.Append($",\"caret_active\":{BoolStr(s.CaretActive)}");
+            sb.Append($",\"caret_blink_pending\":{BoolStr(s.CaretBlinkPending)}");
             sb.Append($",\"spinners_active\":{BoolStr(s.SpinnersActive)}");
             sb.Append($",\"chart_animations_active\":{BoolStr(s.ChartAnimationsActive)}");
             sb.Append($",\"toasts_active\":{BoolStr(s.ToastsActive)}");
             sb.Append($",\"continuous_canvases_active\":{BoolStr(s.ContinuousCanvasesActive)}");
             sb.Append($",\"state_transitions_active\":{BoolStr(s.StateTransitionsActive)}");
             sb.Append($",\"overlay_animations_active\":{BoolStr(s.OverlayAnimationsActive)}");
+            sb.Append($",\"timed_wakes_supported\":{BoolStr(s.TimedWakesSupported)}");
+            sb.Append(System.Globalization.CultureInfo.InvariantCulture, $",\"next_wake_ms\":{s.NextWakeInMs:F1}");
 
 #if CASCADE_DEVTOOLS
             // DevTools: per-callsite tally of SignalActiveTransition() calls in
@@ -671,6 +674,20 @@ internal static class McpTools
             }
             sb.Append('}');
 #endif
+            sb.Append('}');
+
+            // Frame counts since launch: full frames run the whole pipeline; caret frames present a
+            // blink from the retained frame; wakes are frames the loop scheduled for itself; the
+            // clock counters are the frame messages the platform clock posted (vblank-paced while
+            // the loop runs, timed wakes while it sleeps). An idle app with a blinking caret should
+            // show clock_frames standing still.
+            sb.Append(System.Globalization.CultureInfo.InvariantCulture,
+                $",\"frame_loop\":{{\"full_frames\":{orchestrator.FullFrameCount},\"caret_frames\":{orchestrator.CaretFrameCount},\"wake_frames\":{orchestrator.WakeFrameCount}");
+            if (orchestrator.FrameClockCounters is { } clockCounters)
+            {
+                var (clockFrames, clockWakes) = clockCounters();
+                sb.Append(System.Globalization.CultureInfo.InvariantCulture, $",\"clock_frames\":{clockFrames},\"clock_wakes\":{clockWakes}");
+            }
             sb.Append('}');
         }
 

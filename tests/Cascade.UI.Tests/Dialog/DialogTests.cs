@@ -494,8 +494,8 @@ public sealed class DialogTests
 
     private static bool OthersHold(FrameLoopSentinels s)
     {
-        return s.AnimationsActive || s.SharedAnimationsActive || s.RenderDirtyCount > 0 || s.CaretActive
-            || s.SpinnersActive || s.ChartAnimationsActive || s.ToastsActive || s.ContinuousCanvasesActive
+        return s.AnimationsActive || s.SharedAnimationsActive || s.RenderDirtyCount > 0 || s.TimedFramesHoldLoop
+            || s.SpinnersActive || s.ChartAnimationsActive || s.ContinuousCanvasesActive
             || s.StateTransitionsActive;
     }
 

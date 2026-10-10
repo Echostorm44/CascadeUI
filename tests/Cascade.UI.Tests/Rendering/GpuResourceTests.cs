@@ -59,10 +59,13 @@ public class GpuResourceTests
             await Assert.That(presenter.ResourceUsage().Textures).IsEqualTo(texturesWithImage - 1);
 
             // Hidden: the mask pages go too (and the frame copy shrinks with the swapchain).
-            long before = presenter.ResourceUsage().TextureBytes;
+            // Mask pages start small and grow (Etch 0.1.0-alpha.10), so count textures rather than
+            // assume a page size: at least the mask page is gone, and the bytes go down.
+            var before = presenter.ResourceUsage();
             provider.SuspendSurface();
             var trimmed = presenter.ResourceUsage();
-            await Assert.That(trimmed.TextureBytes).IsLessThan(before - 2048L * 2048);
+            await Assert.That(trimmed.Textures).IsLessThan(before.Textures);
+            await Assert.That(trimmed.TextureBytes).IsLessThan(before.TextureBytes);
         }
         finally
         {

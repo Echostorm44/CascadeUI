@@ -385,7 +385,7 @@ public static class App
             }
             else if (msg == Win32.WM_TRAYICON)
             {
-                TrayIcon.HandleTrayMessage((uint)wParam, (uint)(lParam.ToInt64() & 0xFFFF));
+                TrayIcon.HandleTrayMessage(wParam, lParam);
             }
             else
             {

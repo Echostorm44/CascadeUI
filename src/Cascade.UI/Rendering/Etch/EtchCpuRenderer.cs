@@ -56,8 +56,10 @@ internal sealed partial class EtchCpuRenderer : IDisposable
     /// Creates a renderer. The debug switches default to the environment's
     /// (<c>CASCADE_SKIP_GLYPHS</c>, <c>CASCADE_FORCE_ATLAS_RESET</c>), as on the GPU path.
     /// </summary>
-    public EtchCpuRenderer(bool? skipGlyphs = null, bool? forceAtlasReset = null)
+    public EtchCpuRenderer(bool? skipGlyphs = null, bool? forceAtlasReset = null, int maxDegreeOfParallelism = -1)
     {
+        // 1 renders on the calling thread: no tile worker threads (a small surface such as a menu).
+        _composer.MaxDegreeOfParallelism = maxDegreeOfParallelism;
         _composer.SkipGlyphs = skipGlyphs ?? RenderDebugSwitches.SkipGlyphs;
         _forceAtlasReset = forceAtlasReset ?? RenderDebugSwitches.ForceAtlasReset;
     }

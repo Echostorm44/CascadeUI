@@ -156,6 +156,11 @@ internal static class McpCommand
             arguments["after_frame"] = afterFrame;
         }
 
+        if (GetOption(args, "--window") is { } window)
+        {
+            arguments["window"] = window;
+        }
+
         string? regionSpec = GetOption(args, "--region");
         if (regionSpec is not null)
         {
@@ -478,6 +483,10 @@ internal static class McpCommand
             {
                 keyArgs["wait_frames"] = keyWaitFrames;
             }
+            if (GetOption(args, "--window") is { } keyWindow)
+            {
+                keyArgs["window"] = keyWindow;
+            }
 
             return CallToolAndPrint(args, "cascade_send_keys", keyArgs);
         }
@@ -514,6 +523,10 @@ internal static class McpCommand
         if (waitFrames > 0)
         {
             arguments["wait_frames"] = waitFrames;
+        }
+        if (GetOption(args, "--window") is { } window)
+        {
+            arguments["window"] = window;
         }
 
         return CallToolAndPrint(args, "cascade_send_keys", arguments);

@@ -1074,6 +1074,19 @@ internal static class McpTools
     {
         string? nodeId = GetString(parameters, "node_id");
         string? interaction = GetString(parameters, "interaction");
+#if CASCADE_DEVTOOLS
+        if (!TryResolveWindow(parameters, out IAuxiliaryWindow? auxiliary, out string? windowError))
+        {
+            return ErrorJson(windowError!, null);
+        }
+
+        if (auxiliary is not null)
+        {
+            return interaction is null
+                ? ErrorJson("interaction is required", null)
+                : HandleAuxiliaryInteraction(parameters, auxiliary, interaction);
+        }
+#endif
         if (nodeId is null || interaction is null)
         {
             return ErrorJson("node_id and interaction are required", null);
@@ -1147,6 +1160,103 @@ internal static class McpTools
     }
 
 #if CASCADE_DEVTOOLS
+    /// <summary>
+    /// The window a tool targets: <c>window</c> names an open auxiliary window (see
+    /// <c>cascade_list_windows</c>); absent or <c>main</c> is the main window (null). False, with a
+    /// message listing the open windows, when no window has that id.
+    /// </summary>
+    private static bool TryResolveWindow(JsonObject parameters, out IAuxiliaryWindow? window, out string? error)
+    {
+        window = null;
+        error = null;
+        string? id = GetString(parameters, "window");
+        if (id is null || string.Equals(id, "main", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        window = AuxiliaryWindows.Find(id);
+        if (window is not null)
+        {
+            return true;
+        }
+
+        var open = AuxiliaryWindows.Snapshot();
+        string ids = open.Length == 0 ? "main" : "main, " + string.Join(", ", open.Select(w => w.Id));
+        error = $"No open window '{id}'. Open windows: {ids}.";
+        return false;
+    }
+
+    /// <summary>An auxiliary window's current frame, painted on the UI thread first if it is stale.</summary>
+    private static ImageData? CaptureAuxiliaryWindow(IAuxiliaryWindow window)
+    {
+        ImageData? image = null;
+        Dispatcher.InvokeAsync(() =>
+        {
+            image = window.CaptureFrame();
+        }).Wait();
+        return image;
+    }
+
+    /// <summary>
+    /// Pointer input to an auxiliary window at x/y (returned-screenshot pixels of that window by
+    /// default, coord_space="logical" for window-logical): hover, click, right_click, press, release.
+    /// </summary>
+    private static string HandleAuxiliaryInteraction(JsonObject parameters, IAuxiliaryWindow window, string interaction)
+    {
+        if (parameters["x"] is null || parameters["y"] is null)
+        {
+            return ErrorJson($"x and y are required to interact with window '{window.Id}'", null);
+        }
+
+        bool logicalCoords =
+            string.Equals(GetString(parameters, "coord_space"), "logical", StringComparison.OrdinalIgnoreCase);
+        double scale = 1.0;
+        if (!logicalCoords)
+        {
+            int deviceWidth = (int)window.ScreenBounds.Width;
+            (int returnedWidth, _) = ComputeTargetDimensions(deviceWidth, (int)window.ScreenBounds.Height);
+            scale = ScreenshotToLogicalScale(deviceWidth, returnedWidth, window.PixelRatio);
+        }
+
+        float x = (float)(GetDouble(parameters, "x", 0) * scale);
+        float y = (float)(GetDouble(parameters, "y", 0) * scale);
+        (NativeMouseEventType Type, NativeMouseButton Button)[]? events = interaction switch
+        {
+            "hover" => [(NativeMouseEventType.MouseMove, NativeMouseButton.None)],
+            "click" => [(NativeMouseEventType.MouseMove, NativeMouseButton.None), (NativeMouseEventType.MouseDown, NativeMouseButton.Left), (NativeMouseEventType.MouseUp, NativeMouseButton.Left)],
+            "right_click" => [(NativeMouseEventType.MouseMove, NativeMouseButton.None), (NativeMouseEventType.MouseDown, NativeMouseButton.Right), (NativeMouseEventType.MouseUp, NativeMouseButton.Right)],
+            "press" => [(NativeMouseEventType.MouseDown, NativeMouseButton.Left)],
+            "release" => [(NativeMouseEventType.MouseUp, NativeMouseButton.Left)],
+            "unhover" => [(NativeMouseEventType.MouseLeave, NativeMouseButton.None)],
+            _ => null,
+        };
+        if (events is null)
+        {
+            return ErrorJson($"Interaction '{interaction}' is not supported for window '{window.Id}' (hover, click, right_click, press, release, unhover)", null);
+        }
+
+        long baselineFrame = Diagnostics.PresentMonitor.PresentedFrames;
+        try
+        {
+            Dispatcher.InvokeAsync(() =>
+            {
+                foreach (var (type, button) in events)
+                {
+                    window.SimulateMouse(type, button, x, y);
+                }
+            }).Wait();
+        }
+        catch (Exception ex)
+        {
+            return ErrorJson($"Interaction dispatch failed: {ex.Message}", null);
+        }
+
+        string json = $"{{\"success\":true,\"interaction\":\"{EscapeJson(interaction)}\",\"window\":\"{EscapeJson(window.Id)}\"" +
+            $",\"x\":{x.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)},\"y\":{y.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)}}}";
+        return WithPresentation(json, baselineFrame, GetWaitFrames(parameters));
+    }
+
     private static string HandleDragInteraction(JsonObject parameters, string nodeId)
     {
         string? startXStr = GetString(parameters, "start_x");
@@ -1342,6 +1452,12 @@ internal static class McpTools
             return ErrorJson("Provide exactly one of: text, key, or keys", null);
         }
 
+        // An auxiliary window (the tray menu) takes the keys directly; the main window otherwise.
+        if (!TryResolveWindow(parameters, out IAuxiliaryWindow? auxiliary, out string? windowError))
+        {
+            return ErrorJson(windowError!, null);
+        }
+
         long baselineFrame = Diagnostics.PresentMonitor.PresentedFrames;
         int waitFrames = GetWaitFrames(parameters);
 
@@ -1353,7 +1469,7 @@ internal static class McpTools
             {
                 Dispatcher.InvokeAsync(() =>
                 {
-                    count = DevTools.NodeTreeWalker.SimulateTextInput(text);
+                    count = auxiliary is null ? DevTools.NodeTreeWalker.SimulateTextInput(text) : TypeInto(auxiliary, text);
                 }).Wait();
             }
             catch (Exception ex)
@@ -1368,7 +1484,7 @@ internal static class McpTools
         // key mode — single key press
         if (key is not null)
         {
-            return WithPresentation(DispatchSingleKey(key, parameters), baselineFrame, waitFrames);
+            return WithPresentation(DispatchSingleKey(key, parameters, auxiliary), baselineFrame, waitFrames);
         }
 
         // keys mode — sequence of actions
@@ -1394,7 +1510,7 @@ internal static class McpTools
                     {
                         Dispatcher.InvokeAsync(() =>
                         {
-                            count = DevTools.NodeTreeWalker.SimulateTextInput(actionText);
+                            count = auxiliary is null ? DevTools.NodeTreeWalker.SimulateTextInput(actionText) : TypeInto(auxiliary, actionText);
                         }).Wait();
                     }
                     catch
@@ -1405,7 +1521,7 @@ internal static class McpTools
                 }
                 else if (actionKey is not null)
                 {
-                    string result = DispatchSingleKey(actionKey, actionObj);
+                    string result = DispatchSingleKey(actionKey, actionObj, auxiliary);
                     if (result.Contains("\"success\":false", StringComparison.Ordinal))
                     {
                         allSuccess = false;
@@ -1425,7 +1541,22 @@ internal static class McpTools
     }
 
 #if CASCADE_DEVTOOLS
-    private static string DispatchSingleKey(string keyName, JsonObject parameters)
+    private static int TypeInto(IAuxiliaryWindow window, string text)
+    {
+        int count = 0;
+        foreach (char c in text)
+        {
+            if (!window.SimulateKeyPress(Key.None, ModifierKeys.None, c))
+            {
+                break;
+            }
+            count++;
+        }
+
+        return count;
+    }
+
+    private static string DispatchSingleKey(string keyName, JsonObject parameters, IAuxiliaryWindow? window)
     {
         Key parsedKey = ParseKeyName(keyName);
         if (parsedKey == Key.None && !string.Equals(keyName, "None", StringComparison.OrdinalIgnoreCase))
@@ -1490,7 +1621,9 @@ internal static class McpTools
         {
             Dispatcher.InvokeAsync(() =>
             {
-                success = DevTools.NodeTreeWalker.SimulateKeyPress(parsedKey, modifiers, character);
+                success = window is null
+                    ? DevTools.NodeTreeWalker.SimulateKeyPress(parsedKey, modifiers, character)
+                    : window.SimulateKeyPress(parsedKey, modifiers, character);
             }).Wait();
         }
         catch (Exception ex)
@@ -1610,6 +1743,12 @@ internal static class McpTools
     private static string HandleCascadeScreenshot(JsonObject parameters)
     {
 #if CASCADE_DEVTOOLS
+        // An auxiliary window (the tray menu) by id; the main window otherwise.
+        if (!TryResolveWindow(parameters, out IAuxiliaryWindow? auxiliary, out string? windowError))
+        {
+            return RawTextContent(windowError!);
+        }
+
         nint hWnd = nint.Zero;
 
         if (OperatingSystem.IsWindows() && App.nativeWindow is not null)
@@ -1617,7 +1756,7 @@ internal static class McpTools
             hWnd = App.nativeWindow.Handle;
         }
 
-        if (hWnd == nint.Zero)
+        if (hWnd == nint.Zero && auxiliary is null)
         {
             return RawTextContent("No active window to capture");
         }
@@ -1644,8 +1783,10 @@ internal static class McpTools
         // CaptureCurrentFrame performs the capture on-demand (request → present →
         // read), so read LastCapturedFrame AFTER it, not before — otherwise the
         // metadata reports the previous capture's frame number.
-        ImageData? image = CaptureCurrentFrame();
-        long capturedFrame = Diagnostics.PresentMonitor.LastCapturedFrame;
+        ImageData? image = auxiliary is null ? CaptureCurrentFrame() : CaptureAuxiliaryWindow(auxiliary);
+        long capturedFrame = auxiliary is null
+            ? Diagnostics.PresentMonitor.LastCapturedFrame
+            : Diagnostics.PresentMonitor.PresentedFrames;
 
         if (image is null)
         {
@@ -1775,7 +1916,10 @@ internal static class McpTools
         // A hidden window (tray apps) still has its last frame: say so, so the image is not read
         // as what the user currently sees.
         sb.Append(",\\\"window_visible\\\":");
-        sb.Append(BoolStr(App.Window.IsVisible));
+        sb.Append(BoolStr(auxiliary is not null || App.Window.IsVisible));
+        sb.Append(",\\\"window\\\":\\\"");
+        sb.Append(EscapeJson(EscapeJson(auxiliary?.Id ?? "main")));
+        sb.Append("\\\"");
         if (afterFrame > 0)
         {
             sb.Append(",\\\"after_frame_timed_out\\\":");
@@ -2920,6 +3064,21 @@ internal static class McpTools
             sb.Append($",\"platform\":\"{platform}\"");
             sb.Append($",\"width\":{bounds.Width},\"height\":{bounds.Height}");
             sb.Append($",\"pid\":{Environment.ProcessId}}}");
+        }
+
+        // Auxiliary windows (the open tray menu's panels): screen bounds in physical pixels.
+        foreach (var window in AuxiliaryWindows.Snapshot())
+        {
+            if (sb[^1] == '}')
+            {
+                sb.Append(',');
+            }
+
+            var b = window.ScreenBounds;
+            sb.Append($"{{\"id\":\"{EscapeJson(window.Id)}\",\"kind\":\"{EscapeJson(window.Kind)}\"");
+            sb.Append($",\"x\":{b.X},\"y\":{b.Y},\"width\":{b.Width},\"height\":{b.Height}");
+            sb.Append($",\"pixel_ratio\":{window.PixelRatio.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+            sb.Append($",\"handle\":{window.Handle},\"pid\":{Environment.ProcessId}}}");
         }
 
         sb.Append("]}");

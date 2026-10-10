@@ -197,7 +197,7 @@ internal static class McpToolRegistry
                          "for raw framebuffer pixels). Pass after_frame to wait until that frame has presented " +
                          "before capturing — pair it with a mutating tool's presented_frame for sleep-free " +
                          "mutation→screenshot sequencing.",
-            InputSchemaJson: """{"type":"object","properties":{"scale":{"type":"number","default":1,"description":"Scale factor 0.1-10"},"region":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"}}},"region_space":{"type":"string","enum":["screenshot","device"],"default":"screenshot","description":"Coordinate space for region: screenshot pixels (default) or raw device/framebuffer pixels"},"after_frame":{"type":"integer","description":"Wait until this presented-frame number is on screen before capturing"}},"required":[]}""",
+            InputSchemaJson: """{"type":"object","properties":{"scale":{"type":"number","default":1,"description":"Scale factor 0.1-10"},"region":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"}}},"region_space":{"type":"string","enum":["screenshot","device"],"default":"screenshot","description":"Coordinate space for region: screenshot pixels (default) or raw device/framebuffer pixels"},"after_frame":{"type":"integer","description":"Wait until this presented-frame number is on screen before capturing"},"window":{"type":"string","description":"Capture another of the app's windows by id (see cascade_list_windows), e.g. tray-menu for an open tray menu; default main"}},"required":[]}""",
             DebugOnly: true,
             RawResponse: true,
             RequiresLiveInstance: true,
@@ -215,6 +215,7 @@ internal static class McpToolRegistry
                         new CliOptionMapping("--region-space", "region_space", CliValueKind.String),
                         new CliOptionMapping("--scale", "scale", CliValueKind.Double) { DefaultValue = "1" },
                         new CliOptionMapping("--after-frame", "after_frame", CliValueKind.Int),
+                        new CliOptionMapping("--window", "window", CliValueKind.String),
                     ]),
             ]),
 
@@ -335,7 +336,7 @@ internal static class McpToolRegistry
                          "directly (coord_space=\"logical\" for raw logical coordinates). " +
                          "Frame-synchronous: the response includes presented_frame and timed_out — " +
                          "timed_out=true means nothing repainted within ~2s (no sleep needed before screenshots).",
-            InputSchemaJson: """{"type":"object","properties":{"node_id":{"type":"string"},"interaction":{"type":"string","enum":["hover","click","press","release","focus","blur","right_click","middle_click","unhover","drag"]},"x":{"type":"number"},"y":{"type":"number"},"coord_space":{"type":"string","enum":["screenshot","logical"],"default":"screenshot","description":"Coordinate space for x/y: returned-screenshot pixels (default) or raw logical/input pixels"},"start_x":{"type":"number"},"start_y":{"type":"number"},"end_x":{"type":"number"},"end_y":{"type":"number"},"delta_x":{"type":"number"},"delta_y":{"type":"number"},"steps":{"type":"integer","default":5},"ctrl":{"type":"boolean","description":"Hold Ctrl for a click, right_click, press, release or hover (e.g. Ctrl+click to add a row to a selection)"},"shift":{"type":"boolean","description":"Hold Shift for a click, right_click, press, release or hover (e.g. Shift+click to extend a selection)"},"alt":{"type":"boolean","description":"Hold Alt for a click, right_click, press, release or hover"},"wait_frames":{"type":"integer","default":1,"description":"How many new presented frames to wait for before responding (1-240)"}},"required":["node_id","interaction"]}""",
+            InputSchemaJson: """{"type":"object","properties":{"node_id":{"type":"string"},"interaction":{"type":"string","enum":["hover","click","press","release","focus","blur","right_click","middle_click","unhover","drag"]},"x":{"type":"number"},"y":{"type":"number"},"coord_space":{"type":"string","enum":["screenshot","logical"],"default":"screenshot","description":"Coordinate space for x/y: returned-screenshot pixels (default) or raw logical/input pixels"},"start_x":{"type":"number"},"start_y":{"type":"number"},"end_x":{"type":"number"},"end_y":{"type":"number"},"delta_x":{"type":"number"},"delta_y":{"type":"number"},"steps":{"type":"integer","default":5},"ctrl":{"type":"boolean","description":"Hold Ctrl for a click, right_click, press, release or hover (e.g. Ctrl+click to add a row to a selection)"},"shift":{"type":"boolean","description":"Hold Shift for a click, right_click, press, release or hover (e.g. Shift+click to extend a selection)"},"alt":{"type":"boolean","description":"Hold Alt for a click, right_click, press, release or hover"},"wait_frames":{"type":"integer","default":1,"description":"How many new presented frames to wait for before responding (1-240)"},"window":{"type":"string","description":"Interact with another of the app's windows by id (see cascade_list_windows), e.g. tray-menu; node_id is then not used and x/y are that window's screenshot pixels (hover, click, right_click, press, release, unhover)"}},"required":["interaction"]}""",
             DebugOnly: true,
             RawResponse: false,
             RequiresLiveInstance: true,
@@ -357,6 +358,7 @@ internal static class McpToolRegistry
                         new CliOptionMapping("--shift", "shift", CliValueKind.Boolean),
                         new CliOptionMapping("--alt", "alt", CliValueKind.Boolean),
                         new CliOptionMapping("--wait-frames", "wait_frames", CliValueKind.Int),
+                        new CliOptionMapping("--window", "window", CliValueKind.String),
                     ],
                     ConstantArguments: new Dictionary<string, JsonNode>
                     {
@@ -378,6 +380,7 @@ internal static class McpToolRegistry
                         new CliOptionMapping("--shift", "shift", CliValueKind.Boolean),
                         new CliOptionMapping("--alt", "alt", CliValueKind.Boolean),
                         new CliOptionMapping("--wait-frames", "wait_frames", CliValueKind.Int),
+                        new CliOptionMapping("--window", "window", CliValueKind.String),
                     ],
                     ConstantArguments: new Dictionary<string, JsonNode>
                     {
@@ -414,6 +417,7 @@ internal static class McpToolRegistry
                         new CliOptionMapping("--y", "y", CliValueKind.Double),
                         new CliOptionMapping("--coord-space", "coord_space", CliValueKind.String),
                         new CliOptionMapping("--wait-frames", "wait_frames", CliValueKind.Int),
+                        new CliOptionMapping("--window", "window", CliValueKind.String),
                     ],
                     ConstantArguments: new Dictionary<string, JsonNode>
                     {
@@ -498,7 +502,7 @@ internal static class McpToolRegistry
             Description: "Type text or send key events to the focused element. " +
                          "Frame-synchronous: the response includes presented_frame and timed_out " +
                          "(timed_out=true means nothing repainted within ~2s).",
-            InputSchemaJson: """{"type":"object","properties":{"text":{"type":"string","description":"Text to type"},"key":{"type":"string","description":"A key press (down, character, up): Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown, F1-F12, A-Z, 0-9, or any Cascade.UI.Key name (Comma, Backtick, ...). None with modifiers presses and holds just the modifiers (e.g. to show Shift hints); None without modifiers releases them."},"modifiers":{"type":"array","items":{"type":"string","enum":["Ctrl","Shift","Alt","Win"]},"description":"Held for the key press, then released"},"wait_frames":{"type":"integer","default":1,"description":"How many new presented frames to wait for before responding (1-240)"}},"required":[]}""",
+            InputSchemaJson: """{"type":"object","properties":{"text":{"type":"string","description":"Text to type"},"key":{"type":"string","description":"A key press (down, character, up): Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown, F1-F12, A-Z, 0-9, or any Cascade.UI.Key name (Comma, Backtick, ...). None with modifiers presses and holds just the modifiers (e.g. to show Shift hints); None without modifiers releases them."},"modifiers":{"type":"array","items":{"type":"string","enum":["Ctrl","Shift","Alt","Win"]},"description":"Held for the key press, then released"},"wait_frames":{"type":"integer","default":1,"description":"How many new presented frames to wait for before responding (1-240)"},"window":{"type":"string","description":"Send the keys to another of the app's windows by id (see cascade_list_windows), e.g. tray-menu; default main"}},"required":[]}""",
             DebugOnly: true,
             RawResponse: false,
             RequiresLiveInstance: true,
@@ -519,6 +523,7 @@ internal static class McpToolRegistry
                         new CliOptionMapping("--alt", "alt", CliValueKind.Boolean),
                         new CliOptionMapping("--win", "win", CliValueKind.Boolean),
                         new CliOptionMapping("--wait-frames", "wait_frames", CliValueKind.Int),
+                        new CliOptionMapping("--window", "window", CliValueKind.String),
                     ]),
             ]),
 
@@ -616,11 +621,22 @@ internal static class McpToolRegistry
 
         new(
             Name: "cascade_list_windows",
-            Description: "List all running Cascade application instances.",
+            Description: "List the app's windows: the main window, and any auxiliary window that is open " +
+                         "(e.g. tray-menu for an open tray menu, tray-menu/1 for its submenu) with its screen " +
+                         "bounds in physical pixels. Pass an id as window to cascade_screenshot, " +
+                         "cascade_simulate_interaction or cascade_send_keys to target it.",
             InputSchemaJson: """{"type":"object","properties":{},"required":[]}""",
             DebugOnly: false,
             RawResponse: false,
-            RequiresLiveInstance: true),
+            RequiresLiveInstance: true,
+            CliVerbs:
+            [
+                new McpCliVerbSpec(
+                    Verb: "windows",
+                    HelpSummary: "List the app's windows (main, an open tray menu) for --window",
+                    Positionals: [],
+                    Options: []),
+            ]),
 
         // ── Static tools (work without a live instance) ─────────────
         new(

@@ -222,9 +222,32 @@ internal sealed class Win32Window : IDisposable
             return;
         }
 
+        uint oldDpi = currentDpi;
+        Win32.GetWindowRect(handle, out Win32.RECT before);
+        int oldWidth = before.right - before.left;
+        int oldHeight = before.bottom - before.top;
+
+        // The suggested rect is normally scaled for the new DPI. After a remote-desktop
+        // session changes the display scale, a hidden window can be handed its current,
+        // unscaled size instead; scale it here so it keeps its logical size.
+        if (newDpi != oldDpi && width == oldWidth && height == oldHeight)
+        {
+            width = (int)MathF.Round(oldWidth * (float)newDpi / oldDpi);
+            height = (int)MathF.Round(oldHeight * (float)newDpi / oldDpi);
+        }
+
+        Win32.GetClientRect(handle, out Win32.RECT clientBefore);
         currentDpi = newDpi;
         Win32.SetWindowPos(handle, 0, x, y, width, height,
             Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE);
+
+        // An unchanged client size sends no WM_SIZE, which would leave the layout at the
+        // logical size of the old scale: re-run the resize at the new one.
+        Win32.GetClientRect(handle, out Win32.RECT clientAfter);
+        if (newDpi != oldDpi && clientAfter.right == clientBefore.right && clientAfter.bottom == clientBefore.bottom)
+        {
+            SizeChanged?.Invoke(clientAfter.right - clientAfter.left, clientAfter.bottom - clientAfter.top);
+        }
         DpiChanged?.Invoke(newDpi);
     }
 
@@ -234,9 +257,11 @@ internal sealed class Win32Window : IDisposable
     /// its <c>lParam</c> is a RECT pointer in this process's address space, so this
     /// recomputes the window's physical size for <paramref name="newDpi"/> from its
     /// current logical size and runs the exact same path as the real handler
-    /// (reposition → swapchain resize → PixelRatio). Returns the previous DPI.
+    /// (reposition → swapchain resize → PixelRatio). With <paramref name="unscaledSuggestion"/>
+    /// the suggested rect is the window's current one, as Windows hands a hidden window
+    /// after a remote-desktop scale change. Returns the previous DPI.
     /// </summary>
-    internal uint SimulateDpiChange(uint newDpi)
+    internal uint SimulateDpiChange(uint newDpi, bool unscaledSuggestion = false)
     {
         uint previousDpi = currentDpi;
         if (handle == 0 || newDpi == 0 || newDpi == previousDpi)
@@ -245,10 +270,15 @@ internal sealed class Win32Window : IDisposable
         }
 
         Win32.GetWindowRect(handle, out Win32.RECT rect);
-        float oldScale = previousDpi / 96.0f;
-        float newScale = newDpi / 96.0f;
-        int newWidth = (int)MathF.Round((rect.right - rect.left) / oldScale * newScale);
-        int newHeight = (int)MathF.Round((rect.bottom - rect.top) / oldScale * newScale);
+        int newWidth = rect.right - rect.left;
+        int newHeight = rect.bottom - rect.top;
+        if (!unscaledSuggestion)
+        {
+            float oldScale = previousDpi / 96.0f;
+            float newScale = newDpi / 96.0f;
+            newWidth = (int)MathF.Round(newWidth / oldScale * newScale);
+            newHeight = (int)MathF.Round(newHeight / oldScale * newScale);
+        }
         ApplyDpiChange(newDpi, rect.left, rect.top, newWidth, newHeight);
         return previousDpi;
     }

@@ -100,6 +100,34 @@ public class DpiChangeTests
         await Assert.That(glyph2 / glyph1).IsGreaterThanOrEqualTo(1.35).And.IsLessThanOrEqualTo(1.65);
     }
 
+    [Test]
+    public async Task DpiChange_WithUnscaledSuggestion_KeepsLogicalSize_AndLaysOutAgain()
+    {
+        // After a remote-desktop session changes the display scale, Windows can hand a
+        // hidden window WM_DPICHANGED with its current, unscaled rect. The window must
+        // still keep its logical size, and the layout must follow the new scale; before
+        // the fix the content kept its old logical size and left the rest of the window black.
+        await SetDpiAsync(96);
+        (int w1, int h1) = await ScreenshotSizeAsync("unscaled-096.png", afterFrame: 0);
+
+        JsonObject change = await SetDpiAsync(144, "dpi_unscaled");
+        await Assert.That(change["timed_out"]!.GetValue<bool>()).IsFalse();
+        long presented = change["presented_frame"]!.GetValue<long>();
+        (int w2, int h2) = await ScreenshotSizeAsync("unscaled-144.png", afterFrame: presented);
+
+        // The window was scaled for the new DPI (same chrome model as the test above).
+        const double ratio = 144.0 / 96.0;
+        double impliedChromeW = (w2 - ratio * w1) / (ratio - 1.0);
+        double impliedChromeH = (h2 - ratio * h1) / (ratio - 1.0);
+        await Assert.That(impliedChromeW).IsGreaterThanOrEqualTo(-6.0).And.IsLessThanOrEqualTo(150.0);
+        await Assert.That(impliedChromeH).IsGreaterThanOrEqualTo(-6.0).And.IsLessThanOrEqualTo(150.0);
+
+        // The layout fills the surface at the new scale.
+        (double rootW, double rootH) = await RootSizeAsync();
+        await Assert.That(Math.Abs(rootW * ratio - w2)).IsLessThanOrEqualTo(2.0);
+        await Assert.That(Math.Abs(rootH * ratio - h2)).IsLessThanOrEqualTo(2.0);
+    }
+
     // ── Helpers ──────────────────────────────────────────────
 
     /// <summary>
@@ -111,12 +139,12 @@ public class DpiChangeTests
     /// it discovers the app); the 25 s client timeout exceeds the server's
     /// CPU-fallback present window.
     /// </summary>
-    private static async Task<JsonObject> SetDpiAsync(int dpi)
+    private static async Task<JsonObject> SetDpiAsync(int dpi, string param = "dpi")
     {
         using var bridge = new McpBridgeHarness(AppId);
         await Assert.That(bridge.Initialize(TimeSpan.FromSeconds(5))).IsTrue();
 
-        var args = new JsonObject { ["param"] = "dpi", ["value"] = dpi.ToString() };
+        var args = new JsonObject { ["param"] = param, ["value"] = dpi.ToString() };
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
         string? text = null;
         while (DateTime.UtcNow < deadline)
@@ -128,7 +156,7 @@ public class DpiChangeTests
             }
             await Task.Delay(250);
         }
-        throw new InvalidOperationException($"set_render_param dpi={dpi} not forwarded within 20s. Last: {text}");
+        throw new InvalidOperationException($"set_render_param {param}={dpi} not forwarded within 20s. Last: {text}");
     }
 
     /// <summary>Screenshots the fixture and returns the PNG's pixel dimensions
@@ -165,6 +193,16 @@ public class DpiChangeTests
             }
         }
         return maxHeight;
+    }
+
+    /// <summary>The logical size of the fixture's top-level layout node, from the live tree.</summary>
+    private static async Task<(double Width, double Height)> RootSizeAsync()
+    {
+        var result = await CliTestHarness.RunCliAsync("mcp", "tree", "--depth", "2", "--app", AppId);
+        await Assert.That(result.ExitCode).IsEqualTo(0);
+        // The root component has no bounds of its own; its Center child fills the window.
+        JsonNode bounds = JsonNode.Parse(result.StdOut.Trim())!["root"]!["children"]![0]!["bounds"]!;
+        return (bounds["width"]!.GetValue<double>(), bounds["height"]!.GetValue<double>());
     }
 
     /// <summary>Reads width/height from a PNG's IHDR chunk (bytes 16-23, big-endian).</summary>

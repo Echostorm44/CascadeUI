@@ -1143,7 +1143,8 @@ internal sealed partial class NodePainter
 
     /// <summary>
     /// True when the currently focused element is a keyboard-editable control
-    /// (text entry / inline editing) located within the given subtree. Used by
+    /// (text entry / inline editing, or a HotkeyPicker that shows the keys being
+    /// recorded) located within the given subtree. Used by
     /// <see cref="PaintScrollView"/> to recapture a cached layer while it hosts an
     /// active edit, so keystrokes and the caret render live instead of compositing
     /// the stale pre-edit bitmap. Evaluated against the live painted tree.
@@ -1157,7 +1158,7 @@ internal sealed partial class NodePainter
         }
 
         if (focused is not (TextInput or PasswordInput or TextArea or PinInput
-            or TagInput or MentionInput or PropertyGrid or ITabularDataNode))
+            or TagInput or MentionInput or PropertyGrid or ITabularDataNode or HotkeyPicker))
         {
             return false;
         }

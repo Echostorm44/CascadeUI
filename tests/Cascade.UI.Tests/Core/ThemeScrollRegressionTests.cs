@@ -323,6 +323,23 @@ public class ThemeScrollRegressionTests
     }
 
     [Test]
+    public async Task SubtreeContainsFocusedEditable_TrueForFocusedHotkeyPickerInside()
+    {
+        // A HotkeyPicker shows "Press a shortcut…" and the held modifiers while focused; in a
+        // settings ScrollView the cached layer kept showing the old hotkey after a click.
+        FocusManager.ClearFocus();
+
+        var picker = new HotkeyPicker { Current = new Hotkey(ModifierKeys.Ctrl, Key.D1) };
+        var scroll = new ScrollView(new Column(children: new Node[] { picker }));
+
+        FocusManager.RequestFocus(picker);
+
+        await Assert.That(NodePainter.SubtreeContainsFocusedEditable(scroll.Content)).IsTrue();
+
+        FocusManager.ClearFocus();
+    }
+
+    [Test]
     public async Task SubtreeContainsFocusedEditable_FalseWhenFocusIsOutsideContent()
     {
         FocusManager.ClearFocus();

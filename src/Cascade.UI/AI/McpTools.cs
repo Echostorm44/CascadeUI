@@ -2839,13 +2839,16 @@ internal static class McpTools
             }
 
             case "dpi":
+            case "dpi_unscaled":
             {
                 // Simulate a live OS DPI change (96 = 100%, 120 = 125%, 144 = 150%,
                 // 192 = 200%) to exercise the per-monitor-v2 window path end to end:
                 // window reposition/resize → swapchain rescale → PixelRatio. A real
                 // WM_DPICHANGED can't be forged cross-process (its lParam is a RECT
                 // pointer in the app's address space), so the window drives it
-                // in-process. Frame-synchronous like the other mutating verbs.
+                // in-process. Frame-synchronous like the other mutating verbs. dpi_unscaled
+                // hands the window its current rect as the suggestion, as Windows does for a
+                // hidden window after a remote-desktop scale change.
                 if (!uint.TryParse(valueStr, out uint newDpi) || newDpi < 48 || newDpi > 960)
                 {
                     return ErrorJson("Invalid dpi value. Use an integer 48-960 (96 = 100%).", null);
@@ -2859,12 +2862,12 @@ internal static class McpTools
 
                 long baselineFrame = Diagnostics.PresentMonitor.PresentedFrames;
                 uint previousDpi = window.Dpi;
-                Dispatcher.InvokeAsync(() => { previousDpi = window.SimulateDpiChange(newDpi); }).Wait();
+                Dispatcher.InvokeAsync(() => { previousDpi = window.SimulateDpiChange(newDpi, unscaledSuggestion: param == "dpi_unscaled"); }).Wait();
 
                 string scale = (newDpi / 96.0)
                     .ToString("0.####", System.Globalization.CultureInfo.InvariantCulture);
                 return WithPresentation(
-                    $"{{\"param\":\"dpi\",\"value\":{newDpi},\"previous_dpi\":{previousDpi},\"scale\":{scale}}}",
+                    $"{{\"param\":\"{param}\",\"value\":{newDpi},\"previous_dpi\":{previousDpi},\"scale\":{scale}}}",
                     baselineFrame, GetWaitFrames(parameters));
             }
 
@@ -2893,7 +2896,7 @@ internal static class McpTools
             }
 
             default:
-                return ErrorJson($"Unknown param '{param}'. Use: render_mode, dpi, textgamma", null);
+                return ErrorJson($"Unknown param '{param}'. Use: render_mode, dpi, dpi_unscaled, textgamma", null);
         }
     }
 

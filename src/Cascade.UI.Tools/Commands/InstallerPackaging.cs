@@ -179,7 +179,7 @@ internal static class InstallerPackaging
         ZipFile.CreateFromDirectory(IOPath.Combine(work, "staging"), payloadZip); // entries: publish/<file>
 
         Console.WriteLine($"  Step 3: generating + publishing the wizard{(aot ? " (AOT — this can take a few minutes)" : "")}...");
-        File.WriteAllText(IOPath.Combine(innerProjDir, "installer.csproj"), InnerCsproj(appProject, innerName, aot, appIcon));
+        File.WriteAllText(IOPath.Combine(innerProjDir, "installer.csproj"), InnerCsproj(appProject, innerName, aot, appIcon, WizardTargetFramework(appProject)));
         File.WriteAllText(IOPath.Combine(innerProjDir, "Program.cs"), InstallerProgram(installerClass, appName));
 
         // AOT / self-contained are LOCAL props in the generated csproj (not passed via -p:) so they do
@@ -410,7 +410,7 @@ internal static class InstallerPackaging
         return "";
     }
 
-    private static string InnerCsproj(string appProject, string innerName, bool aot, string? iconPath)
+    internal static string InnerCsproj(string appProject, string innerName, bool aot, string? iconPath, string targetFramework)
     {
         // The wizard is published MULTI-FILE either way, so its native deps (freetype/harfbuzz/wgpu)
         // land on disk in their normal layout — that is what lets third-party native loaders resolve
@@ -423,7 +423,7 @@ internal static class InstallerPackaging
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
                 <OutputType>WinExe</OutputType>
-                <TargetFramework>net10.0</TargetFramework>
+                <TargetFramework>{targetFramework}</TargetFramework>
                 <AssemblyName>{innerName}</AssemblyName>
                 <StartupObject>CascadeGeneratedInstaller.Program</StartupObject>
                 <Nullable>enable</Nullable>
@@ -897,9 +897,49 @@ internal static class InstallerPackaging
     /// </summary>
     private static string? GetApplicationIcon(string appProject)
     {
+        string? value = GetProjectProperty(appProject, "ApplicationIcon");
+        if (value is null)
+        {
+            return null;
+        }
+        string abs = IOPath.IsPathRooted(value) ? value : IOPath.Combine(IOPath.GetDirectoryName(appProject)!, value);
+        return File.Exists(abs) ? IOPath.GetFullPath(abs) : null;
+    }
+
+    /// <summary>
+    /// The target framework for the generated wizard. The wizard references the app project, so it
+    /// must target what the app targets: an app on <c>net10.0-windows</c> (WinForms-free apps still
+    /// pick it for in-box Microsoft.Win32 APIs) can't be referenced from a plain <c>net10.0</c> project
+    /// (NU1201).
+    /// </summary>
+    private static string WizardTargetFramework(string appProject) =>
+        ChooseTargetFramework(GetProjectProperty(appProject, "TargetFramework"), GetProjectProperty(appProject, "TargetFrameworks"));
+
+    /// <summary>
+    /// Picks the wizard's framework from the app's evaluated <c>TargetFramework</c> /
+    /// <c>TargetFrameworks</c>: the single framework if there is one, else the first listed (a
+    /// Windows-specific one first, since the installer is a Windows exe), else <c>net10.0</c>.
+    /// </summary>
+    internal static string ChooseTargetFramework(string? targetFramework, string? targetFrameworks)
+    {
+        if (!string.IsNullOrWhiteSpace(targetFramework))
+        {
+            return targetFramework.Trim();
+        }
+        string[] listed = (targetFrameworks ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (listed.Length == 0)
+        {
+            return "net10.0";
+        }
+        return listed.FirstOrDefault(tfm => tfm.Contains("-windows", StringComparison.OrdinalIgnoreCase)) ?? listed[0];
+    }
+
+    /// <summary>An evaluated MSBuild property of the app project (honours Directory.Build.props etc.), or null if empty or unavailable.</summary>
+    private static string? GetProjectProperty(string appProject, string name)
+    {
         using var process = new Process();
         process.StartInfo.FileName = "dotnet";
-        process.StartInfo.Arguments = $"msbuild \"{appProject}\" -getProperty:ApplicationIcon -nologo";
+        process.StartInfo.Arguments = $"msbuild \"{appProject}\" -getProperty:{name} -nologo";
         process.StartInfo.UseShellExecute = false;
         process.StartInfo.RedirectStandardOutput = true;
         process.StartInfo.RedirectStandardError = true;
@@ -908,12 +948,7 @@ internal static class InstallerPackaging
             process.Start();
             string value = process.StandardOutput.ReadToEnd().Trim();
             process.WaitForExit();
-            if (process.ExitCode != 0 || value.Length == 0)
-            {
-                return null;
-            }
-            string abs = IOPath.IsPathRooted(value) ? value : IOPath.Combine(IOPath.GetDirectoryName(appProject)!, value);
-            return File.Exists(abs) ? IOPath.GetFullPath(abs) : null;
+            return process.ExitCode != 0 || value.Length == 0 ? null : value;
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
         {

@@ -506,7 +506,12 @@ internal static class PackageCommand
         Console.WriteLine("  --sign-cert <thumb|.pfx>     Use an existing cert: a 40-char cert-store SHA-1 thumbprint,");
         Console.WriteLine("                               or a path to a .pfx file (add --sign-password if it has one).");
         Console.WriteLine("  --sign-password <pwd>        Password for a .pfx passed to --sign-cert.");
-        Console.WriteLine("  --sign-timestamp <url>       RFC-3161 timestamp server (default: DigiCert).");
+        Console.WriteLine("  --sign-azure-endpoint <uri>  Azure Trusted Signing endpoint, e.g. https://eus.codesigning.azure.net/");
+        Console.WriteLine("  --sign-azure-account <name>  Trusted Signing account name.");
+        Console.WriteLine("  --sign-azure-profile <name>  Certificate profile name.");
+        Console.WriteLine("  --sign-azure-dlib <path>     Azure.CodeSigning.Dlib.dll from the Microsoft.ArtifactSigning.Client");
+        Console.WriteLine("                               package. Auth comes from the ambient Azure login (az / OIDC).");
+        Console.WriteLine("  --sign-timestamp <url>       RFC-3161 timestamp server (default: DigiCert; Microsoft ACS for Azure).");
         Console.WriteLine("    Requires signtool.exe (Windows SDK; auto-located). NOTE: a self-signed cert does");
         Console.WriteLine("    NOT stop end-user SmartScreen/AV warnings — only a real OV/EV cert builds reputation.");
         Console.WriteLine();

@@ -56,4 +56,22 @@ public class PackagingCliTests
         int code = PublishCommand.Execute(["--github", "owner/repo"]);
         await Assert.That(code).IsEqualTo(1);
     }
+    [Test]
+    [Arguments("net10.0-windows", null, "net10.0-windows")]
+    [Arguments("net10.0", null, "net10.0")]
+    [Arguments(null, "net10.0;net10.0-windows", "net10.0-windows")]
+    [Arguments(null, "net9.0;net10.0", "net9.0")]
+    [Arguments(null, null, "net10.0")]
+    public async Task InstallerWizard_TargetsTheAppsFramework(string? targetFramework, string? targetFrameworks, string expected)
+    {
+        await Assert.That(InstallerPackaging.ChooseTargetFramework(targetFramework, targetFrameworks)).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task InstallerWizardCsproj_UsesTheGivenFramework()
+    {
+        // A net10.0-windows app referenced from a net10.0 wizard fails restore with NU1201.
+        string csproj = InstallerPackaging.InnerCsproj("App.csproj", "App-wizard", aot: true, iconPath: null, "net10.0-windows");
+        await Assert.That(csproj).Contains("<TargetFramework>net10.0-windows</TargetFramework>");
+    }
 }

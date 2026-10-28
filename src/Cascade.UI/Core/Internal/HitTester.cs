@@ -41,6 +41,22 @@ internal static class HitTester
 
     private static Node? HitTestNode(Node node, float x, float y, List<Node>? path)
     {
+        Node? hit = HitTestNodeCore(node, x, y, path);
+
+        // A pass-through layer keeps only hits on its interactive parts; anywhere else the point
+        // belongs to whatever lies beneath it, so the caller goes on to the siblings below.
+        if (hit is not null
+            && node.LayoutData.GestureData is { PassThroughHits: true }
+            && !IsInteractive(hit))
+        {
+            return null;
+        }
+
+        return hit;
+    }
+
+    private static Node? HitTestNodeCore(Node node, float x, float y, List<Node>? path)
+    {
         // NavigationTransitionHost: only hit-test the incoming page
         if (node is NavigationTransitionHost nth)
         {

@@ -298,6 +298,39 @@ public class WindowTests
         await Assert.That(availability.HasImage).IsFalse();
     }
 
+    // ── Back / Forward (keyboard keys and mouse side buttons) ───────
+
+    [Test]
+    public async Task MapVirtualKey_BrowserBackAndForward_MapBothWays()
+    {
+        await Assert.That(Win32Input.MapVirtualKey(Win32.VK_BROWSER_BACK)).IsEqualTo(Key.BrowserBack);
+        await Assert.That(Win32Input.MapVirtualKey(Win32.VK_BROWSER_FORWARD)).IsEqualTo(Key.BrowserForward);
+        await Assert.That(Win32Input.MapKeyToVirtualKey(Key.BrowserBack)).IsEqualTo(Win32.VK_BROWSER_BACK);
+        await Assert.That(Win32Input.MapKeyToVirtualKey(Key.BrowserForward)).IsEqualTo(Win32.VK_BROWSER_FORWARD);
+    }
+
+    [Test]
+    [Arguments(Win32.XBUTTON1, Key.BrowserBack)]
+    [Arguments(Win32.XBUTTON2, Key.BrowserForward)]
+    public async Task ProcessXButtonMessage_SideButtonDown_IsTheBackOrForwardKey(uint button, Key expected)
+    {
+        NativeKeyEvent? down = Win32Input.ProcessXButtonMessage(Win32.WM_XBUTTONDOWN, (nuint)(button << 16));
+        NativeKeyEvent? doubleClick = Win32Input.ProcessXButtonMessage(Win32.WM_XBUTTONDBLCLK, (nuint)(button << 16));
+        NativeKeyEvent? up = Win32Input.ProcessXButtonMessage(Win32.WM_XBUTTONUP, (nuint)(button << 16));
+
+        await Assert.That(down!.Key).IsEqualTo(expected);
+        await Assert.That(down.Type).IsEqualTo(NativeKeyEventType.KeyDown);
+        await Assert.That(doubleClick!.Type).IsEqualTo(NativeKeyEventType.KeyDown);
+        await Assert.That(up!.Type).IsEqualTo(NativeKeyEventType.KeyUp);
+    }
+
+    [Test]
+    public async Task ProcessXButtonMessage_OtherMessages_ReturnNull()
+    {
+        await Assert.That(Win32Input.ProcessXButtonMessage(Win32.WM_LBUTTONDOWN, 0)).IsNull();
+        await Assert.That(Win32Input.ProcessXButtonMessage(Win32.WM_XBUTTONDOWN, (nuint)(7u << 16))).IsNull();
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────
 
     private static nint MakeLParam(int x, int y)

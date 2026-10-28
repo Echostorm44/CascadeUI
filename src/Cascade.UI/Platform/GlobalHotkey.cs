@@ -180,7 +180,19 @@ public enum Key
     /// The context-menu (application) key: VK_APPS on Windows, XK_Menu on X11. Opens the focused
     /// control's context menu, as Shift+F10 does.
     /// </summary>
-    Apps
+    Apps,
+
+    /// <summary>
+    /// Back: the keyboard's Browser Back key, and the mouse's back side button (XBUTTON1), which
+    /// arrives as this key so one binding serves both. Windows.
+    /// </summary>
+    BrowserBack,
+
+    /// <summary>
+    /// Forward: the keyboard's Browser Forward key, and the mouse's forward side button (XBUTTON2),
+    /// which arrives as this key. Windows.
+    /// </summary>
+    BrowserForward
 }
 
 /// <summary>

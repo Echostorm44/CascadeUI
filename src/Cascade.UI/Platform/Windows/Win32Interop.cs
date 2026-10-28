@@ -54,6 +54,11 @@ internal static partial class Win32
     internal const uint WM_MBUTTONUP        = 0x0208;
     internal const uint WM_MBUTTONDBLCLK    = 0x0209;
     internal const uint WM_MOUSEWHEEL       = 0x020A;
+    // WM_XBUTTONDOWN (0x020B) is declared with the popup-menu messages.
+    internal const uint WM_XBUTTONUP        = 0x020C;
+    internal const uint WM_XBUTTONDBLCLK    = 0x020D;
+    internal const uint XBUTTON1            = 0x0001;
+    internal const uint XBUTTON2            = 0x0002;
     internal const uint WM_MOUSEHWHEEL      = 0x020E;
     internal const uint WM_MOUSELEAVE       = 0x02A3;
     internal const uint WM_TOUCH            = 0x0240;
@@ -216,6 +221,8 @@ internal static partial class Win32
     internal const int VK_LWIN      = 0x5B;
     internal const int VK_RWIN      = 0x5C;
     internal const int VK_APPS      = 0x5D;
+    internal const int VK_BROWSER_BACK    = 0xA6;
+    internal const int VK_BROWSER_FORWARD = 0xA7;
     internal const int VK_NUMPAD0   = 0x60;
     internal const int VK_NUMPAD9   = 0x69;
     internal const int VK_MULTIPLY  = 0x6A;
@@ -347,6 +354,17 @@ internal static partial class Win32
         public int top;
         public int right;
         public int bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct WINDOWPLACEMENT
+    {
+        public uint length;
+        public uint flags;
+        public uint showCmd;
+        public POINT ptMinPosition;
+        public POINT ptMaxPosition;
+        public RECT rcNormalPosition;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -584,6 +602,14 @@ internal static partial class Win32
     [LibraryImport("user32", EntryPoint = "IsZoomed")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool IsZoomed(nint hWnd);
+
+    [LibraryImport("user32", EntryPoint = "GetWindowPlacement")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool GetWindowPlacement(nint hWnd, ref WINDOWPLACEMENT lpwndpl);
+
+    [LibraryImport("user32", EntryPoint = "SetWindowPlacement")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool SetWindowPlacement(nint hWnd, ref WINDOWPLACEMENT lpwndpl);
 
     [LibraryImport("user32", EntryPoint = "IsWindowVisible")]
     [return: MarshalAs(UnmanagedType.Bool)]

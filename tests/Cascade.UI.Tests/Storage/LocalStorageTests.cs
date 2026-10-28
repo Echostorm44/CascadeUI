@@ -240,9 +240,51 @@ public class LocalStorageTests
         await Assert.That(result).IsEqualTo("safe");
     }
 
+    // ── Source-generated (AOT-safe) overloads ───────────────────────────
+
+    [Test]
+    public async Task TypeInfo_SetAndGet_RoundTrips()
+    {
+        LocalStorage.Set("volume", 0.35f, StorageTestJsonContext.Default.Single);
+        LocalStorage.Set("muted", true, StorageTestJsonContext.Default.Boolean);
+
+        await Assert.That(LocalStorage.Get("volume", 1f, StorageTestJsonContext.Default.Single)).IsEqualTo(0.35f);
+        await Assert.That(LocalStorage.Get("muted", false, StorageTestJsonContext.Default.Boolean)).IsTrue();
+    }
+
+    [Test]
+    public async Task TypeInfo_MissingKeyOrWrongType_ReturnsFallback()
+    {
+        LocalStorage.Set("name", "not a number", StorageTestJsonContext.Default.String);
+
+        await Assert.That(LocalStorage.Get("missing", 7, StorageTestJsonContext.Default.Int32)).IsEqualTo(7);
+        await Assert.That(LocalStorage.Get("name", 7, StorageTestJsonContext.Default.Int32)).IsEqualTo(7);
+    }
+
+    [Test]
+    public async Task TypeInfo_StorageKey_UsesItsFallback_AndRaisesChanged()
+    {
+        var key = new StorageKey<int>("delay", 5);
+        string? changed = null;
+        LocalStorage.Changed += k => changed = k;
+
+        int before = LocalStorage.Get(key, StorageTestJsonContext.Default.Int32);
+        LocalStorage.Set(key, 12, StorageTestJsonContext.Default.Int32);
+
+        await Assert.That(before).IsEqualTo(5);
+        await Assert.That(LocalStorage.Get(key, StorageTestJsonContext.Default.Int32)).IsEqualTo(12);
+        await Assert.That(changed).IsEqualTo("delay");
+    }
+
     private sealed record TestData
     {
         public string Name { get; init; } = "";
         public int Value { get; init; }
     }
 }
+
+[System.Text.Json.Serialization.JsonSerializable(typeof(int))]
+[System.Text.Json.Serialization.JsonSerializable(typeof(float))]
+[System.Text.Json.Serialization.JsonSerializable(typeof(bool))]
+[System.Text.Json.Serialization.JsonSerializable(typeof(string))]
+internal sealed partial class StorageTestJsonContext : System.Text.Json.Serialization.JsonSerializerContext;

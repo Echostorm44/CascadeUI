@@ -163,14 +163,21 @@ internal sealed class JsonStorageEngine : IStorageEngine
         }
     }
 
-    private static readonly JsonSerializerOptions flushOptions = new() { WriteIndented = true };
-
-    [UnconditionalSuppressMessage("Trimming", "IL2026", Justification = "Storage engine serializes Dictionary<string, JsonElement> which is always safe.")]
-    [UnconditionalSuppressMessage("AOT", "IL3050", Justification = "Storage engine serializes Dictionary<string, JsonElement> which is always safe.")]
+    // Written with Utf8JsonWriter, not JsonSerializer: under Native AOT reflection-based serialization is
+    // disabled outright (even for Dictionary<string, JsonElement>), so the serializer threw on every write.
     private void FlushToDisk()
     {
         using var writer = new AtomicFileWriter(filePath);
-        JsonSerializer.Serialize(writer.Stream, cache!, flushOptions);
+        using (var json = new Utf8JsonWriter(writer.Stream, new JsonWriterOptions { Indented = true }))
+        {
+            json.WriteStartObject();
+            foreach (var (key, value) in cache!)
+            {
+                json.WritePropertyName(key);
+                value.WriteTo(json);
+            }
+            json.WriteEndObject();
+        }
         writer.Commit();
     }
 

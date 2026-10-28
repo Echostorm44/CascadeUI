@@ -101,9 +101,32 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
     // rasterizer.
     private static RequestAdapterResult RequestAdapter(Instance instance, Surface surface, nint hwnd, GpuPreference preference)
     {
+        // A window on Microsoft's remote-desktop or basic display adapter (vendor 0x1414) is not on any GPU, so
+        // there is no display adapter to match: matching only cost every probe below and a full enumeration.
+        const uint MicrosoftVendorId = 0x1414;
         if (preference == GpuPreference.Auto
-            && Win32DisplayAdapter.TryGetForWindow(hwnd, out uint vendorId, out uint deviceId))
+            && Win32DisplayAdapter.TryGetForWindow(hwnd, out uint vendorId, out uint deviceId)
+            && vendorId != MicrosoftVendorId)
         {
+            // The GPU driving the window's monitor is almost always wgpu's high-performance pick (desktops) or its
+            // low-power pick (laptops whose integrated GPU drives the panel). Asking for those costs ~200 ms each;
+            // enumerating every adapter probes a device on each one (dGPU, iGPU, WARP) and cost ~900 ms of every
+            // app's startup on a desktop with two GPUs. Enumerate only if neither pick is the display adapter.
+            foreach (PowerPreference power in (ReadOnlySpan<PowerPreference>)[PowerPreference.HighPerformance, PowerPreference.LowPower])
+            {
+                var picked = AsyncRequest.RequestAdapterSync(instance, surface, power);
+                if (picked.Status != RequestAdapterStatus.Success || picked.Adapter.IsInvalid)
+                {
+                    continue;
+                }
+                AdapterDescription description = picked.Adapter.GetDescription();
+                if (!description.IsSoftware && description.VendorId == vendorId && description.DeviceId == deviceId)
+                {
+                    return picked;
+                }
+                picked.Adapter.Dispose();
+            }
+
             Adapter display = FindHardwareAdapter(instance, surface, vendorId, deviceId);
             if (!display.IsInvalid)
             {
@@ -113,11 +136,13 @@ internal sealed unsafe class EtchGpuPresenter : IDisposable
 
         if (preference != GpuPreference.Software)
         {
+            // Auto lands here when there is no physical display adapter to match (a remote-desktop session) or none
+            // matched. An undefined preference made wgpu weigh every adapter, software included (~550 ms against
+            // ~200 ms measured), so Auto asks for the high-performance GPU.
             PowerPreference power = preference switch
             {
                 GpuPreference.LowPower => PowerPreference.LowPower,
-                GpuPreference.HighPerformance => PowerPreference.HighPerformance,
-                _ => PowerPreference.Undefined,
+                _ => PowerPreference.HighPerformance,
             };
             var hardware = AsyncRequest.RequestAdapterSync(instance, surface, power);
             if (hardware.Status == RequestAdapterStatus.Success && !hardware.Adapter.IsInvalid)

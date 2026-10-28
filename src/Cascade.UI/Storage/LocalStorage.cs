@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 
 namespace Cascade.UI;
 
@@ -123,6 +124,58 @@ public static class LocalStorage
     public static void Set<T>(StorageKey<T> storageKey, T value)
     {
         Set(storageKey.Key, value);
+    }
+
+    /// <summary>
+    /// Gets a value by string key with source-generated JSON metadata — the trimming- and Native AOT-safe
+    /// overload (pass <c>MyJsonContext.Default.Int32</c> and the like). Returns <paramref name="fallback"/> if
+    /// the key does not exist or the stored value does not deserialize as <typeparamref name="T"/>.
+    /// </summary>
+    public static T Get<T>(string key, T fallback, JsonTypeInfo<T> typeInfo)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(typeInfo);
+
+        var json = engine.Read(key);
+        if (json is null)
+        {
+            return fallback;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize(json, typeInfo) ?? fallback;
+        }
+        catch (JsonException)
+        {
+            return fallback;
+        }
+    }
+
+    /// <summary>Gets a typed key's value with source-generated JSON metadata (trimming- and AOT-safe).</summary>
+    public static T Get<T>(StorageKey<T> storageKey, JsonTypeInfo<T> typeInfo)
+    {
+        return Get(storageKey.Key, storageKey.Fallback, typeInfo);
+    }
+
+    /// <summary>
+    /// Sets a value by string key with source-generated JSON metadata — the trimming- and Native AOT-safe
+    /// overload. The value is persisted immediately.
+    /// </summary>
+    public static void Set<T>(string key, T value, JsonTypeInfo<T> typeInfo)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(typeInfo);
+
+        var json = JsonSerializer.Serialize(value, typeInfo);
+        engine.Write(key, json);
+        Changed?.Invoke(key);
+    }
+
+    /// <summary>Sets a typed key's value with source-generated JSON metadata (trimming- and AOT-safe).</summary>
+    public static void Set<T>(StorageKey<T> storageKey, T value, JsonTypeInfo<T> typeInfo)
+    {
+        Set(storageKey.Key, value, typeInfo);
     }
 
     /// <summary>

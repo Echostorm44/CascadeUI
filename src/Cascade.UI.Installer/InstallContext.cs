@@ -81,6 +81,38 @@ public sealed class InstallContext
         rollbackActions.Add(action);
     }
 
+    /// <summary>
+    /// Records an HKCU registry key the install hook created and owns (<c>Software\MyApp</c>), so uninstall deletes
+    /// it. The uninstall.exe that ships with the app does not run app code — <see cref="CascadeInstaller.OnUninstallAsync"/>
+    /// only runs when uninstalling through the wizard — so recording is how a hook's registry work is undone.
+    /// </summary>
+    public void RecordRegistryKey(string currentUserSubKey)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(currentUserSubKey);
+        recordedRegistryKeys.Add(HkcuPrefix + currentUserSubKey);
+    }
+
+    /// <summary>
+    /// Records one HKCU registry value the install hook wrote into a key it does not own (another app's file type,
+    /// say), so uninstall removes just that value. With <paramref name="onlyIfStill"/>, uninstall removes it only
+    /// while it still holds that string. An empty <paramref name="valueName"/> is the key's default value.
+    /// </summary>
+    public void RecordRegistryValue(string currentUserSubKey, string valueName, string? onlyIfStill = null)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(currentUserSubKey);
+        ArgumentNullException.ThrowIfNull(valueName);
+        string record = HkcuPrefix + currentUserSubKey + "|" + valueName;
+        recordedRegistryValues.Add(onlyIfStill is null ? record : record + "|" + onlyIfStill);
+    }
+
+    private const string HkcuPrefix = @"HKEY_CURRENT_USER\";
+    private readonly List<string> recordedRegistryKeys = [];
+    private readonly List<string> recordedRegistryValues = [];
+
+    internal IReadOnlyList<string> RecordedRegistryKeys => recordedRegistryKeys;
+
+    internal IReadOnlyList<string> RecordedRegistryValues => recordedRegistryValues;
+
     public string ResolvePath(string relativePath)
     {
         return IOPath.Combine(InstallDir, relativePath);

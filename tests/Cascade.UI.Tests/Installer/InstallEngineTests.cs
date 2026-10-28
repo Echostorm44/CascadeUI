@@ -93,6 +93,41 @@ public sealed class InstallEngineTests
     }
 
     [Test]
+    public async Task RegistryWorkRecordedByTheHook_IsInTheManifestForUninstall()
+    {
+        string payloadRoot = NewTempDir();
+        string installDir = IOPath.Combine(NewTempDir(), "app");
+        StagePayload(payloadRoot);
+
+        try
+        {
+            var installer = new TestInstaller
+            {
+                OnInstall = ctx =>
+                {
+                    ctx.RecordRegistryKey(@"Software\Classes\EngineTestApp.Photo");
+                    ctx.RecordRegistryValue(@"Software\Classes\.png\OpenWithProgids", "EngineTestApp.Photo");
+                    ctx.RecordRegistryValue(@"Software\Classes\.png", "", onlyIfStill: "EngineTestApp.Photo");
+                    return Task.CompletedTask;
+                },
+            };
+
+            var result = await new InstallEngine().InstallAsync(installer, payloadRoot,
+                new InstallEngineOptions { InstallDirOverride = installDir });
+            var saved = InstallManifest.FromJson(await File.ReadAllTextAsync(IOPath.Combine(installDir, InstallEngine.ManifestFileName)))!;
+
+            await Assert.That(result.Success).IsTrue();
+            await Assert.That(saved.RegistryKeys).Contains(@"HKEY_CURRENT_USER\Software\Classes\EngineTestApp.Photo");
+            await Assert.That(saved.RegistryValues).Contains(@"HKEY_CURRENT_USER\Software\Classes\.png\OpenWithProgids|EngineTestApp.Photo");
+            await Assert.That(saved.RegistryValues).Contains(@"HKEY_CURRENT_USER\Software\Classes\.png||EngineTestApp.Photo");
+        }
+        finally
+        {
+            CleanUp(payloadRoot, installDir);
+        }
+    }
+
+    [Test]
     public async Task SecondInstall_OverSameDir_IsDetectedAsUpgrade()
     {
         string payloadRoot = NewTempDir();

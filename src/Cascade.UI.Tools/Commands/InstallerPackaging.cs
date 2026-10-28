@@ -582,9 +582,28 @@ internal static class InstallerPackaging
                 {
                     TryDelete(lnk);
                 }
+                // Single values in keys other apps share ("HKCU\path|name[|expected]"): remove the value only,
+                // and an expected one only while it still holds what was written.
+                foreach (string record in Strings(manifest["RegistryValues"]))
+                {
+                    string[] parts = record.Split('|');
+                    if (parts.Length < 2 || !parts[0].StartsWith(HkcuPrefix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+                    try
+                    {
+                        using RegistryKey? key = Registry.CurrentUser.OpenSubKey(parts[0][HkcuPrefix.Length..], writable: true);
+                        if (key is not null && (parts.Length < 3 || key.GetValue(parts[1]) as string == parts[2]))
+                        {
+                            key.DeleteValue(parts[1], throwOnMissingValue: false);
+                        }
+                    }
+                    catch (Exception) { }
+                }
                 foreach (string key in Strings(manifest["RegistryKeys"]))
                 {
-                    if (key.StartsWith(HkcuPrefix, StringComparison.OrdinalIgnoreCase))
+                    if (key.StartsWith(HkcuPrefix, StringComparison.OrdinalIgnoreCase) && !IsSharedExtensionKey(key[HkcuPrefix.Length..]))
                     {
                         try { Registry.CurrentUser.DeleteSubKeyTree(key[HkcuPrefix.Length..], throwOnMissingSubKey: false); }
                         catch (Exception) { }
@@ -629,6 +648,16 @@ internal static class InstallerPackaging
             private static void TryDelete(string path)
             {
                 try { if (File.Exists(path)) { File.Delete(path); } } catch (Exception) { }
+            }
+
+            // Software\Classes\.ext itself: shared by every app that handles the type, never deleted whole.
+            private static bool IsSharedExtensionKey(string subKey)
+            {
+                const string classes = @"Software\Classes\";
+                return subKey.StartsWith(classes, StringComparison.OrdinalIgnoreCase)
+                    && subKey.Length > classes.Length
+                    && subKey[classes.Length] == '.'
+                    && subKey.IndexOf('\\', classes.Length) < 0;
             }
 
             private static void RunHidden(string file, string args)

@@ -153,6 +153,16 @@ public sealed class InstallEngine
                 await installer.OnInstallAsync(ctx).ConfigureAwait(false);
             }
 
+            // What the hook recorded is removed on uninstall like the engine's own registry work.
+            foreach (string key in ctx.RecordedRegistryKeys)
+            {
+                manifest.AddRegistryKey(key);
+            }
+            foreach (string value in ctx.RecordedRegistryValues)
+            {
+                manifest.AddRegistryValue(value);
+            }
+
             ctx.ReportProgress(90, "Writing manifest...");
             WriteManifest(installDir, manifest);
 

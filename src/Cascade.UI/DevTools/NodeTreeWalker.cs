@@ -6,12 +6,12 @@ using System.Reflection;
 
 // NodeTreeWalker uses reflection on user-authored Component subclasses to
 // surface signal/computed state to DevTools and the MCP tool set. This code
-// is gated behind #if CASCADE_DEVTOOLS (see below). When agents publish with
-// -p:CascadeDevTools=true the build also includes src/Cascade.UI/DevTools/
-// TrimmerRoots.xml which preserves the reflection surface for Component and
-// NodeTreeWalker. Per-method [UnconditionalSuppressMessage] attributes below
-// acknowledge to ILC that the preservation is intentional. End-user AOT
-// publishes (no CascadeDevTools flag) do not compile this file at all.
+// is gated behind #if CASCADE_DEVTOOLS (see below). An app built with
+// -p:CascadeDevTools=true gets TrimmerRootAssembly items for itself and
+// Cascade.UI from Echostorm.Cascade.UI.targets, so a trimmed DevTools build
+// keeps the members read here; the per-method [UnconditionalSuppressMessage]
+// attributes below rely on that. End-user builds (no CascadeDevTools flag)
+// do not compile this code at all.
 
 namespace Cascade.UI.DevTools;
 
@@ -2148,7 +2148,7 @@ internal static class NodeTreeWalker
     }
 
     [UnconditionalSuppressMessage("Trimming", "IL2075",
-        Justification = "Component subclass reflection surface preserved via TrimmerRoots.xml when CASCADE_DEVTOOLS is defined.")]
+        Justification = "Component state and control members are kept for trimmed DevTools builds by TrimmerRootAssembly items in Echostorm.Cascade.UI.targets.")]
     private static IReadOnlyList<SignalInfo> GetNodeSignals(object node)
     {
         if (node is not Component component)
@@ -2193,7 +2193,7 @@ internal static class NodeTreeWalker
     }
 
     [UnconditionalSuppressMessage("Trimming", "IL2075",
-        Justification = "Component subclass reflection surface preserved via TrimmerRoots.xml when CASCADE_DEVTOOLS is defined.")]
+        Justification = "Component state and control members are kept for trimmed DevTools builds by TrimmerRootAssembly items in Echostorm.Cascade.UI.targets.")]
     private static IReadOnlyList<ComputedInfo> GetNodeComputed(object node)
     {
         if (node is not Component component)
@@ -2242,7 +2242,7 @@ internal static class NodeTreeWalker
     }
 
     [UnconditionalSuppressMessage("Trimming", "IL2075",
-        Justification = "Component subclass reflection surface preserved via TrimmerRoots.xml when CASCADE_DEVTOOLS is defined.")]
+        Justification = "Component state and control members are kept for trimmed DevTools builds by TrimmerRootAssembly items in Echostorm.Cascade.UI.targets.")]
     private static void CollectSignals(object node, List<SignalEntry> signals)
     {
         if (node is Component component)
@@ -2286,7 +2286,7 @@ internal static class NodeTreeWalker
     }
 
     [UnconditionalSuppressMessage("Trimming", "IL2075",
-        Justification = "Component subclass reflection surface preserved via TrimmerRoots.xml when CASCADE_DEVTOOLS is defined.")]
+        Justification = "Component state and control members are kept for trimmed DevTools builds by TrimmerRootAssembly items in Echostorm.Cascade.UI.targets.")]
     private static void CollectComputed(object node, List<ComputedEntry> computed)
     {
         if (node is Component component)
@@ -2341,10 +2341,6 @@ internal static class NodeTreeWalker
         }
     }
 
-    [UnconditionalSuppressMessage("Trimming", "IL2026",
-        Justification = "LocalStorage.Get<string> is safe: T is a concrete string, no JSON polymorphism. DevTools-only access path.")]
-    [UnconditionalSuppressMessage("AOT", "IL3050",
-        Justification = "LocalStorage.Get<string> is safe: T is a concrete string, no runtime codegen. DevTools-only access path.")]
     private static IReadOnlyList<LocalStorageEntry> ReadLocalStorage()
     {
         var keys = LocalStorage.Keys();
@@ -2356,17 +2352,9 @@ internal static class NodeTreeWalker
         var entries = new List<LocalStorageEntry>(keys.Count);
         foreach (var key in keys)
         {
-            // Read raw JSON from the engine via the public Get<string> — LocalStorage
-            // stores all values as JSON strings, so reading as string returns the raw JSON.
-            string value;
-            try
-            {
-                value = LocalStorage.Get<string>(key, "");
-            }
-            catch
-            {
-                value = "<unreadable>";
-            }
+            // The stored JSON as written. Deserializing it as a string (the old path) failed for every number,
+            // bool or object and showed them as empty.
+            string value = LocalStorage.ReadRaw(key) ?? "";
 
             entries.Add(new LocalStorageEntry
             {
@@ -2381,7 +2369,7 @@ internal static class NodeTreeWalker
     }
 
     [UnconditionalSuppressMessage("Trimming", "IL2075",
-        Justification = "Component subclass reflection surface preserved via TrimmerRoots.xml when CASCADE_DEVTOOLS is defined.")]
+        Justification = "Component state and control members are kept for trimmed DevTools builds by TrimmerRootAssembly items in Echostorm.Cascade.UI.targets.")]
     private static string? GetSignalValue(object node, string fieldName)
     {
         if (node is not Component component)
@@ -2408,7 +2396,7 @@ internal static class NodeTreeWalker
     }
 
     [UnconditionalSuppressMessage("Trimming", "IL2075",
-        Justification = "Component subclass reflection surface preserved via TrimmerRoots.xml when CASCADE_DEVTOOLS is defined.")]
+        Justification = "Component state and control members are kept for trimmed DevTools builds by TrimmerRootAssembly items in Echostorm.Cascade.UI.targets.")]
     private static bool SetSignalValue(object node, string fieldName, string newValue)
     {
         if (node is not Component component)

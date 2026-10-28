@@ -23,13 +23,9 @@ internal sealed class NavigationPersistence
     /// <summary>
     /// Saves the current navigation stack as a list of route paths with parameters.
     /// </summary>
-    [UnconditionalSuppressMessage("Trimming", "IL2026",
-        Justification = "Serializes simple DTO types (PersistedNavEntry) that are always safe.")]
-    [UnconditionalSuppressMessage("AOT", "IL3050",
-        Justification = "Serializes simple DTO types (PersistedNavEntry) that are always safe.")]
     public void Save(IReadOnlyList<PersistedNavEntry> stack)
     {
-        var json = JsonSerializer.Serialize(stack);
+        var json = JsonSerializer.Serialize([.. stack], PersistenceJsonContext.Default.ListPersistedNavEntry);
         storageEngine.Write(NavStateKey, json);
     }
 
@@ -37,9 +33,6 @@ internal sealed class NavigationPersistence
     /// Restores the navigation stack from persisted state. Returns an empty
     /// list if no state is saved, deserialization fails, or routes have changed.
     /// </summary>
-    [RequiresUnreferencedCode("Route resolution uses reflection to discover Component types with [Route] attributes.")]
-    [UnconditionalSuppressMessage("AOT", "IL3050",
-        Justification = "Deserializes simple DTO types (PersistedNavEntry) that are always safe.")]
     public List<PersistedNavEntry> Restore()
     {
         var json = storageEngine.Read(NavStateKey);
@@ -51,7 +44,7 @@ internal sealed class NavigationPersistence
         List<PersistedNavEntry>? persisted;
         try
         {
-            persisted = JsonSerializer.Deserialize<List<PersistedNavEntry>>(json);
+            persisted = JsonSerializer.Deserialize(json, PersistenceJsonContext.Default.ListPersistedNavEntry);
         }
         catch (JsonException)
         {

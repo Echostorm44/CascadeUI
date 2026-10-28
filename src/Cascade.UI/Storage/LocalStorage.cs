@@ -178,6 +178,13 @@ public static class LocalStorage
         Set(storageKey.Key, value, typeInfo);
     }
 
+    /// <summary>The stored JSON for <paramref name="key"/> as written, or null. For tooling that shows raw values.</summary>
+    internal static string? ReadRaw(string key)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        return engine.Read(key);
+    }
+
     /// <summary>
     /// Removes a key from storage.
     /// </summary>

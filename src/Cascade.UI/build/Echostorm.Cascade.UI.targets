@@ -323,4 +323,26 @@ System.IO.File.WriteAllText(OutputFile, sb.ToString());
              Text="Cascade UI: DevTools build in use. Run the app with CASCADE_MCP=1, then: cascade mcp tree" />
   </Target>
 
+  <!--
+    The DevTools surface reads components' fields and properties, and controls' IsDisabled, by
+    reflection (NodeTreeWalker, McpTools). A trimmed or Native AOT DevTools build keeps all of the
+    app's and Cascade.UI's members so that state is still there to read, and hands the generated
+    API index to the MCP api-index resource at module load. End-user builds are untouched.
+  -->
+  <PropertyGroup Condition="'$(CascadeDevTools)' == 'true'">
+    <DefineConstants>$(DefineConstants);CASCADE_API_INDEX</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(CascadeDevTools)' == 'true'">
+    <TrimmerRootAssembly Include="$(AssemblyName)" />
+    <TrimmerRootAssembly Include="Cascade.UI" />
+  </ItemGroup>
+
+  <!--
+    Routes come from the registrations Cascade.Generators emits; the reflection fallback (assembly
+    scan, Activator) is switched off for trimmed and Native AOT publishes so the trimmer drops it.
+  -->
+  <ItemGroup Condition="'$(PublishAot)' == 'true' OR '$(PublishTrimmed)' == 'true'">
+    <RuntimeHostConfigurationOption Include="Cascade.UI.Navigation.ReflectionRouting.IsSupported" Value="false" Trim="true" />
+  </ItemGroup>
+
 </Project>

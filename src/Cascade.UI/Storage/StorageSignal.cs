@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Text.Json.Serialization.Metadata;
 
 namespace Cascade.UI;
 
@@ -12,24 +13,44 @@ public static class StorageSignal
     /// Creates a reactive binding to a storage key identified by string.
     /// Reading <see cref="StorageSignal{T}.Value"/> in <c>Render()</c> subscribes
     /// to changes. Writing persists to storage and notifies subscribers.
+    /// Uses reflection-based JSON; for trimmed or Native AOT apps use the overload taking a <see cref="JsonTypeInfo{T}"/>.
     /// </summary>
     [RequiresUnreferencedCode("JSON serialization may require types that cannot be statically analyzed.")]
     [RequiresDynamicCode("JSON serialization may require runtime code generation.")]
     public static StorageSignal<T> Create<T>(string key, T fallback)
     {
         var initialValue = LocalStorage.Get(key, fallback);
-        var backing = new StorageSignalBacking<T>(key, initialValue, fallback);
+        var backing = new StorageSignalBacking<T>(key, initialValue, fallback, value => LocalStorage.Set(key, value));
         return new StorageSignal<T>(backing);
     }
 
     /// <summary>
     /// Creates a reactive binding to a typed <see cref="StorageKey{T}"/>.
+    /// Uses reflection-based JSON; for trimmed or Native AOT apps use the overload taking a <see cref="JsonTypeInfo{T}"/>.
     /// </summary>
     [RequiresUnreferencedCode("JSON serialization may require types that cannot be statically analyzed.")]
     [RequiresDynamicCode("JSON serialization may require runtime code generation.")]
     public static StorageSignal<T> Create<T>(StorageKey<T> key)
     {
         return Create(key.Key, key.Fallback);
+    }
+
+    /// <summary>
+    /// Creates a reactive binding to a storage key with source-generated JSON metadata
+    /// (<c>MyJsonContext.Default.Int32</c> and the like) — the trimming- and Native AOT-safe overload.
+    /// </summary>
+    public static StorageSignal<T> Create<T>(string key, T fallback, JsonTypeInfo<T> typeInfo)
+    {
+        ArgumentNullException.ThrowIfNull(typeInfo);
+        var initialValue = LocalStorage.Get(key, fallback, typeInfo);
+        var backing = new StorageSignalBacking<T>(key, initialValue, fallback, value => LocalStorage.Set(key, value, typeInfo));
+        return new StorageSignal<T>(backing);
+    }
+
+    /// <summary>Creates a reactive binding to a typed key with source-generated JSON metadata (trimming- and AOT-safe).</summary>
+    public static StorageSignal<T> Create<T>(StorageKey<T> key, JsonTypeInfo<T> typeInfo)
+    {
+        return Create(key.Key, key.Fallback, typeInfo);
     }
 }
 
@@ -53,8 +74,6 @@ public readonly struct StorageSignal<T>
     /// changes. Writing persists to <see cref="LocalStorage"/> and notifies all
     /// subscribers.
     /// </summary>
-    [UnconditionalSuppressMessage("Trimming", "IL2026", Justification = "StorageSignal is created via factory that carries the attribute.")]
-    [UnconditionalSuppressMessage("AOT", "IL3050", Justification = "StorageSignal is created via factory that carries the attribute.")]
     public T Value
     {
         get
@@ -70,7 +89,7 @@ public readonly struct StorageSignal<T>
             }
 
             backing.CurrentValue = value;
-            backing.PersistToStorage(value);
+            backing.Persist(value);
             SignalTracker.NotifyWrite(backing.Source);
         }
     }
@@ -78,28 +97,27 @@ public readonly struct StorageSignal<T>
 
 /// <summary>
 /// Backing store for a <see cref="StorageSignal{T}"/>. Holds the cached value,
-/// the storage key, and the reactive signal source. Shared by value since
-/// <see cref="StorageSignal{T}"/> is a readonly struct.
+/// the storage key, the reactive signal source, and how to persist a new value
+/// (decided by the factory: reflection JSON or source-generated metadata).
+/// Shared by value since <see cref="StorageSignal{T}"/> is a readonly struct.
 /// </summary>
 internal sealed class StorageSignalBacking<T>
 {
+    private readonly Action<T> persist;
+
     internal string Key { get; }
     internal T CurrentValue { get; set; }
     internal T Fallback { get; }
     internal SignalSource Source { get; }
 
-    internal StorageSignalBacking(string key, T initialValue, T fallback)
+    internal StorageSignalBacking(string key, T initialValue, T fallback, Action<T> persist)
     {
         Key = key;
         CurrentValue = initialValue;
         Fallback = fallback;
+        this.persist = persist;
         Source = new SignalSource($"StorageSignal<{typeof(T).Name}>({key})");
     }
 
-    [RequiresUnreferencedCode("JSON serialization may require types that cannot be statically analyzed.")]
-    [RequiresDynamicCode("JSON serialization may require runtime code generation.")]
-    internal void PersistToStorage(T value)
-    {
-        LocalStorage.Set(Key, value);
-    }
+    internal void Persist(T value) => persist(value);
 }

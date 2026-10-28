@@ -181,6 +181,131 @@ namespace TestApp
         await TUnit.Assertions.Assert.That(Has(generated, "typeof(")).IsTrue();
     }
 
+    // ── Runtime route table (module initializer) ──────────────────────
+
+    private const string RegistrationsStub = @"
+namespace Cascade.UI
+{
+    public static class GeneratedRegistrations
+    {
+        public static void RegisterRoute(string pattern, System.Type componentType,
+            System.Func<System.Collections.Generic.IReadOnlyDictionary<string, string>, Component>? create) { }
+        public static void RegisterApiIndex(string content) { }
+    }
+}
+";
+
+    [TUnit.Core.Test]
+    public async Task RouteTable_BindsTypedPropertiesWithoutReflection()
+    {
+        string source = StubTypes + RegistrationsStub + @"
+namespace TestApp
+{
+    public enum Tab { Info, Photos }
+
+    [Cascade.UI.Route(""/users/{id:int}"")]
+    public class UserPage : Cascade.UI.Component
+    {
+        public int Id { get; set; }
+        public Tab? Tab { get; set; }
+        public string Name { get; set; } = """";
+        public System.Guid Ticket { get; set; }
+        public int ReadOnly { get; }
+        public int InitOnly { get; init; }
+        protected override Cascade.UI.Node Render() => Cascade.UI.Node.Empty;
+    }
+}
+";
+        var (result, diagnostics) = RunGeneratorAndCompile(source);
+        var generated = GetGeneratedSource(result, "RouteTable.g.cs");
+
+        await TUnit.Assertions.Assert.That(generated).IsNotNull();
+        await TUnit.Assertions.Assert.That(Has(generated, "[global::System.Runtime.CompilerServices.ModuleInitializer]")).IsTrue();
+        await TUnit.Assertions.Assert.That(Has(generated, "typeof(global::TestApp.UserPage)")).IsTrue();
+        await TUnit.Assertions.Assert.That(Has(generated, "case \"ID\":")).IsTrue();
+        await TUnit.Assertions.Assert.That(Has(generated, "int.TryParse(")).IsTrue();
+        await TUnit.Assertions.Assert.That(Has(generated, "global::System.Enum.TryParse<global::TestApp.Tab>(")).IsTrue();
+        await TUnit.Assertions.Assert.That(Has(generated, "global::System.Guid.TryParse(")).IsTrue();
+        await TUnit.Assertions.Assert.That(Has(generated, "case \"NAME\":")).IsTrue();
+        await TUnit.Assertions.Assert.That(Has(generated, "READONLY")).IsFalse();
+        await TUnit.Assertions.Assert.That(Has(generated, "INITONLY")).IsFalse();
+        await TUnit.Assertions.Assert.That(string.Join("\n", diagnostics)).IsEqualTo("");
+    }
+
+    [TUnit.Core.Test]
+    public async Task RouteTable_StringConstructorGetsPathParametersInOrder()
+    {
+        string source = StubTypes + RegistrationsStub + @"
+namespace TestApp
+{
+    [Cascade.UI.Route(""/albums/{album}/photos/{photo}"")]
+    public class PhotoPage : Cascade.UI.Component
+    {
+        public PhotoPage(string album, string photo) { }
+        protected override Cascade.UI.Node Render() => Cascade.UI.Node.Empty;
+    }
+}
+";
+        var (result, diagnostics) = RunGeneratorAndCompile(source);
+        var generated = GetGeneratedSource(result, "RouteTable.g.cs");
+
+        await TUnit.Assertions.Assert.That(generated).IsNotNull();
+        await TUnit.Assertions.Assert.That(Has(generated,
+            "new global::TestApp.PhotoPage((parameters.TryGetValue(\"album\", out var argument0) ? argument0 : \"\"), " +
+            "(parameters.TryGetValue(\"photo\", out var argument1) ? argument1 : \"\"))")).IsTrue();
+        await TUnit.Assertions.Assert.That(string.Join("\n", diagnostics)).IsEqualTo("");
+    }
+
+    [TUnit.Core.Test]
+    public async Task RouteTable_SkipsComponentsGeneratedCodeCannotName()
+    {
+        string source = StubTypes + RegistrationsStub + @"
+namespace TestApp
+{
+    public class Shell
+    {
+        [Cascade.UI.Route(""/hidden"")]
+        private class HiddenPage : Cascade.UI.Component
+        {
+            protected override Cascade.UI.Node Render() => Cascade.UI.Node.Empty;
+        }
+    }
+
+    [Cascade.UI.Route(""/odd"")]
+    public class OddPage : Cascade.UI.Component
+    {
+        public OddPage(int count) { }
+        protected override Cascade.UI.Node Render() => Cascade.UI.Node.Empty;
+    }
+}
+";
+        var (result, diagnostics) = RunGeneratorAndCompile(source);
+        var generated = GetGeneratedSource(result, "RouteTable.g.cs");
+
+        await TUnit.Assertions.Assert.That(generated).IsNotNull();
+        await TUnit.Assertions.Assert.That(Has(generated, "HiddenPage")).IsFalse();
+        await TUnit.Assertions.Assert.That(Has(generated?.Replace("\r\n", "\n", StringComparison.Ordinal), "typeof(global::TestApp.OddPage),\n            null);")).IsTrue();
+        await TUnit.Assertions.Assert.That(string.Join("\n", diagnostics)).IsEqualTo("");
+    }
+
+    [TUnit.Core.Test]
+    public async Task RouteTable_NotEmittedWithoutRegistrationHook()
+    {
+        string source = StubTypes + @"
+namespace TestApp
+{
+    [Cascade.UI.Route(""/home"")]
+    public class HomePage : Cascade.UI.Component
+    {
+        protected override Cascade.UI.Node Render() => Cascade.UI.Node.Empty;
+    }
+}
+";
+        var result = RunGenerator(source);
+
+        await TUnit.Assertions.Assert.That(GetGeneratedSource(result, "RouteTable.g.cs")).IsNull();
+    }
+
     // ── Test infrastructure ───────────────────────────────────────────
 
     private static bool Has(string? source, string value)
@@ -188,9 +313,12 @@ namespace TestApp
         return source is not null && source.Contains(value, StringComparison.Ordinal);
     }
 
-    private static GeneratorRunResult RunGenerator(string source)
+    private static GeneratorRunResult RunGenerator(string source) => RunGeneratorAndCompile(source).Result;
+
+    /// <summary>Runs the generator and returns the errors from compiling the source plus everything it generated.</summary>
+    private static (GeneratorRunResult Result, List<string> Errors) RunGeneratorAndCompile(string source)
     {
-        var syntaxTree = CSharpSyntaxTree.ParseText(source);
+        var syntaxTree = CSharpSyntaxTree.ParseText(source, new CSharpParseOptions(LanguageVersion.Latest));
 
         var references = new List<MetadataReference>();
         foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
@@ -212,14 +340,19 @@ namespace TestApp
             "TestAssembly",
             new[] { syntaxTree },
             references,
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable));
 
         var generator = new CascadeGenerator();
-        GeneratorDriver driver = CSharpGeneratorDriver.Create(generator);
+        GeneratorDriver driver = CSharpGeneratorDriver.Create(
+            [generator.AsSourceGenerator()], parseOptions: (CSharpParseOptions)syntaxTree.Options);
         driver = driver.RunGeneratorsAndUpdateCompilation(
-            compilation, out _, out _);
+            compilation, out var output, out _);
 
-        return driver.GetRunResult().Results[0];
+        var errors = output.GetDiagnostics()
+            .Where(d => d.Severity == DiagnosticSeverity.Error)
+            .Select(d => d.ToString())
+            .ToList();
+        return (driver.GetRunResult().Results[0], errors);
     }
 
     private static string? GetGeneratedSource(GeneratorRunResult result, string hintName)

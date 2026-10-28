@@ -164,6 +164,32 @@ public class RouteTests
     }
 
     [Test]
+    public async Task Register_SameComponentTwice_KeepsOneRouteAndAddsTheFactory()
+    {
+        // An untrimmed app finds a generated route again in its assembly scan.
+        var resolver = CreateResolver();
+        resolver.Register(typeof(HomeRoutePage), "/home");
+        resolver.Register(typeof(HomeRoutePage), "/home", _ => new HomeRoutePage());
+
+        var match = resolver.Resolve("/home");
+        await Assert.That(resolver.RouteCount).IsEqualTo(1);
+        await Assert.That(match!.Factory).IsNotNull();
+    }
+
+    [Test]
+    public async Task Resolve_CarriesTheGeneratedFactory()
+    {
+        var resolver = CreateResolver();
+        resolver.Register(typeof(TypedUserRoutePage), "/users/{id:int}", parameters =>
+            new TypedUserRoutePage { Id = int.Parse(parameters["id"], System.Globalization.CultureInfo.InvariantCulture) });
+
+        var match = resolver.Resolve("/users/7");
+        var page = match!.Factory!(match.Parameters);
+
+        await Assert.That(((TypedUserRoutePage)page).Id).IsEqualTo(7);
+    }
+
+    [Test]
     public async Task Resolve_CaseInsensitive()
     {
         var resolver = CreateResolver();

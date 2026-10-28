@@ -1,4 +1,3 @@
-using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 
 namespace Cascade.UI;
@@ -23,13 +22,9 @@ internal sealed class StatePersistenceEngine
     // ── Window State ──────────────────────────────────────────────
 
     /// <summary>Persists the window position, size, and maximized state.</summary>
-    [UnconditionalSuppressMessage("Trimming", "IL2026",
-        Justification = "Serializes simple DTO (PersistedWindowState) with primitive properties.")]
-    [UnconditionalSuppressMessage("AOT", "IL3050",
-        Justification = "Serializes simple DTO (PersistedWindowState) with primitive properties.")]
     public void SaveWindowState(PersistedWindowState state)
     {
-        var json = JsonSerializer.Serialize(state);
+        var json = JsonSerializer.Serialize(state, PersistenceJsonContext.Default.PersistedWindowState);
         storageEngine.Write(WindowStateKey, json);
     }
 
@@ -37,10 +32,6 @@ internal sealed class StatePersistenceEngine
     /// Restores the window state from storage. Returns null if no state
     /// is saved or deserialization fails.
     /// </summary>
-    [UnconditionalSuppressMessage("Trimming", "IL2026",
-        Justification = "Deserializes simple DTO (PersistedWindowState) with primitive properties.")]
-    [UnconditionalSuppressMessage("AOT", "IL3050",
-        Justification = "Deserializes simple DTO (PersistedWindowState) with primitive properties.")]
     public PersistedWindowState? RestoreWindowState()
     {
         string? json = storageEngine.Read(WindowStateKey);
@@ -51,7 +42,7 @@ internal sealed class StatePersistenceEngine
 
         try
         {
-            return JsonSerializer.Deserialize<PersistedWindowState>(json);
+            return JsonSerializer.Deserialize(json, PersistenceJsonContext.Default.PersistedWindowState);
         }
         catch (JsonException)
         {
@@ -62,14 +53,10 @@ internal sealed class StatePersistenceEngine
     // ── Scroll State ──────────────────────────────────────────────
 
     /// <summary>Persists a scroll position by key.</summary>
-    [UnconditionalSuppressMessage("Trimming", "IL2026",
-        Justification = "Serializes simple DTO (ScrollState) with primitive properties.")]
-    [UnconditionalSuppressMessage("AOT", "IL3050",
-        Justification = "Serializes simple DTO (ScrollState) with primitive properties.")]
     public void SaveScrollPosition(string key, float x, float y)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
-        string json = JsonSerializer.Serialize(new ScrollState { X = x, Y = y });
+        string json = JsonSerializer.Serialize(new ScrollState { X = x, Y = y }, PersistenceJsonContext.Default.ScrollState);
         storageEngine.Write(ScrollStatePrefix + key, json);
     }
 
@@ -77,10 +64,6 @@ internal sealed class StatePersistenceEngine
     /// Restores a scroll position by key. Returns null if no state is
     /// saved or deserialization fails.
     /// </summary>
-    [UnconditionalSuppressMessage("Trimming", "IL2026",
-        Justification = "Deserializes simple DTO (ScrollState) with primitive properties.")]
-    [UnconditionalSuppressMessage("AOT", "IL3050",
-        Justification = "Deserializes simple DTO (ScrollState) with primitive properties.")]
     public (float x, float y)? RestoreScrollPosition(string key)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
@@ -92,7 +75,7 @@ internal sealed class StatePersistenceEngine
 
         try
         {
-            var state = JsonSerializer.Deserialize<ScrollState>(json);
+            var state = JsonSerializer.Deserialize(json, PersistenceJsonContext.Default.ScrollState);
             if (state != null)
             {
                 return (state.X, state.Y);
@@ -156,3 +139,12 @@ internal sealed class ScrollState
     public float X { get; set; }
     public float Y { get; set; }
 }
+
+/// <summary>
+/// Source-generated JSON for the framework's own persisted state: no reflection, so window, scroll and navigation
+/// state survive Native AOT, where reflection-based serialization is disabled.
+/// </summary>
+[System.Text.Json.Serialization.JsonSerializable(typeof(PersistedWindowState))]
+[System.Text.Json.Serialization.JsonSerializable(typeof(ScrollState))]
+[System.Text.Json.Serialization.JsonSerializable(typeof(List<PersistedNavEntry>))]
+internal sealed partial class PersistenceJsonContext : System.Text.Json.Serialization.JsonSerializerContext;

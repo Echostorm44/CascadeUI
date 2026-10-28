@@ -15,6 +15,13 @@ public sealed class InstallManifest
     public Collection<string> RegisteredServices { get; init; } = [];
     public Collection<string> RegistryKeys { get; init; } = [];
 
+    /// <summary>
+    /// Single registry values written into keys the app does not own (another app's file type, say), so
+    /// uninstall removes the value and leaves the key: <c>HKCU\path|name</c>, or <c>HKCU\path|name|expected</c>
+    /// to remove it only while it still holds <c>expected</c>. An empty name is the key's default value.
+    /// </summary>
+    public Collection<string> RegistryValues { get; init; } = [];
+
     public void AddFile(string path)
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
@@ -37,6 +44,12 @@ public sealed class InstallManifest
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         RegistryKeys.Add(key);
+    }
+
+    public void AddRegistryValue(string value)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(value);
+        RegistryValues.Add(value);
     }
 
     public string ToJson()

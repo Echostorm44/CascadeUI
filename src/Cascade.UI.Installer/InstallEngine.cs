@@ -301,9 +301,14 @@ public sealed class InstallEngine
         {
             string handler = assoc.HandlerExe is { Length: > 0 } h ? paths.Resolve(h) : paths.Resolve(config.AppName + ".exe");
             string? icon = assoc.IconPath is { Length: > 0 } ip ? ToShellIcon(paths.Resolve(ip)) : appIconReg;
-            foreach (string key in Platforms.WindowsIntegration.RegisterFileAssociation(config.AppName, assoc, handler, icon))
+            var registration = Platforms.WindowsIntegration.RegisterFileAssociation(config.AppName, assoc, handler, icon);
+            foreach (string key in registration.Keys)
             {
                 manifest.AddRegistryKey(key);
+            }
+            foreach (string value in registration.Values)
+            {
+                manifest.AddRegistryValue(value);
             }
         }
 
@@ -377,6 +382,10 @@ public sealed class InstallEngine
         foreach (string lnk in manifest.CreatedShortcuts)
         {
             Platforms.WindowsIntegration.RemoveShortcut(lnk);
+        }
+        foreach (string value in manifest.RegistryValues)
+        {
+            Platforms.WindowsIntegration.DeleteHkcuValue(value);
         }
         foreach (string key in manifest.RegistryKeys)
         {

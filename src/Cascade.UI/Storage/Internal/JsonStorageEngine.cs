@@ -13,16 +13,23 @@ internal sealed class JsonStorageEngine : IStorageEngine
 {
     private readonly Lock syncLock = new();
     private readonly string filePath;
+    private readonly string? legacyFilePath;
     private Dictionary<string, JsonElement>? cache;
 
     internal JsonStorageEngine()
-        : this(GetDefaultFilePath())
+        : this(GetDefaultFilePath(), GetLegacySharedFilePath())
     {
     }
 
-    internal JsonStorageEngine(string filePath)
+    /// <param name="filePath">Where this app's values live.</param>
+    /// <param name="legacyFilePath">
+    /// Read once, when <paramref name="filePath"/> does not exist yet, so an app keeps what it stored before
+    /// storage was per app. Never written or deleted (other apps may still migrate from it).
+    /// </param>
+    internal JsonStorageEngine(string filePath, string? legacyFilePath = null)
     {
         this.filePath = filePath;
+        this.legacyFilePath = legacyFilePath;
     }
 
     public string? Read(string key)
@@ -124,15 +131,21 @@ internal sealed class JsonStorageEngine : IStorageEngine
             return;
         }
 
+        string source = filePath;
         if (!File.Exists(filePath))
         {
-            cache = new Dictionary<string, JsonElement>();
-            return;
+            if (legacyFilePath is null || !File.Exists(legacyFilePath))
+            {
+                cache = new Dictionary<string, JsonElement>();
+                return;
+            }
+            // First run since storage became per app: start from what the shared file held.
+            source = legacyFilePath;
         }
 
         try
         {
-            var json = File.ReadAllText(filePath);
+            var json = File.ReadAllText(source);
             using var document = JsonDocument.Parse(json);
             cache = new Dictionary<string, JsonElement>();
             foreach (var property in document.RootElement.EnumerateObject())
@@ -161,7 +174,22 @@ internal sealed class JsonStorageEngine : IStorageEngine
         writer.Commit();
     }
 
+    /// <summary>
+    /// This app's file: <c>…/CascadeUI/&lt;app&gt;/storage.json</c> under the platform's per-user data folder, so two
+    /// Cascade apps never share keys. Not the app's own folder: an uninstall or update replaces that.
+    /// </summary>
     private static string GetDefaultFilePath()
+    {
+        string appName = System.Reflection.Assembly.GetEntryAssembly()?.GetName().Name is { Length: > 0 } name
+            ? name
+            : "App";
+        return System.IO.Path.Combine(GetDataRoot(), "CascadeUI", appName, "storage.json");
+    }
+
+    /// <summary>The single file every Cascade app shared before storage was per app.</summary>
+    private static string GetLegacySharedFilePath() => System.IO.Path.Combine(GetDataRoot(), "CascadeUI", "storage.json");
+
+    private static string GetDataRoot()
     {
         string baseDir;
 
@@ -185,6 +213,6 @@ internal sealed class JsonStorageEngine : IStorageEngine
                     "share");
         }
 
-        return System.IO.Path.Combine(baseDir, "CascadeUI", "storage.json");
+        return baseDir;
     }
 }

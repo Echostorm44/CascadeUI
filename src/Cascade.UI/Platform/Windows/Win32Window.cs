@@ -44,6 +44,10 @@ internal sealed class Win32Window : IDisposable
     private bool frameless;
     private bool framelessResizable;
     private bool framelessApplied; // what the native window currently has
+    // Maximize() before the window is first shown (e.g. restoring saved state in OnMounted): the first Show()
+    // opens it maximized instead of normal, which would otherwise undo the request.
+    private bool maximizeOnShow;
+    private bool shown;
 
     // Smallest client size the user can resize to, in logical pixels (0 = no limit); applied per
     // DPI in WM_GETMINMAXINFO.
@@ -448,7 +452,9 @@ internal sealed class Win32Window : IDisposable
             return;
         }
 
-        Win32.ShowWindow(handle, Win32.SW_SHOWNORMAL);
+        Win32.ShowWindow(handle, maximizeOnShow ? Win32.SW_SHOWMAXIMIZED : Win32.SW_SHOWNORMAL);
+        maximizeOnShow = false;
+        shown = true;
         Win32.UpdateWindow(handle);
     }
 
@@ -460,6 +466,7 @@ internal sealed class Win32Window : IDisposable
         }
 
         Win32.ShowWindow(handle, Win32.SW_SHOWMAXIMIZED);
+        shown = true;
     }
 
     internal void ShowMinimized()
@@ -470,6 +477,7 @@ internal sealed class Win32Window : IDisposable
         }
 
         Win32.ShowWindow(handle, Win32.SW_SHOWMINIMIZED);
+        shown = true;
     }
 
     internal void Hide()
@@ -499,6 +507,12 @@ internal sealed class Win32Window : IDisposable
             return;
         }
 
+        if (!shown)
+        {
+            maximizeOnShow = true;
+            return;
+        }
+
         Win32.ShowWindow(handle, Win32.SW_SHOWMAXIMIZED);
     }
 
@@ -509,6 +523,7 @@ internal sealed class Win32Window : IDisposable
             return;
         }
 
+        maximizeOnShow = false;
         Win32.ShowWindow(handle, Win32.SW_RESTORE);
     }
 

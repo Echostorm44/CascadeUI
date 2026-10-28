@@ -58,6 +58,21 @@ public class PointerGestureDispatchTests
     }
 
     [Test]
+    public async Task PointerDownAndUp_SayWhichButton()
+    {
+        var presses = new List<NativeMouseButton>();
+        var (root, _) = NestedSurface(new Column(children: [])
+            .OnPointerDown(e => presses.Add(e.Button))
+            .OnPointerUp(e => presses.Add(e.Button)));
+        dispatcher.SetRoot(root);
+
+        dispatcher.HandleMouseEvent(new NativeMouseEvent { X = 200, Y = 200, Type = NativeMouseEventType.MouseDown, Button = NativeMouseButton.Middle });
+        dispatcher.HandleMouseEvent(new NativeMouseEvent { X = 200, Y = 200, Type = NativeMouseEventType.MouseUp, Button = NativeMouseButton.Middle });
+
+        await Assert.That(presses).IsEquivalentTo([NativeMouseButton.Middle, NativeMouseButton.Middle]);
+    }
+
+    [Test]
     public async Task PointerMove_ReportsDeltaAndANodeRelativePosition()
     {
         var moves = new List<PointerEventArgs>();

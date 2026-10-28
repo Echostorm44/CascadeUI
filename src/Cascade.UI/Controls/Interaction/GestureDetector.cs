@@ -32,6 +32,12 @@ public record PointerEventArgs
     /// <summary>Movement delta since the last pointer event.</summary>
     public required Point Delta { get; init; }
 
+    /// <summary>
+    /// The mouse button that went down or up (<c>OnPointerDown</c> / <c>OnPointerUp</c>): left, right or middle.
+    /// <see cref="NativeMouseButton.None"/> for moves.
+    /// </summary>
+    public NativeMouseButton Button { get; init; }
+
     /// <summary>Pressure level (1.0 = normal, 0.0-1.0 range for stylus).</summary>
     public float Pressure { get; init; } = 1f;
 

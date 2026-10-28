@@ -77,7 +77,10 @@ public static class IconButtonExtensions
         return button;
     }
 
-    /// <summary>Sets the visual variant (e.g. "outline", "ghost", "subtle").</summary>
+    /// <summary>
+    /// Sets the visual variant. "ghost" draws only the glyph at rest, with the hover and press
+    /// highlights (for toolbars and controls over media); any other value draws the default filled disc.
+    /// </summary>
     public static IconButton Variant(this IconButton button, string variant)
     {
         button.VariantName = variant;

@@ -6244,9 +6244,15 @@ internal sealed partial class NodePainter
         Rect paintBounds = MathF.Abs(scale - 1f) > 0.001f
             ? ScaleBounds(bounds, scale) : bounds;
 
-        // Background with interpolated opacity
+        // Background with interpolated opacity. A "ghost" button has none at rest — just the glyph —
+        // and shows itself only through the hover and press overlays below (toolbars, overlays on media).
+        bool ghost = ib.VariantName == "ghost";
         float bgOpacity = LerpF(1f, bt.Disabled.BackgroundOpacity ?? 0.4f, disabledT);
-        if (bgOpacity < 1f)
+        if (ghost)
+        {
+            // No resting fill.
+        }
+        else if (bgOpacity < 1f)
         {
             using var _ = ctx.PushOpacity(bgOpacity);
             ctx.DrawRect(paintBounds, theme.Colors.SurfaceAlt, radius: radius);

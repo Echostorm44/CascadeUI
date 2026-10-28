@@ -83,7 +83,7 @@
   <!-- Overridable so a local pack can build against a local Etch package
        (-p:EtchPackageVersion=0.1.0-alpha.11-local.1) without editing this file. -->
   <PropertyGroup>
-    <EtchPackageVersion Condition="'$(EtchPackageVersion)' == ''">0.1.0-alpha.10</EtchPackageVersion>
+    <EtchPackageVersion Condition="'$(EtchPackageVersion)' == ''">0.1.0-alpha.11</EtchPackageVersion>
   </PropertyGroup>
   <ItemGroup Condition="'$(UseEtchPackage)' == 'true'">
     <PackageReference Include="Echostorm.Etch" Version="$(EtchPackageVersion)" PrivateAssets="none" />

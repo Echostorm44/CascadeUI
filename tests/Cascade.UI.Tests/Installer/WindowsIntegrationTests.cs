@@ -113,7 +113,7 @@ public sealed class WindowsIntegrationTests
         try
         {
             var assoc = new FileAssociation { Extension = ext, Description = "Cascade Test File", MimeType = "application/x-cuit" };
-            IReadOnlyList<string> keys = WindowsIntegration.RegisterFileAssociation("CascadeUITestApp", assoc, @"C:\App\App.exe", null);
+            var registration = WindowsIntegration.RegisterFileAssociation("CascadeUITestApp", assoc, @"C:\App\App.exe", null);
 
             using (RegistryKey? extKey = Registry.CurrentUser.OpenSubKey(@"Software\Classes\" + ext))
             {
@@ -125,11 +125,20 @@ public sealed class WindowsIntegrationTests
                 await Assert.That((cmd!.GetValue(null) as string)!.Contains("App.exe", StringComparison.Ordinal)).IsTrue();
             }
 
-            foreach (string key in keys)
+            foreach (string value in registration.Values)
+            {
+                WindowsIntegration.DeleteHkcuValue(value);
+            }
+            foreach (string key in registration.Keys)
             {
                 WindowsIntegration.DeleteHkcuKey(key);
             }
-            await Assert.That(Registry.CurrentUser.OpenSubKey(@"Software\Classes\" + ext)).IsNull();
+            // The extension key is shared with other apps and stays; everything this app wrote in it is gone.
+            using (RegistryKey? extKey = Registry.CurrentUser.OpenSubKey(@"Software\Classes\" + ext))
+            {
+                await Assert.That(extKey!.GetValue(null)).IsNull();
+                await Assert.That(extKey.GetValue("Content Type")).IsNull();
+            }
             await Assert.That(Registry.CurrentUser.OpenSubKey(@"Software\Classes\" + progId)).IsNull();
         }
         finally
@@ -262,6 +271,142 @@ public sealed class WindowsIntegrationTests
             {
                 Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\SystemFileAssociations\" + ext, throwOnMissingSubKey: false);
             }
+        }
+    }
+    // A unique extension per test, so nothing real on the machine is touched.
+    private static string TestExtension() => ".cascadetest" + Guid.NewGuid().ToString("N")[..8];
+
+    [Test]
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public async Task FileAssociation_UninstallLeavesOtherAppsEntriesForTheType()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        string ext = TestExtension();
+        string extKey = @"Software\Classes\" + ext;
+        try
+        {
+            // Another app already handles the type: it is the default and in the Open with list.
+            using (RegistryKey key = Registry.CurrentUser.CreateSubKey(extKey))
+            {
+                key.SetValue(null, "OtherApp.File");
+            }
+            using (RegistryKey openWith = Registry.CurrentUser.CreateSubKey(extKey + @"\OpenWithProgids"))
+            {
+                openWith.SetValue("OtherApp.File", Array.Empty<byte>(), RegistryValueKind.None);
+            }
+
+            var assoc = new FileAssociation { Extension = ext, Description = "Test file" };
+            var registration = WindowsIntegration.RegisterFileAssociation("CascadeTestApp", assoc, @"C:\nope\CascadeTestApp.exe", null);
+            string progId = "CascadeTestApp." + ext.TrimStart('.');
+
+            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(extKey)!)
+            {
+                await Assert.That(key.GetValue(null) as string).IsEqualTo("OtherApp.File").Because("the other app's default was replaced");
+            }
+            using (RegistryKey openWith = Registry.CurrentUser.OpenSubKey(extKey + @"\OpenWithProgids")!)
+            {
+                await Assert.That(openWith.GetValueNames()).Contains(progId);
+            }
+
+            foreach (string value in registration.Values)
+            {
+                WindowsIntegration.DeleteHkcuValue(value);
+            }
+            foreach (string key in registration.Keys)
+            {
+                WindowsIntegration.DeleteHkcuKey(key);
+            }
+
+            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(extKey)!)
+            {
+                await Assert.That(key).IsNotNull().Because("uninstall deleted the shared extension key");
+                await Assert.That(key.GetValue(null) as string).IsEqualTo("OtherApp.File");
+            }
+            using (RegistryKey openWith = Registry.CurrentUser.OpenSubKey(extKey + @"\OpenWithProgids")!)
+            {
+                await Assert.That(openWith.GetValueNames()).Contains("OtherApp.File");
+                await Assert.That(openWith.GetValueNames()).DoesNotContain(progId);
+            }
+            await Assert.That(Registry.CurrentUser.OpenSubKey(@"Software\Classes\" + progId)).IsNull();
+        }
+        finally
+        {
+            Registry.CurrentUser.DeleteSubKeyTree(extKey, throwOnMissingSubKey: false);
+            Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\CascadeTestApp." + ext.TrimStart('.'), throwOnMissingSubKey: false);
+        }
+    }
+
+    [Test]
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public async Task FileAssociation_OnAnUnclaimedType_BecomesDefault_AndUninstallClearsIt()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        string ext = TestExtension();
+        string extKey = @"Software\Classes\" + ext;
+        try
+        {
+            var assoc = new FileAssociation { Extension = ext, Description = "Test file" };
+            var registration = WindowsIntegration.RegisterFileAssociation("CascadeTestApp", assoc, @"C:\nope\CascadeTestApp.exe", null);
+
+            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(extKey)!)
+            {
+                await Assert.That(key.GetValue(null) as string).IsEqualTo("CascadeTestApp." + ext.TrimStart('.'));
+            }
+
+            foreach (string value in registration.Values)
+            {
+                WindowsIntegration.DeleteHkcuValue(value);
+            }
+
+            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(extKey)!)
+            {
+                await Assert.That(key.GetValue(null)).IsNull();
+            }
+        }
+        finally
+        {
+            Registry.CurrentUser.DeleteSubKeyTree(extKey, throwOnMissingSubKey: false);
+            Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\CascadeTestApp." + ext.TrimStart('.'), throwOnMissingSubKey: false);
+        }
+    }
+
+    [Test]
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public async Task DeleteHkcuKey_NeverDeletesAWholeExtensionKey()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        string ext = TestExtension();
+        string extKey = @"Software\Classes\" + ext;
+        try
+        {
+            using (RegistryKey key = Registry.CurrentUser.CreateSubKey(extKey + @"\OpenWithProgids"))
+            {
+                key.SetValue("OtherApp.File", "");
+            }
+
+            // What a manifest written by an older installer recorded.
+            WindowsIntegration.DeleteHkcuKey(@"HKEY_CURRENT_USER\" + extKey);
+
+            await Assert.That(Registry.CurrentUser.OpenSubKey(extKey + @"\OpenWithProgids")).IsNotNull();
+            await Assert.That(WindowsIntegration.IsSharedExtensionKey(@"Software\Classes\.jpg")).IsTrue();
+            await Assert.That(WindowsIntegration.IsSharedExtensionKey(@"Software\Classes\.jpg\OpenWithProgids")).IsFalse();
+            await Assert.That(WindowsIntegration.IsSharedExtensionKey(@"Software\Classes\MyApp.jpg")).IsFalse();
+        }
+        finally
+        {
+            Registry.CurrentUser.DeleteSubKeyTree(extKey, throwOnMissingSubKey: false);
         }
     }
 }

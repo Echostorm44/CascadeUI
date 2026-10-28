@@ -6,6 +6,9 @@ using IOPath = System.IO.Path;
 
 namespace Cascade.UI.Installer.Platforms;
 
+/// <summary>What a file association wrote: keys the app owns, and single values in keys it shares.</summary>
+internal sealed record FileAssociationRegistration(IReadOnlyList<string> Keys, IReadOnlyList<string> Values);
+
 /// <summary>
 /// Real Windows shell integration used by <see cref="InstallEngine"/>: creates <c>.lnk</c> shortcuts
 /// via the shell's <c>IShellLink</c> COM object (source-generated COM, AOT-clean) and writes/removes
@@ -177,8 +180,14 @@ internal static partial class WindowsIntegration
     /// <summary>Tells Explorer that file associations changed so new icons/handlers take effect immediately.</summary>
     public static void NotifyAssociationsChanged() => SHChangeNotify(ShcneAssocChanged, 0, IntPtr.Zero, IntPtr.Zero);
 
-    /// <summary>Registers a per-user file-type association under HKCU\Software\Classes. Returns the root keys created.</summary>
-    public static IReadOnlyList<string> RegisterFileAssociation(string appName, FileAssociation assoc, string handlerExe, string? iconPath)
+    /// <summary>
+    /// Registers a per-user file-type association under HKCU\Software\Classes. The app's ProgID key is its own
+    /// (<see cref="FileAssociationRegistration.Keys"/>, removed whole on uninstall). The extension key is shared
+    /// with every other app that handles the type, so only single values are written there
+    /// (<see cref="FileAssociationRegistration.Values"/>): the app joins the type's Open with list, and becomes
+    /// its default handler and content type only where none is set — never replacing another app's.
+    /// </summary>
+    public static FileAssociationRegistration RegisterFileAssociation(string appName, FileAssociation assoc, string handlerExe, string? iconPath)
     {
         ArgumentException.ThrowIfNullOrEmpty(appName);
         ArgumentNullException.ThrowIfNull(assoc);
@@ -186,14 +195,25 @@ internal static partial class WindowsIntegration
 
         string ext = assoc.Extension.StartsWith('.') ? assoc.Extension : "." + assoc.Extension;
         string progId = appName + "." + ext.TrimStart('.');
+        var values = new List<string>();
 
         using (RegistryKey extKey = Registry.CurrentUser.CreateSubKey(ClassesRoot + ext))
         {
-            extKey.SetValue(null, progId);
-            if (assoc.MimeType is { Length: > 0 } mime)
+            if (extKey.GetValue(null) is not string { Length: > 0 })
+            {
+                extKey.SetValue(null, progId);
+                values.Add(ValueRecord(ClassesRoot + ext, "", progId));
+            }
+            if (assoc.MimeType is { Length: > 0 } mime && extKey.GetValue("Content Type") is not string { Length: > 0 })
             {
                 extKey.SetValue("Content Type", mime);
+                values.Add(ValueRecord(ClassesRoot + ext, "Content Type", mime));
             }
+        }
+        using (RegistryKey openWith = Registry.CurrentUser.CreateSubKey(ClassesRoot + ext + @"\OpenWithProgids"))
+        {
+            openWith.SetValue(progId, Array.Empty<byte>(), RegistryValueKind.None);
+            values.Add(ValueRecord(ClassesRoot + ext + @"\OpenWithProgids", progId, null));
         }
         using (RegistryKey progKey = Registry.CurrentUser.CreateSubKey(ClassesRoot + progId))
         {
@@ -209,7 +229,42 @@ internal static partial class WindowsIntegration
             cmdKey.SetValue(null, $"\"{handlerExe}\" \"%1\"");
         }
 
-        return [HkcuPrefix + ClassesRoot + ext, HkcuPrefix + ClassesRoot + progId];
+        return new FileAssociationRegistration([HkcuPrefix + ClassesRoot + progId], values);
+    }
+
+    // "HKEY_CURRENT_USER\path|name" or "...|name|expected": see InstallManifest.RegistryValues.
+    private static string ValueRecord(string subKey, string name, string? expected) =>
+        expected is null ? $"{HkcuPrefix}{subKey}|{name}" : $"{HkcuPrefix}{subKey}|{name}|{expected}";
+
+    /// <summary>
+    /// Removes one value recorded by <see cref="RegisterFileAssociation"/> (or any <c>path|name[|expected]</c>
+    /// record), leaving the key and everything else in it. With an expected value, removes it only while it still
+    /// holds that value — another app may have taken the default since.
+    /// </summary>
+    public static void DeleteHkcuValue(string record)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(record);
+        string[] parts = record.Split('|');
+        if (parts.Length < 2 || !parts[0].StartsWith(HkcuPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+        try
+        {
+            using RegistryKey? key = Registry.CurrentUser.OpenSubKey(parts[0][HkcuPrefix.Length..], writable: true);
+            if (key is null)
+            {
+                return;
+            }
+            if (parts.Length >= 3 && !string.Equals(key.GetValue(parts[1]) as string, parts[2], StringComparison.Ordinal))
+            {
+                return;
+            }
+            key.DeleteValue(parts[1], throwOnMissingValue: false);
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 
     /// <summary>Registers a per-user URL protocol handler (e.g. <c>myapp://</c>). Returns the root key created.</summary>
@@ -291,11 +346,20 @@ internal static partial class WindowsIntegration
         return keys;
     }
 
-    /// <summary>Deletes an HKCU registry key tree recorded in the install manifest.</summary>
+    /// <summary>
+    /// Deletes an HKCU registry key tree recorded in the install manifest. A file extension's key
+    /// (<c>Software\Classes\.ext</c>) is never deleted whole: other apps keep their Open with entries and
+    /// settings there. Manifests from installers before value-level records listed it; skipping it leaves at most
+    /// a default value naming a ProgID that is gone, which Windows ignores.
+    /// </summary>
     public static void DeleteHkcuKey(string fullKeyPath)
     {
         ArgumentException.ThrowIfNullOrEmpty(fullKeyPath);
         if (!fullKeyPath.StartsWith(HkcuPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+        if (IsSharedExtensionKey(fullKeyPath[HkcuPrefix.Length..]))
         {
             return;
         }
@@ -307,6 +371,13 @@ internal static partial class WindowsIntegration
         {
         }
     }
+
+    // Software\Classes\.ext itself (not a key below it).
+    internal static bool IsSharedExtensionKey(string subKey) =>
+        subKey.StartsWith(ClassesRoot, StringComparison.OrdinalIgnoreCase)
+        && subKey.Length > ClassesRoot.Length
+        && subKey[ClassesRoot.Length] == '.'
+        && subKey.IndexOf('\\', ClassesRoot.Length) < 0;
 
     private static IEnumerable<string> ContextTargets(ContextMenuTarget target) => target switch
     {

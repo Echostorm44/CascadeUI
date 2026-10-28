@@ -304,7 +304,7 @@ internal static class McpTools
     /// (The layout data's A11yDisabled is unpopulated today; WP-3515 note.)
     /// </summary>
     [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2075",
-        Justification = "Control reflection surface preserved via TrimmerRoots.xml when CASCADE_DEVTOOLS is defined.")]
+        Justification = "Component state and control members are kept for trimmed DevTools builds by TrimmerRootAssembly items in Echostorm.Cascade.UI.targets.")]
     private static bool IsNodeDisabled(object node)
     {
         var prop = node.GetType().GetProperty(

@@ -230,8 +230,6 @@ public partial class Navigator : Component, INavigator
     }
 
     /// <inheritdoc/>
-    [UnconditionalSuppressMessage("Trimming", "IL2026", Justification = "Route resolution requires reflection for [Route] attribute scanning.")]
-    [UnconditionalSuppressMessage("Trimming", "IL2067", Justification = "Route-resolved types are discovered via reflection and always have public constructors.")]
     public void Navigate(string path)
     {
         var resolver = Navigation.SharedRouteResolver;
@@ -241,9 +239,24 @@ public partial class Navigator : Component, INavigator
             return;
         }
 
+        Component instance;
+        if (match.Factory is not null)
+        {
+            instance = match.Factory(match.Parameters);
+        }
+        else if (ReflectionRouting.IsSupported)
+        {
+            instance = CreateComponentFromRoute(match.ComponentType, match.Parameters);
+        }
+        else
+        {
+            throw new InvalidOperationException(
+                $"Route '{path}' resolved to {match.ComponentType.Name}, which has no generated factory and reflection is off " +
+                "in trimmed builds. Give it a public parameterless constructor, or one taking a string per route parameter.");
+        }
+
         CaptureOutgoingState();
 
-        var instance = CreateComponentFromRoute(match.ComponentType, match.Parameters);
         var args = match.Parameters.Values.Cast<object>().ToArray();
         var entry = new NavigationEntry(match.ComponentType, instance, args);
         stack.Push(entry);
@@ -457,10 +470,11 @@ public partial class Navigator : Component, INavigator
         return component;
     }
 
-    [UnconditionalSuppressMessage("Trimming", "IL2067", Justification = "Route-resolved types are discovered via reflection and always have public constructors.")]
-    [UnconditionalSuppressMessage("Trimming", "IL2070", Justification = "Route-resolved component types are discovered via reflection and kept; their ctors/properties are preserved.")]
-    [UnconditionalSuppressMessage("Trimming", "IL2072", Justification = "Route-resolved component types are discovered via reflection and kept.")]
-    [UnconditionalSuppressMessage("Trimming", "IL2075", Justification = "Route parameter binding reflects over the resolved component's public properties.")]
+    /// <summary>
+    /// The reflection fallback for routes without a generated factory: the same construction and
+    /// parameter binding the generator emits, done through <see cref="Activator"/> and property reflection.
+    /// </summary>
+    [RequiresUnreferencedCode("Constructs the route's component and binds its properties through reflection.")]
     internal static Component CreateComponentFromRoute(Type componentType, IReadOnlyDictionary<string, string> parameters)
     {
         object? instance;
@@ -492,7 +506,7 @@ public partial class Navigator : Component, INavigator
         return component;
     }
 
-    [UnconditionalSuppressMessage("Trimming", "IL2075", Justification = "Route parameter binding reflects over the resolved component's public properties.")]
+    [RequiresUnreferencedCode("Binds route parameters to the component's properties through reflection.")]
     private static void BindRouteParameters(Component component, IReadOnlyDictionary<string, string> parameters)
     {
         var type = component.GetType();

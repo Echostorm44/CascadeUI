@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Reflection.Metadata;
 
@@ -28,6 +29,15 @@ internal static class MetadataUpdateReceiver
 {
     private static readonly List<Action<string[]>> updateHandlers = [];
     private static int appliedDeltaCount;
+
+    /// <summary>
+    /// <see cref="MetadataUpdater.IsSupported"/> under its own switch name, which the SDK turns off for
+    /// trimmed and Native AOT publishes. Declared here so the trimmer also treats it as the guard for
+    /// the reflection that finds the assembly to update.
+    /// </summary>
+    [FeatureSwitchDefinition("System.Reflection.Metadata.MetadataUpdater.IsSupported")]
+    [FeatureGuard(typeof(RequiresUnreferencedCodeAttribute))]
+    private static bool HotReloadSupported { get; } = MetadataUpdater.IsSupported;
 
     /// <summary>Number of deltas successfully applied.</summary>
     public static int AppliedDeltaCount => appliedDeltaCount;
@@ -85,7 +95,7 @@ internal static class MetadataUpdateReceiver
     /// </summary>
     private static bool TryApplyRuntimeUpdate(MetadataDelta delta)
     {
-        if (!MetadataUpdater.IsSupported)
+        if (!HotReloadSupported)
         {
             // Runtime doesn't support hot reload (AOT build or no agent attached).
             // Still count it as success for the handlers — the delta is valid,
@@ -121,7 +131,7 @@ internal static class MetadataUpdateReceiver
     /// Resolves the target assembly for a metadata delta by searching loaded assemblies
     /// for one containing any of the updated types.
     /// </summary>
-#pragma warning disable IL2026 // Assembly type lookup is inherently reflection-based; only used in debug hot reload
+    [RequiresUnreferencedCode("Looks the updated type up by name in every loaded assembly.")]
     private static Assembly? ResolveTargetAssembly(MetadataDelta delta)
     {
         if (delta.UpdatedTypes.Count == 0)
@@ -170,7 +180,6 @@ internal static class MetadataUpdateReceiver
 
         return null;
     }
-#pragma warning restore IL2026
 
     /// <summary>
     /// Checks whether the runtime supports metadata updates.

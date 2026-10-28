@@ -1,5 +1,3 @@
-using System.Diagnostics.CodeAnalysis;
-
 namespace Cascade.UI;
 
 /// <summary>
@@ -29,7 +27,6 @@ internal sealed class DeepLinkResolver
     /// Returns null if the URI is malformed, the scheme is unregistered,
     /// or no route matches the path.
     /// </summary>
-    [RequiresUnreferencedCode("Route resolution uses reflection to discover Component types with [Route] attributes.")]
     public DeepLinkResult? Resolve(string uri)
     {
         if (string.IsNullOrWhiteSpace(uri))

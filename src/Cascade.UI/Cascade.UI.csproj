@@ -118,17 +118,6 @@
     <DefineConstants>$(DefineConstants);CASCADE_DEVTOOLS</DefineConstants>
   </PropertyGroup>
 
-  <!--
-    Trimmer root descriptor for the DevTools reflection surface. Only applied
-    when CASCADE_DEVTOOLS is defined (Debug or Release+CascadeDevTools).
-    Preserves Component subclass fields/properties so NodeTreeWalker can walk
-    user-authored reactive state at runtime. Not applied to end-user AOT
-    publishes so they pay zero size cost.
-  -->
-  <ItemGroup Condition="'$(Configuration)' == 'Debug' OR '$(CascadeDevTools)' == 'true'">
-    <TrimmerRootDescriptor Include="$(MSBuildThisFileDirectory)DevTools\TrimmerRoots.xml" />
-  </ItemGroup>
-
   <ItemGroup>
     <!-- Source generators must not inherit publish properties (PublishAot, PublishTrimmed,
          RuntimeIdentifier, SelfContained) from consuming projects. The generator targets

@@ -608,6 +608,49 @@ internal sealed class Win32Window : IDisposable
         }
     }
 
+    private bool fullScreen;
+    private nint styleBeforeFullScreen;
+    private Win32.WINDOWPLACEMENT placementBeforeFullScreen;
+
+    internal bool IsFullScreen => fullScreen;
+
+    /// <summary>
+    /// Fills the monitor the window is on, with no frame and above the taskbar, or puts the window
+    /// back exactly as it was (position, size, maximized state, frame).
+    /// </summary>
+    internal void SetFullScreen(bool enabled)
+    {
+        if (handle == 0 || enabled == fullScreen)
+        {
+            return;
+        }
+
+        if (enabled)
+        {
+            placementBeforeFullScreen = new Win32.WINDOWPLACEMENT { length = (uint)Marshal.SizeOf<Win32.WINDOWPLACEMENT>() };
+            Win32.GetWindowPlacement(handle, ref placementBeforeFullScreen);
+            styleBeforeFullScreen = Win32.GetWindowLongPtrW(handle, Win32.GWL_STYLE);
+
+            nint monitor = Win32.MonitorFromWindow(handle, Win32.MONITOR_DEFAULTTONEAREST);
+            Win32.MONITORINFO info = new() { cbSize = (uint)Marshal.SizeOf<Win32.MONITORINFO>() };
+            Win32.GetMonitorInfoW(monitor, ref info);
+
+            fullScreen = true;
+            Win32.SetWindowLongPtrW(handle, Win32.GWL_STYLE, styleBeforeFullScreen & ~(nint)Win32.WS_OVERLAPPEDWINDOW);
+            Win32.SetWindowPos(handle, Win32.HWND_TOP,
+                info.rcMonitor.left, info.rcMonitor.top,
+                info.rcMonitor.right - info.rcMonitor.left, info.rcMonitor.bottom - info.rcMonitor.top,
+                Win32.SWP_NOOWNERZORDER | Win32.SWP_FRAMECHANGED);
+            return;
+        }
+
+        fullScreen = false;
+        Win32.SetWindowLongPtrW(handle, Win32.GWL_STYLE, styleBeforeFullScreen);
+        Win32.SetWindowPlacement(handle, ref placementBeforeFullScreen);
+        Win32.SetWindowPos(handle, 0, 0, 0, 0, 0,
+            Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_NOZORDER | Win32.SWP_NOOWNERZORDER | Win32.SWP_FRAMECHANGED);
+    }
+
     /// <summary>
     /// Shows or removes the taskbar button (and the Alt+Tab entry). The extended style can only be
     /// switched while the window is hidden, so a visible window is hidden and re-shown around it.
@@ -1318,6 +1361,9 @@ internal sealed class Win32Window : IDisposable
             case Win32.WM_MBUTTONDOWN:
             case Win32.WM_MBUTTONUP:
             case Win32.WM_MBUTTONDBLCLK:
+            case Win32.WM_XBUTTONDOWN:
+            case Win32.WM_XBUTTONUP:
+            case Win32.WM_XBUTTONDBLCLK:
             case Win32.WM_MOUSEWHEEL:
             case Win32.WM_MOUSEHWHEEL:
             case Win32.WM_KEYDOWN:

@@ -106,6 +106,49 @@ internal static class Win32Input
     }
 
     /// <summary>
+    /// Turns the mouse's side buttons (WM_XBUTTONDOWN / UP / DBLCLK) into <see cref="Key.BrowserBack"/>
+    /// (XBUTTON1) and <see cref="Key.BrowserForward"/> (XBUTTON2) key events — the same command as the
+    /// keyboard's back and forward keys, as browsers treat them. Null for any other message.
+    /// </summary>
+    internal static NativeKeyEvent? ProcessXButtonMessage(uint msg, nuint wParam)
+    {
+        NativeKeyEventType type;
+        if (msg is Win32.WM_XBUTTONDOWN or Win32.WM_XBUTTONDBLCLK)
+        {
+            type = NativeKeyEventType.KeyDown;
+        }
+        else if (msg == Win32.WM_XBUTTONUP)
+        {
+            type = NativeKeyEventType.KeyUp;
+        }
+        else
+        {
+            return null;
+        }
+
+        uint button = (uint)((wParam >> 16) & 0xFFFF);
+        Key key = button switch
+        {
+            Win32.XBUTTON1 => Key.BrowserBack,
+            Win32.XBUTTON2 => Key.BrowserForward,
+            _ => Key.None,
+        };
+        if (key == Key.None)
+        {
+            return null;
+        }
+
+        return new NativeKeyEvent
+        {
+            Key = key,
+            Type = type,
+            Modifiers = GetCurrentModifierKeys(),
+            Character = null,
+            IsRepeat = false,
+        };
+    }
+
+    /// <summary>
     /// Extracts a character input event from WM_CHAR or WM_SYSCHAR.
     /// Returns null if the message is not a character message.
     /// </summary>
@@ -282,6 +325,8 @@ internal static class Win32Input
             Win32.VK_SCROLL     => Key.ScrollLock,
             Win32.VK_PAUSE      => Key.Pause,
             Win32.VK_APPS       => Key.Apps,
+            Win32.VK_BROWSER_BACK    => Key.BrowserBack,
+            Win32.VK_BROWSER_FORWARD => Key.BrowserForward,
             Win32.VK_OEM_1      => Key.Semicolon,
             Win32.VK_OEM_PLUS   => Key.Equals,
             Win32.VK_OEM_COMMA  => Key.Comma,
@@ -351,6 +396,8 @@ internal static class Win32Input
             Key.ScrollLock      => Win32.VK_SCROLL,
             Key.Pause           => Win32.VK_PAUSE,
             Key.Apps            => Win32.VK_APPS,
+            Key.BrowserBack     => Win32.VK_BROWSER_BACK,
+            Key.BrowserForward  => Win32.VK_BROWSER_FORWARD,
             Key.Semicolon       => Win32.VK_OEM_1,
             Key.Equals          => Win32.VK_OEM_PLUS,
             Key.Comma           => Win32.VK_OEM_COMMA,

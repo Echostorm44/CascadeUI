@@ -831,6 +831,13 @@ public static class App
             return;
         }
 
+        // Mouse side buttons: delivered as the Back / Forward keys.
+        if (Win32Input.ProcessXButtonMessage(msg, wParam) is { } sideButton)
+        {
+            input.HandleKeyEvent(sideButton);
+            return;
+        }
+
         // Keyboard events
         var keyEvent = Win32Input.ProcessKeyMessage(msg, wParam, lParam);
         if (keyEvent != null)
@@ -991,6 +998,43 @@ public sealed class AppWindow
                 ?? default;
         }
     }
+
+    /// <summary>
+    /// The window's title: what the title bar, taskbar button and Alt+Tab show. Defaults to the
+    /// app's assembly name; set it to name what the window shows (a document, a photo).
+    /// </summary>
+    public string Title
+    {
+        get
+        {
+            return getWin32Window()?.GetTitle()
+                ?? getCocoaWindow()?.GetTitle()
+                ?? getX11Window()?.GetTitle()
+                ?? getWaylandWindow()?.GetTitle()
+                ?? "";
+        }
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            getWin32Window()?.SetTitle(value);
+            getCocoaWindow()?.SetTitle(value);
+            getX11Window()?.SetTitle(value);
+            getWaylandWindow()?.SetTitle(value);
+        }
+    }
+
+    /// <summary>
+    /// Whether the window fills its monitor with no frame, above the taskbar — for media, slides,
+    /// games. Turning it off puts the window back exactly as it was, maximized or not. Windows only.
+    /// </summary>
+    public bool IsFullScreen
+    {
+        get => getWin32Window()?.IsFullScreen ?? false;
+        set => getWin32Window()?.SetFullScreen(value);
+    }
+
+    /// <summary>Enters or leaves <see cref="IsFullScreen"/>.</summary>
+    public void ToggleFullScreen() => IsFullScreen = !IsFullScreen;
 
     private WindowChrome? chrome;
     private Size? minimumSize;

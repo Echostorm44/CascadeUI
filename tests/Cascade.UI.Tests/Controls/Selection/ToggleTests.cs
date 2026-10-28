@@ -157,4 +157,36 @@ public class ToggleTests
         bool same = ReferenceEquals(toggle, result);
         await Assert.That(same).IsTrue();
     }
+
+    // ── Description ────────────────────────────────────────────────────
+
+    [Test]
+    [NotInParallel]
+    public async Task Description_MakesTheToggleTaller_AndWrapsWithinTheWidth()
+    {
+        string? saved = LayoutSolver.DefaultFontPath;
+        LayoutSolver.DefaultFontPath = System.IO.Path.Combine(AppContext.BaseDirectory, "fonts", "Inter-Regular.ttf");
+        try
+        {
+            var plain = new Toggle(CreateBoolBinding(false), "Ask before deleting");
+            var described = new Toggle(CreateBoolBinding(false), "Ask before deleting",
+                "Deleted files always go to the Recycle Bin, and Ctrl+Z brings them back");
+            var narrow = LayoutConstraints.Loose(new Size(260, 500));
+
+            Size plainSize = LayoutSolver.Measure(plain, narrow);
+            Size describedSize = LayoutSolver.Measure(described, narrow);
+            Size oneLine = LayoutSolver.MeasureToggleDescription("Deleted files", LayoutSolver.BodyFontSize, 1000f);
+
+            await Assert.That(describedSize.Height).IsGreaterThan(plainSize.Height);
+            await Assert.That(describedSize.Width).IsLessThanOrEqualTo(260f);
+            // At 260 px wide the sentence cannot fit beside the track on one line, so it wraps.
+            float wrapped = LayoutSolver.MeasureToggleDescription(described.Description.Resolve(), LayoutSolver.BodyFontSize,
+                260f - LayoutSolver.ToggleTrackWidth - LayoutSolver.ToggleLabelGap).Height;
+            await Assert.That(wrapped).IsGreaterThan(oneLine.Height * 1.5f);
+        }
+        finally
+        {
+            LayoutSolver.DefaultFontPath = saved;
+        }
+    }
 }

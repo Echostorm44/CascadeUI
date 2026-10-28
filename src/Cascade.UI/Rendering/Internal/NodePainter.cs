@@ -5674,16 +5674,31 @@ internal sealed partial class NodePainter
             opacity.Dispose();
         }
 
-        // Label to the right of the track
+        // Label to the right of the track; with a description, the two are stacked and centred as a block.
         string labelText = tog.Label.Resolve();
         if (!string.IsNullOrEmpty(labelText))
         {
-            var labelBounds = new Rect(
-                trackBounds.Right + theme.Spacing.Sm,
-                bounds.Y,
-                bounds.Width - t.TrackWidth - theme.Spacing.Sm,
-                bounds.Height);
-            PaintText(labelText, labelBounds, 0, theme.Colors.Text, overflow: TextOverflow.Ellipsis);
+            float textX = trackBounds.Right + theme.Spacing.Sm;
+            float textWidth = bounds.Width - t.TrackWidth - theme.Spacing.Sm;
+            string descriptionText = tog.Description.Resolve();
+            if (string.IsNullOrEmpty(descriptionText) || textWidth <= 0)
+            {
+                PaintText(labelText, new Rect(textX, bounds.Y, textWidth, bounds.Height), 0, theme.Colors.Text,
+                    overflow: TextOverflow.Ellipsis);
+                return;
+            }
+
+            float bodySize = theme.Typography.Scale.Body.Size;
+            float labelHeight = bodySize * 1.4f;
+            float descriptionHeight = LayoutSolver.MeasureToggleDescription(descriptionText, bodySize, textWidth).Height;
+            float blockTop = bounds.Y + (bounds.Height - (labelHeight + LayoutSolver.ToggleDescriptionGap + descriptionHeight)) / 2f;
+
+            PaintText(labelText, new Rect(textX, blockTop, textWidth, labelHeight), 0, theme.Colors.Text,
+                overflow: TextOverflow.Ellipsis);
+            PaintText(descriptionText,
+                new Rect(textX, blockTop + labelHeight + LayoutSolver.ToggleDescriptionGap, textWidth, descriptionHeight),
+                0, theme.Colors.TextMuted, fontSize: bodySize * LayoutSolver.ToggleDescriptionScale,
+                overflow: TextOverflow.Ellipsis, maxLines: 0);
         }
     }
 

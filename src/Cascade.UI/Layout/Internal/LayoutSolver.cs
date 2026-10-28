@@ -951,12 +951,55 @@ internal static class LayoutSolver
             textHeight = lineHeight;
         }
 
+        // The description sits under the label in a smaller size, wrapping to the room beside the track.
+        string descriptionText = toggle.Description.Resolve();
+        if (!string.IsNullOrEmpty(descriptionText))
+        {
+            float columnWidth = float.IsPositiveInfinity(constraints.MaxWidth)
+                ? ToggleDescriptionDefaultWidth
+                : Math.Max(constraints.MaxWidth - trackWidth - gap, 1f);
+            Size description = MeasureToggleDescription(descriptionText, BodyFontSize, columnWidth);
+            textWidth = Math.Max(textWidth, description.Width);
+            textHeight = lineHeight + ToggleDescriptionGap + description.Height;
+        }
+
         float desiredWidth = trackWidth + gap + textWidth;
         float desiredHeight = Math.Max(trackHeight, textHeight);
 
         return new Size(
             constraints.ConstrainWidth(desiredWidth),
             constraints.ConstrainHeight(desiredHeight));
+    }
+
+    /// <summary>A toggle description's size relative to the label (footnote, against body).</summary>
+    internal const float ToggleDescriptionScale = 0.85f;
+
+    /// <summary>Space between a toggle's label line and its description.</summary>
+    internal const float ToggleDescriptionGap = 2f;
+
+    // How wide a description may run when the toggle is given unbounded width.
+    private const float ToggleDescriptionDefaultWidth = 360f;
+
+    /// <summary>
+    /// The wrapped size of a toggle's description at <paramref name="bodyFontSize"/> × the description scale,
+    /// within <paramref name="maxWidth"/>. Shared by layout and paint so the two agree.
+    /// </summary>
+    internal static Size MeasureToggleDescription(string text, float bodyFontSize, float maxWidth)
+    {
+        float fontSize = bodyFontSize * ToggleDescriptionScale;
+        if (DefaultFontPath == null)
+        {
+            float lines = MathF.Max(1f, MathF.Ceiling(text.Length * fontSize * AverageCharWidthRatio / maxWidth));
+            return new Size(Math.Min(text.Length * fontSize * AverageCharWidthRatio, maxWidth), lines * fontSize * DefaultLineHeightMultiplier);
+        }
+
+        var options = new TextLayoutOptions
+        {
+            FontPath = DefaultFontPath,
+            FontSize = fontSize,
+            MaxWidth = maxWidth,
+        };
+        return TextLayoutEngine.Layout(text, options).BoundingBox;
     }
 
     // Label on the left, a fixed-width field on the right, TextInput height.

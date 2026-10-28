@@ -80,8 +80,13 @@
        PrivateAssets=none so Echostorm.Etch's build/ targets (which deliver the native binaries
        to the app output) flow transitively through Cascade.UI to the final consumer — the
        default would privatize Build and the natives would never reach the app. -->
+  <!-- Overridable so a local pack can build against a local Etch package
+       (-p:EtchPackageVersion=0.1.0-alpha.11-local.1) without editing this file. -->
+  <PropertyGroup>
+    <EtchPackageVersion Condition="'$(EtchPackageVersion)' == ''">0.1.0-alpha.10</EtchPackageVersion>
+  </PropertyGroup>
   <ItemGroup Condition="'$(UseEtchPackage)' == 'true'">
-    <PackageReference Include="Echostorm.Etch" Version="0.1.0-alpha.10" PrivateAssets="none" />
+    <PackageReference Include="Echostorm.Etch" Version="$(EtchPackageVersion)" PrivateAssets="none" />
   </ItemGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">

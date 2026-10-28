@@ -14,8 +14,8 @@ namespace Cascade.Generators;
 /// that maps routes to component factories, enabling compile-time
 /// route validation and deep link support. It also emits a module initializer
 /// that hands each route and a reflection-free factory to
-/// <c>Cascade.UI.GeneratedRegistrations</c>, which is what lets
-/// <c>Navigate(path)</c> work in trimmed and Native AOT apps.
+/// <c>Cascade.UI.GeneratedRegistrations</c>: the only way <c>Navigate(path)</c> finds pages.
+/// A [Route] class the factory can't be written for is a CASCADENAV003 error.
 /// </summary>
 internal static class NavigationRegistrar
 {
@@ -77,6 +77,12 @@ internal static class NavigationRegistrar
                 }
 
                 seenPatterns[r.Pattern] = r.ClassName;
+                if (r.Problem is not null)
+                {
+                    spc.ReportDiagnostic(Diagnostic.Create(
+                        NavigationDiagnostics.RouteNotConstructible, r.Location, r.Pattern, r.ClassName, r.Problem));
+                }
+
                 if (r.Registrable)
                 {
                     validRoutes.Add(r); // typeof() of a private nested or generic class wouldn't compile
@@ -104,7 +110,7 @@ internal static class NavigationRegistrar
             var seenPatterns = new HashSet<string>(System.StringComparer.Ordinal);
             foreach (var route in routes)
             {
-                if (route is { } r && r.Registrable && seenPatterns.Add(r.Pattern))
+                if (route is { } r && r.FactoryCode is not null && seenPatterns.Add(r.Pattern))
                 {
                     registrable.Add(r);
                 }
@@ -336,33 +342,48 @@ internal static class NavigationRegistrar
             ? null
             : classSymbol.ContainingNamespace?.ToDisplayString();
 
-        bool registrable = IsRegistrable(classSymbol);
-        string? factory = registrable ? BuildFactory(classSymbol, pattern) : null;
+        string? problem = WhyNotRegistrable(classSymbol);
+        string? factory = problem is null ? BuildFactory(classSymbol, pattern) : null;
+        if (problem is null && factory is null)
+        {
+            problem = "it needs a public or internal constructor with no parameters, or one taking a string per route parameter";
+        }
 
         return new RouteModel(pattern, fullTypeName, classSymbol.Name, namespaceName,
-            classSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat), registrable, factory);
+            classSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat), problem is null, factory,
+            problem, classDecl.Identifier.GetLocation());
     }
 
     // ── Reflection-free factories ─────────────────────────────────────
 
     // Generated code can only name a concrete, non-generic Component that is visible from the
-    // assembly's own top level. Anything else is left to the reflection fallback.
-    private static bool IsRegistrable(INamedTypeSymbol classSymbol)
+    // assembly's own top level. Returns why not, or null when it can.
+    private static string? WhyNotRegistrable(INamedTypeSymbol classSymbol)
     {
-        if (classSymbol.IsAbstract || !DerivesFromComponent(classSymbol))
+        if (!DerivesFromComponent(classSymbol))
         {
-            return false;
+            return "it isn't a Component";
+        }
+
+        if (classSymbol.IsAbstract)
+        {
+            return "it's abstract";
         }
 
         for (INamedTypeSymbol? t = classSymbol; t is not null; t = t.ContainingType)
         {
-            if (t.IsGenericType || !IsVisibleInAssembly(t.DeclaredAccessibility))
+            if (t.IsGenericType)
             {
-                return false;
+                return "it's generic, or nested in a generic type";
+            }
+
+            if (!IsVisibleInAssembly(t.DeclaredAccessibility))
+            {
+                return $"'{t.Name}' is private or protected; make it public or internal";
             }
         }
 
-        return true;
+        return null;
     }
 
     private static bool DerivesFromComponent(INamedTypeSymbol classSymbol)
@@ -381,9 +402,8 @@ internal static class NavigationRegistrar
     private static bool IsVisibleInAssembly(Accessibility accessibility) =>
         accessibility is Accessibility.Public or Accessibility.Internal or Accessibility.ProtectedOrInternal;
 
-    // Mirrors Navigator.CreateComponentFromRoute: default-construct and bind every route value
-    // (path or query) to a same-named settable property, converting to the property's type and
-    // skipping values that don't parse. Without a parameterless constructor, a constructor taking
+    // Default-construct and bind every route value (path, query or restored) to a same-named
+    // settable property, converting to the property's type and skipping values that don't parse. Without a parameterless constructor, a constructor taking
     // one string per path parameter gets them in pattern order. Returns null when neither exists.
     private static string? BuildFactory(INamedTypeSymbol classSymbol, string pattern)
     {
@@ -582,7 +602,7 @@ internal static class NavigationRegistrar
         foreach (var route in routes)
         {
             sb.AppendLine($"            global::Cascade.UI.GeneratedRegistrations.RegisterRoute(\"{EscapeString(route.Pattern)}\", typeof({route.QualifiedTypeName}),");
-            sb.AppendLine($"            {route.FactoryCode ?? "null"});");
+            sb.AppendLine($"            {route.FactoryCode});");
         }
         sb.AppendLine("        }");
         sb.AppendLine("    }");
@@ -606,10 +626,14 @@ internal static class NavigationRegistrar
         public string QualifiedTypeName { get; }
         public bool Registrable { get; }
         public string? FactoryCode { get; }
+        public string? Problem { get; }
+        public Location Location { get; }
 
         public RouteModel(string pattern, string fullTypeName, string className, string? namespaceName,
-            string qualifiedTypeName, bool registrable, string? factoryCode)
+            string qualifiedTypeName, bool registrable, string? factoryCode, string? problem, Location location)
         {
+            Problem = problem;
+            Location = location;
             Pattern = pattern;
             FullTypeName = fullTypeName;
             ClassName = className;
@@ -624,7 +648,9 @@ internal static class NavigationRegistrar
             return string.Equals(Pattern, other.Pattern, System.StringComparison.Ordinal)
                 && string.Equals(FullTypeName, other.FullTypeName, System.StringComparison.Ordinal)
                 && Registrable == other.Registrable
-                && string.Equals(FactoryCode, other.FactoryCode, System.StringComparison.Ordinal);
+                && string.Equals(FactoryCode, other.FactoryCode, System.StringComparison.Ordinal)
+                && string.Equals(Problem, other.Problem, System.StringComparison.Ordinal)
+                && Location.Equals(other.Location);
         }
 
         public override bool Equals(object? obj)

@@ -35,7 +35,7 @@ public class DeepLinkTests
     private static (DeepLinkResolver resolver, RouteResolver routes) CreateResolver()
     {
         var routes = new RouteResolver();
-        routes.MarkScanned();
+        routes.UseRegisteredRoutesOnly();
         var resolver = new DeepLinkResolver(routes);
         return (resolver, routes);
     }
@@ -44,7 +44,7 @@ public class DeepLinkTests
     public async Task Resolve_ValidUri_ReturnsMatch()
     {
         var (resolver, routes) = CreateResolver();
-        routes.Register(typeof(SettingsPage), "/settings/profile");
+        routes.Register(typeof(SettingsPage), "/settings/profile", _ => new SettingsPage());
         resolver.RegisterScheme("myapp");
 
         var result = resolver.Resolve("myapp://settings/profile");
@@ -59,7 +59,7 @@ public class DeepLinkTests
     public async Task Resolve_RelativePath_ReturnsMatch()
     {
         var (resolver, routes) = CreateResolver();
-        routes.Register(typeof(SettingsPage), "/settings");
+        routes.Register(typeof(SettingsPage), "/settings", _ => new SettingsPage());
 
         var result = resolver.Resolve("/settings");
 
@@ -73,7 +73,7 @@ public class DeepLinkTests
     public async Task Resolve_UnknownRoute_ReturnsNull()
     {
         var (resolver, routes) = CreateResolver();
-        routes.Register(typeof(SettingsPage), "/settings");
+        routes.Register(typeof(SettingsPage), "/settings", _ => new SettingsPage());
         resolver.RegisterScheme("myapp");
 
         var result = resolver.Resolve("myapp://nonexistent/path");
@@ -97,7 +97,7 @@ public class DeepLinkTests
     public async Task Resolve_QueryParameters_Merged()
     {
         var (resolver, routes) = CreateResolver();
-        routes.Register(typeof(UserProfilePage), "/users/{id}");
+        routes.Register(typeof(UserProfilePage), "/users/{id}", _ => new UserProfilePage());
         resolver.RegisterScheme("myapp");
 
         var result = resolver.Resolve("myapp://users/123?tab=settings");
@@ -123,7 +123,7 @@ public class DeepLinkTests
     public async Task Resolve_Fragment_Extracted()
     {
         var (resolver, routes) = CreateResolver();
-        routes.Register(typeof(GenericPage), "/page");
+        routes.Register(typeof(GenericPage), "/page", _ => new GenericPage());
         resolver.RegisterScheme("myapp");
 
         var result = resolver.Resolve("myapp://page#section");
@@ -137,7 +137,7 @@ public class DeepLinkTests
     public async Task Resolve_UnregisteredScheme_ReturnsNull()
     {
         var (resolver, routes) = CreateResolver();
-        routes.Register(typeof(SettingsPage), "/settings");
+        routes.Register(typeof(SettingsPage), "/settings", _ => new SettingsPage());
         resolver.RegisterScheme("myapp");
 
         var result = resolver.Resolve("unknown://settings");
@@ -150,8 +150,8 @@ public class DeepLinkTests
     public async Task RouteResolver_ResolveUri_ExtractsPath()
     {
         var resolver = new RouteResolver();
-        resolver.MarkScanned();
-        resolver.Register(typeof(SettingsPage), "/settings/profile");
+        resolver.UseRegisteredRoutesOnly();
+        resolver.Register(typeof(SettingsPage), "/settings/profile", _ => new SettingsPage());
 
         var match = resolver.ResolveUri("https://example.com/settings/profile?foo=bar");
 
@@ -165,7 +165,7 @@ public class DeepLinkTests
     public async Task RouteResolver_ResolveUri_Null_ReturnsNull()
     {
         var resolver = new RouteResolver();
-        resolver.MarkScanned();
+        resolver.UseRegisteredRoutesOnly();
 
         var matchNull = resolver.ResolveUri(null!);
         var matchEmpty = resolver.ResolveUri("");

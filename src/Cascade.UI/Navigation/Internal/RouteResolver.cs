@@ -1,36 +1,32 @@
 using System.Collections.Concurrent;
-using System.Diagnostics.CodeAnalysis;
-using System.Reflection;
 using System.Text.RegularExpressions;
 
 namespace Cascade.UI;
 
 /// <summary>
-/// Resolves URL-style route paths to component types. Routes come from the registrations that
+/// Resolves URL-style route paths to components. Routes come from the registrations that
 /// Cascade.Generators emits for every <see cref="RouteAttribute"/> component (see
-/// <see cref="GeneratedRegistrations"/>); untrimmed apps also scan loaded assemblies for them
-/// (<see cref="ReflectionRouting.IsSupported"/>).
+/// <see cref="GeneratedRegistrations"/>), each with a factory that builds the page without reflection.
 /// Thread-safe for concurrent registration and resolution.
 /// </summary>
 internal sealed partial class RouteResolver
 {
     private readonly ConcurrentDictionary<string, RouteRegistration> routes = new(StringComparer.OrdinalIgnoreCase);
-    private volatile bool scanned;
     private volatile bool manualOnly;
     private int importedGeneratedCount;
-    private readonly Lock scanLock = new();
+    private readonly Lock importLock = new();
 
     /// <summary>The number of registered routes.</summary>
     internal int RouteCount => routes.Count;
 
     /// <summary>
-    /// Registers a component type with its route pattern and, when known, a factory that builds it
-    /// without reflection. Registering the same type for the same pattern again is a no-op.
+    /// Registers a component type with its route pattern and the factory that builds it from the
+    /// route values. Registering the same type for the same pattern again is a no-op.
     /// </summary>
     /// <exception cref="InvalidOperationException">
     /// Thrown when the pattern is already registered to a different component type.
     /// </exception>
-    internal void Register(Type componentType, string pattern, Func<IReadOnlyDictionary<string, string>, Component>? factory = null)
+    internal void Register(Type componentType, string pattern, Func<IReadOnlyDictionary<string, string>, Component> factory)
     {
         var normalized = NormalizePattern(pattern);
         var registration = new RouteRegistration(componentType, pattern, BuildRegex(normalized), factory);
@@ -42,11 +38,6 @@ internal sealed partial class RouteResolver
             {
                 throw new InvalidOperationException(
                     $"Duplicate route pattern '{pattern}' — already registered to {existing.ComponentType.Name}.");
-            }
-
-            if (existing.Factory is null && factory is not null)
-            {
-                routes[normalized] = registration;
             }
         }
     }
@@ -79,58 +70,6 @@ internal sealed partial class RouteResolver
     }
 
     /// <summary>
-    /// Scans all loaded assemblies for <see cref="RouteAttribute"/> on
-    /// <see cref="Component"/> subclasses and registers them.
-    /// </summary>
-    [RequiresUnreferencedCode("Route scanning uses reflection to discover Component types with [Route] attributes.")]
-    internal void ScanAssemblies()
-    {
-        lock (scanLock)
-        {
-            if (scanned)
-            {
-                return;
-            }
-
-            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                ScanAssembly(assembly);
-            }
-
-            scanned = true;
-        }
-    }
-
-    /// <summary>
-    /// Scans a single assembly for components with [Route] attributes.
-    /// </summary>
-    [RequiresUnreferencedCode("Route scanning uses reflection to discover Component types with [Route] attributes.")]
-    internal void ScanAssembly(Assembly assembly)
-    {
-        Type[] types;
-        try
-        {
-            types = assembly.GetTypes();
-        }
-        catch (ReflectionTypeLoadException ex)
-        {
-            types = ex.Types.Where(t => t is not null).Cast<Type>().ToArray();
-        }
-
-        foreach (var type in types)
-        {
-            if (!type.IsAbstract && type.IsSubclassOf(typeof(Component)))
-            {
-                var routeAttr = type.GetCustomAttribute<RouteAttribute>();
-                if (routeAttr is not null)
-                {
-                    Register(type, routeAttr.Pattern);
-                }
-            }
-        }
-    }
-
-    /// <summary>
     /// Resolves a full URI (with scheme, query, fragment) by extracting the path
     /// and delegating to the standard path-based resolution. Query parameters
     /// and fragments are discarded — use <see cref="DeepLinkResolver"/> for
@@ -158,37 +97,33 @@ internal sealed partial class RouteResolver
     }
 
     /// <summary>
-    /// Resets all registrations and scan state. Used for testing.
+    /// Resets all registrations and import state. Used for testing.
     /// </summary>
     internal void Reset()
     {
         routes.Clear();
-        lock (scanLock)
+        lock (importLock)
         {
-            scanned = false;
             manualOnly = false;
             importedGeneratedCount = 0;
         }
     }
 
     /// <summary>
-    /// Restricts the resolver to routes registered through <see cref="Register"/>: no generated
-    /// registrations and no assembly scan. Used for testing with manual registration.
+    /// Restricts the resolver to routes registered through <see cref="Register"/>, ignoring the
+    /// generated registrations. Used for testing with manual registration.
     /// </summary>
-    internal void MarkScanned()
+    internal void UseRegisteredRoutesOnly()
     {
-        lock (scanLock)
+        lock (importLock)
         {
-            scanned = true;
             manualOnly = true;
         }
     }
 
     /// <summary>
-    /// Imports generated registrations not seen yet (an assembly's module initializer can run after
-    /// the first navigation), then scans assemblies once when reflection is allowed, which also picks up
-    /// route components generated code can't name (private nested, generic). The generated factory wins
-    /// for a component found both ways.
+    /// Imports generated registrations not seen yet: an assembly's module initializer can run after
+    /// the first navigation.
     /// </summary>
     private void EnsureRoutes()
     {
@@ -197,7 +132,7 @@ internal sealed partial class RouteResolver
             return;
         }
 
-        lock (scanLock)
+        lock (importLock)
         {
             if (manualOnly)
             {
@@ -210,11 +145,6 @@ internal sealed partial class RouteResolver
                 Register(route.ComponentType, route.Pattern, route.Create);
             }
             importedGeneratedCount += generated.Length;
-
-            if (!scanned && ReflectionRouting.IsSupported)
-            {
-                ScanAssemblies();
-            }
         }
     }
 
@@ -285,7 +215,7 @@ internal sealed partial class RouteResolver
 /// </summary>
 internal sealed class RouteRegistration
 {
-    internal RouteRegistration(Type componentType, string originalPattern, Regex pattern, Func<IReadOnlyDictionary<string, string>, Component>? factory)
+    internal RouteRegistration(Type componentType, string originalPattern, Regex pattern, Func<IReadOnlyDictionary<string, string>, Component> factory)
     {
         ComponentType = componentType;
         OriginalPattern = originalPattern;
@@ -293,8 +223,8 @@ internal sealed class RouteRegistration
         Factory = factory;
     }
 
-    /// <summary>Builds the component without reflection; null when only the reflection path can.</summary>
-    internal Func<IReadOnlyDictionary<string, string>, Component>? Factory { get; }
+    /// <summary>Builds the component from the route values.</summary>
+    internal Func<IReadOnlyDictionary<string, string>, Component> Factory { get; }
 
     internal Type ComponentType { get; }
     internal string OriginalPattern { get; }
@@ -307,31 +237,17 @@ internal sealed class RouteRegistration
 /// </summary>
 internal sealed class RouteMatch
 {
-    internal RouteMatch(Type componentType, Dictionary<string, string> parameters, Func<IReadOnlyDictionary<string, string>, Component>? factory = null)
+    internal RouteMatch(Type componentType, Dictionary<string, string> parameters, Func<IReadOnlyDictionary<string, string>, Component> factory)
     {
         ComponentType = componentType;
         Parameters = parameters;
         Factory = factory;
     }
 
-    /// <summary>Builds the component without reflection; null when only the reflection path can.</summary>
-    internal Func<IReadOnlyDictionary<string, string>, Component>? Factory { get; }
+    /// <summary>Builds the component from the route values.</summary>
+    internal Func<IReadOnlyDictionary<string, string>, Component> Factory { get; }
 
     internal Type ComponentType { get; }
     internal Dictionary<string, string> Parameters { get; }
 }
 
-/// <summary>
-/// Whether routing may fall back to reflection: scanning loaded assemblies for <see cref="RouteAttribute"/>
-/// and constructing components through <see cref="Activator"/>. On by default; the package's build targets
-/// turn it off for trimmed and Native AOT publishes, so the trimmer removes that code and the generated
-/// registrations do the work.
-/// </summary>
-internal static class ReflectionRouting
-{
-    private const string SwitchName = "Cascade.UI.Navigation.ReflectionRouting.IsSupported";
-
-    [FeatureSwitchDefinition(SwitchName)]
-    [FeatureGuard(typeof(RequiresUnreferencedCodeAttribute))]
-    internal static bool IsSupported { get; } = !AppContext.TryGetSwitch(SwitchName, out bool enabled) || enabled;
-}

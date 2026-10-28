@@ -15,12 +15,13 @@ public static class GeneratedRegistrations
 
     /// <summary>
     /// Registers a <c>[Route]</c> component. <paramref name="create"/> constructs the component and
-    /// binds route parameters to its properties; null when the generator could not build it statically.
+    /// binds the route values to its properties.
     /// </summary>
-    public static void RegisterRoute(string pattern, Type componentType, Func<IReadOnlyDictionary<string, string>, Component>? create)
+    public static void RegisterRoute(string pattern, Type componentType, Func<IReadOnlyDictionary<string, string>, Component> create)
     {
         ArgumentNullException.ThrowIfNull(pattern);
         ArgumentNullException.ThrowIfNull(componentType);
+        ArgumentNullException.ThrowIfNull(create);
         lock (routesLock)
         {
             routes.Add(new GeneratedRoute(pattern, componentType, create));
@@ -46,4 +47,4 @@ public static class GeneratedRegistrations
 }
 
 /// <summary>A route registered by generated code.</summary>
-internal sealed record GeneratedRoute(string Pattern, Type ComponentType, Func<IReadOnlyDictionary<string, string>, Component>? Create);
+internal sealed record GeneratedRoute(string Pattern, Type ComponentType, Func<IReadOnlyDictionary<string, string>, Component> Create);

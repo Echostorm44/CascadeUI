@@ -18,6 +18,9 @@ internal sealed partial class InputDispatcher
     private Node? pressedNode;
     private Point lastMousePosition;
 
+    // The pointer position before the event being handled (lastMousePosition is already the new one).
+    private Point previousMousePosition;
+
     // Whether lastMousePosition is where the pointer was on the previous event inside the window
     // (false before the first event and after the pointer left), so a move can be told from a jump.
     private bool pointerPositionKnown;
@@ -796,6 +799,8 @@ internal sealed partial class InputDispatcher
         // window shown or re-stacked under a still pointer) or the first move after entering.
         bool pointerMoved = evt.Type == NativeMouseEventType.MouseMove && pointerPositionKnown
             && (evt.X != lastMousePosition.X || evt.Y != lastMousePosition.Y);
+        // Where this event moved from: pan deltas and PointerEventArgs.Delta are measured against it.
+        previousMousePosition = pointerPositionKnown ? lastMousePosition : new Point(evt.X, evt.Y);
         pointerPositionKnown = evt.Type != NativeMouseEventType.MouseLeave;
 
         lastMousePosition = new Point(evt.X, evt.Y);
@@ -1173,8 +1178,7 @@ internal sealed partial class InputDispatcher
         // Fire PointerMove on the current target
         if (hitNode != null)
         {
-            var args = CreatePointerArgs(hitNode, evt);
-            InvokeGesture(hitNode, g => g.PointerMove, args);
+            InvokePointerGesture(hitNode, g => g.PointerMove, evt);
         }
 
         // DataGrid column resize drag
@@ -1333,7 +1337,7 @@ internal sealed partial class InputDispatcher
         }
         else if (isMouseDown && pressedNode != null)
         {
-            var delta = new Point(evt.X - lastMousePosition.X, evt.Y - lastMousePosition.Y);
+            var delta = new Point(evt.X - previousMousePosition.X, evt.Y - previousMousePosition.Y);
             InvokeGesture(pressedNode, g => g.Pan, delta);
         }
     }
@@ -2214,8 +2218,7 @@ internal sealed partial class InputDispatcher
         }
 
         // Fire PointerDown
-        var args = CreatePointerArgs(hitNode, evt);
-        InvokeGesture(hitNode, g => g.PointerDown, args);
+        InvokePointerGesture(hitNode, g => g.PointerDown, evt);
 
         // Detect drag-and-drop start — check if the pressed node (or an ancestor) is draggable
         if (evt.Button == NativeMouseButton.Left && rootNode != null)
@@ -2479,8 +2482,7 @@ internal sealed partial class InputDispatcher
         }
 
         // Fire PointerUp
-        var args = CreatePointerArgs(hitNode, evt);
-        InvokeGesture(hitNode, g => g.PointerUp, args);
+        InvokePointerGesture(hitNode, g => g.PointerUp, evt);
 
         // A left click is a tap when it lands on the node it started on. ReferenceEquals covers the
         // normal (reconciled) tree. For virtualized ListView/TreeView rows, the built content is
@@ -8007,14 +8009,24 @@ internal sealed partial class InputDispatcher
         }
     }
 
-    private static PointerEventArgs CreatePointerArgs(Node node, NativeMouseEvent evt)
+    // Raises a pointer gesture with Position relative to the node's window position (layout bounds are
+    // parent-relative, so they are resolved through the tree — only when the node has the handler) and
+    // Delta since the previous pointer event.
+    private void InvokePointerGesture(Node node, Func<GestureNodeData, Action<PointerEventArgs>?> selector, NativeMouseEvent evt)
     {
-        var bounds = node.LayoutData.Bounds;
-        return new PointerEventArgs
+        if (node.LayoutData.GestureData is not { } gestures || selector(gestures) is not { } handler)
         {
-            Position = new Point(evt.X - bounds.X, evt.Y - bounds.Y),
-            Delta = Point.Zero
-        };
+            return;
+        }
+
+        Rect origin = rootNode is not null && HitTester.TryGetAbsoluteBounds(rootNode, node, out Rect absolute)
+            ? absolute
+            : node.LayoutData.Bounds;
+        handler(new PointerEventArgs
+        {
+            Position = new Point(evt.X - origin.X, evt.Y - origin.Y),
+            Delta = new Point(evt.X - previousMousePosition.X, evt.Y - previousMousePosition.Y),
+        });
     }
 
     private static bool IsNumberInput(Node node)

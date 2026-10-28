@@ -8026,6 +8026,7 @@ internal sealed partial class InputDispatcher
         {
             Position = new Point(evt.X - origin.X, evt.Y - origin.Y),
             Delta = new Point(evt.X - previousMousePosition.X, evt.Y - previousMousePosition.Y),
+            Button = evt.Type == NativeMouseEventType.MouseMove ? NativeMouseButton.None : evt.Button,
         });
     }
 

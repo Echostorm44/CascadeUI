@@ -612,12 +612,27 @@ internal sealed class EtchBackend : IDisposable
         AddCommand(op);
     }
 
-    public ulong UploadImage(ReadOnlySpan<byte> pixels, int width, int height)
+    public ulong UploadImage(ReadOnlySpan<byte> pixels, int width, int height) =>
+        UploadImage(pixels.ToArray(), width, height);
+
+    /// <summary>
+    /// Registers <paramref name="pixels"/> as an image without copying them: the composers read the
+    /// caller's array, so it must stay unchanged except as announced by <see cref="MarkImageChanged"/>.
+    /// </summary>
+    public ulong UploadImage(byte[] pixels, int width, int height)
     {
-        byte[] copy = pixels.ToArray();
         var handle = _nextImageHandle++;
-        _images[handle] = new ImageEntry(copy, width, height);
+        _images[handle] = new ImageEntry(pixels, width, height);
         return handle;
+    }
+
+    /// <summary>The image's pixels were rewritten in place: its GPU texture is refreshed on the next frame.</summary>
+    public void MarkImageChanged(ulong image)
+    {
+        if (_images.TryGetValue(image, out var entry))
+        {
+            entry.Image.MarkChanged();
+        }
     }
 
     public void DestroyImage(ulong image)

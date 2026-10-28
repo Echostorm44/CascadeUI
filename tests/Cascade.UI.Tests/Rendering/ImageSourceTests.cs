@@ -56,6 +56,70 @@ public class ImageSourceTests
             .Throws<ArgumentException>();
     }
 
+    // ── FromPixels / Update ───────────────────────────────────────────
+
+    [Test]
+    public async Task FromPixels_UsesTheCallersArray_WithoutCopying()
+    {
+        byte[] pixels = [10, 20, 30, 255, 40, 50, 60, 255];
+        var image = ImageSource.FromPixels(pixels, 2, 1);
+
+        bool shared = System.Runtime.CompilerServices.Unsafe.AreSame(
+            ref System.Runtime.InteropServices.MemoryMarshal.GetReference(image.Pixels), ref pixels[0]);
+        await Assert.That(shared).IsTrue();
+        await Assert.That(image.Width).IsEqualTo(2);
+        await Assert.That(image.Height).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task FromPixels_WrongLength_ThrowsArgumentException()
+    {
+        await Assert.That(() => ImageSource.FromPixels(new byte[12], 2, 2))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task Update_SameSize_WritesIntoTheSameBuffer()
+    {
+        byte[] pixels = new byte[2 * 2 * 4];
+        var image = ImageSource.FromPixels(pixels, 2, 2);
+        byte[] frame = Enumerable.Range(1, 16).Select(i => (byte)i).ToArray();
+
+        image.Update(frame, 2, 2);
+
+        await Assert.That(pixels.SequenceEqual(frame)).IsTrue();
+        await Assert.That(image.Pixels.SequenceEqual(frame)).IsTrue();
+    }
+
+    [Test]
+    public async Task Update_NewSize_TakesTheNewDimensions()
+    {
+        var image = ImageSource.FromBytes(new byte[4], 1, 1);
+        byte[] frame = new byte[3 * 2 * 4];
+        frame[^1] = 99;
+
+        image.Update(frame, 3, 2);
+
+        await Assert.That(image.Width).IsEqualTo(3);
+        await Assert.That(image.Height).IsEqualTo(2);
+        await Assert.That(image.Pixels[^1]).IsEqualTo((byte)99);
+    }
+
+    [Test]
+    public async Task Update_LengthDisagreesWithSize_ThrowsArgumentException()
+    {
+        var image = ImageSource.FromBytes(new byte[4], 1, 1);
+        await Assert.That(() => image.Update(new byte[4], 2, 2)).Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task Update_AfterDispose_ThrowsObjectDisposedException()
+    {
+        var image = ImageSource.FromBytes(new byte[4], 1, 1);
+        image.Dispose();
+        await Assert.That(() => image.Update(new byte[4], 1, 1)).Throws<ObjectDisposedException>();
+    }
+
     // ── FromBytes success ─────────────────────────────────────────────
 
     [Test]

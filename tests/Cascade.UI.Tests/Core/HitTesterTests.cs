@@ -300,4 +300,66 @@ public class HitTesterTests
         await Assert.That(HitTester.HitTest(row, 50, 15)).IsSameReferenceAs(label);
         await Assert.That(HitTester.IsInteractive(row)).IsFalse();
     }
+
+    // A full-size content node under a full-size layer holding a spacer and a button at the bottom:
+    // the shape of a media viewer with a floating toolbar.
+    private static (Stack Stack, Column Content, Column Overlay, IconButton Button) ContentUnderOverlay(bool passThrough)
+    {
+        var content = new Column(children: []).OnScroll(_ => { });
+        content.LayoutData.Bounds = new Rect(0, 0, 400, 300);
+        content.LayoutData.IsVisible = true;
+
+        var spacer = new Spacer();
+        spacer.LayoutData.Bounds = new Rect(0, 0, 400, 260);
+        spacer.LayoutData.IsVisible = true;
+
+        var button = new IconButton(new Icon("M0 0h1", new Size(24, 24), 20f, "Go"), () => { });
+        button.LayoutData.Bounds = new Rect(180, 260, 40, 40);
+        button.LayoutData.IsVisible = true;
+
+        var overlay = new Column(children: [spacer, button]);
+        if (passThrough)
+        {
+            overlay.PassThroughHits();
+        }
+        overlay.LayoutData.Bounds = new Rect(0, 0, 400, 300);
+        overlay.LayoutData.IsVisible = true;
+
+        var stack = new Stack([content, overlay]);
+        stack.LayoutData.Bounds = new Rect(0, 0, 400, 300);
+        stack.LayoutData.IsVisible = true;
+        return (stack, content, overlay, button);
+    }
+
+    [Test]
+    public async Task HitTest_PassiveOverlay_SwallowsHitsMeantForTheContentBelow()
+    {
+        var (stack, content, _, _) = ContentUnderOverlay(passThrough: false);
+
+        await Assert.That(HitTester.HitTest(stack, 200, 100)).IsNotSameReferenceAs(content);
+    }
+
+    [Test]
+    public async Task HitTest_PassThroughOverlay_EmptySpace_ReachesTheContentBelow()
+    {
+        var (stack, content, _, _) = ContentUnderOverlay(passThrough: true);
+
+        await Assert.That(HitTester.HitTest(stack, 200, 100)).IsSameReferenceAs(content);
+    }
+
+    [Test]
+    public async Task HitTest_PassThroughOverlay_ItsButtonsStillCatchHits()
+    {
+        var (stack, _, _, button) = ContentUnderOverlay(passThrough: true);
+
+        await Assert.That(HitTester.HitTest(stack, 200, 280)).IsSameReferenceAs(button);
+    }
+
+    [Test]
+    public async Task PassThroughHits_DoesNotMakeANodeInteractive()
+    {
+        var (_, _, overlay, _) = ContentUnderOverlay(passThrough: true);
+
+        await Assert.That(HitTester.IsInteractive(overlay)).IsFalse();
+    }
 }

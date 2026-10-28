@@ -190,6 +190,20 @@ public static class GestureExtensions
         return node;
     }
 
+    /// <summary>
+    /// Lets pointer input fall through this node to whatever lies beneath it, except where it lands on
+    /// one of its interactive descendants (a button, a node with a gesture handler). For layers that
+    /// only position things over other content — a toolbar aligned to the bottom of a full-window
+    /// <see cref="Stack"/> layer, arrows at its sides — so the layer's empty space and passive parts
+    /// (spacers, labels) don't swallow clicks, the wheel, or drags meant for the content below.
+    /// </summary>
+    public static T PassThroughHits<T>(this T node) where T : Node
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        EnsureGestureData(node).PassThroughHits = true;
+        return node;
+    }
+
     private static GestureNodeData EnsureGestureData(Node node)
     {
         node.LayoutData.GestureData ??= new GestureNodeData();
@@ -218,4 +232,7 @@ internal sealed class GestureNodeData
     internal Action? PointerLeave;
     internal Action<Point>? Scroll;
     internal bool WindowDrag;
+
+    /// <summary>Set by <see cref="GestureExtensions.PassThroughHits"/>: hits here count only on interactive descendants.</summary>
+    internal bool PassThroughHits;
 }

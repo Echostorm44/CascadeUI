@@ -44,6 +44,17 @@ public class DiagnosticDescriptorTests
         await TUnit.Assertions.Assert.That(enabled).IsTrue();
     }
 
+    [TUnit.Core.Test]
+    public async Task NavigationRouteNotConstructible_HasCorrectProperties()
+    {
+        var descriptor = NavigationDiagnostics.RouteNotConstructible;
+
+        await TUnit.Assertions.Assert.That(descriptor.Id).IsEqualTo("CASCADENAV003");
+        await TUnit.Assertions.Assert.That(descriptor.DefaultSeverity).IsEqualTo(DiagnosticSeverity.Error);
+        await TUnit.Assertions.Assert.That(descriptor.Category).IsEqualTo("Cascade.Navigation");
+        await TUnit.Assertions.Assert.That(descriptor.IsEnabledByDefault).IsTrue();
+    }
+
     // ── Icon diagnostics ──────────────────────────────────────────────
 
     [TUnit.Core.Test]

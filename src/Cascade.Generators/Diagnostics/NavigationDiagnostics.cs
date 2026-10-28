@@ -32,4 +32,16 @@ internal static class NavigationDiagnostics
         category: Category,
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true);
+
+    /// <summary>
+    /// CS-CASCADE-NAV-003: The generated route table can't create this [Route] class, so navigating
+    /// to its path would find nothing.
+    /// </summary>
+    internal static readonly DiagnosticDescriptor RouteNotConstructible = new(
+        id: "CASCADENAV003",
+        title: "Route component can't be created",
+        messageFormat: "[Route(\"{0}\")] on '{1}' can't be navigated to: {2}",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
 }

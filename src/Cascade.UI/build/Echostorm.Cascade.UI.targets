@@ -337,12 +337,4 @@ System.IO.File.WriteAllText(OutputFile, sb.ToString());
     <TrimmerRootAssembly Include="Cascade.UI" />
   </ItemGroup>
 
-  <!--
-    Routes come from the registrations Cascade.Generators emits; the reflection fallback (assembly
-    scan, Activator) is switched off for trimmed and Native AOT publishes so the trimmer drops it.
-  -->
-  <ItemGroup Condition="'$(PublishAot)' == 'true' OR '$(PublishTrimmed)' == 'true'">
-    <RuntimeHostConfigurationOption Include="Cascade.UI.Navigation.ReflectionRouting.IsSupported" Value="false" Trim="true" />
-  </ItemGroup>
-
 </Project>

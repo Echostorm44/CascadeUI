@@ -257,11 +257,17 @@ namespace TestApp
     }
 
     [TUnit.Core.Test]
-    public async Task RouteTable_SkipsComponentsGeneratedCodeCannotName()
+    public async Task RouteTable_ComponentItCannotBuildIsAnError()
     {
         string source = StubTypes + RegistrationsStub + @"
 namespace TestApp
 {
+    [Cascade.UI.Route(""/home"")]
+    public class HomePage : Cascade.UI.Component
+    {
+        protected override Cascade.UI.Node Render() => Cascade.UI.Node.Empty;
+    }
+
     public class Shell
     {
         [Cascade.UI.Route(""/hidden"")]
@@ -282,9 +288,14 @@ namespace TestApp
         var (result, diagnostics) = RunGeneratorAndCompile(source);
         var generated = GetGeneratedSource(result, "RouteTable.g.cs");
 
-        await TUnit.Assertions.Assert.That(generated).IsNotNull();
+        var reported = result.Diagnostics.Where(d => d.Id == "CASCADENAV003").Select(d => d.GetMessage()).ToList();
+
+        await TUnit.Assertions.Assert.That(Has(generated, "HomePage")).IsTrue();
         await TUnit.Assertions.Assert.That(Has(generated, "HiddenPage")).IsFalse();
-        await TUnit.Assertions.Assert.That(Has(generated?.Replace("\r\n", "\n", StringComparison.Ordinal), "typeof(global::TestApp.OddPage),\n            null);")).IsTrue();
+        await TUnit.Assertions.Assert.That(Has(generated, "OddPage")).IsFalse();
+        await TUnit.Assertions.Assert.That(reported.Count).IsEqualTo(2);
+        await TUnit.Assertions.Assert.That(reported.Any(m => Has(m, "'HiddenPage' is private or protected"))).IsTrue();
+        await TUnit.Assertions.Assert.That(reported.Any(m => Has(m, "'OddPage'") && Has(m, "constructor"))).IsTrue();
         await TUnit.Assertions.Assert.That(string.Join("\n", diagnostics)).IsEqualTo("");
     }
 

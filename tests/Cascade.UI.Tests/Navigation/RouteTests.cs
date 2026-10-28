@@ -72,7 +72,7 @@ public class RouteTests
         var resolver = new RouteResolver();
         // Pre-scan with empty set to prevent auto-scanning (which could find
         // [Route] attributes on other test classes and cause duplicates).
-        resolver.MarkScanned();
+        resolver.UseRegisteredRoutesOnly();
         return resolver;
     }
 
@@ -80,7 +80,7 @@ public class RouteTests
     public async Task Register_AddsRoute()
     {
         var resolver = CreateResolver();
-        resolver.Register(typeof(HomeRoutePage), "/home");
+        resolver.Register(typeof(HomeRoutePage), "/home", _ => new HomeRoutePage());
 
         int count = resolver.RouteCount;
         int expected = 1;
@@ -91,8 +91,8 @@ public class RouteTests
     public async Task Register_MultipleRoutes_IncrementsCount()
     {
         var resolver = CreateResolver();
-        resolver.Register(typeof(HomeRoutePage), "/home");
-        resolver.Register(typeof(UserDetailRoutePage), "/users/{id}");
+        resolver.Register(typeof(HomeRoutePage), "/home", _ => new HomeRoutePage());
+        resolver.Register(typeof(UserDetailRoutePage), "/users/{id}", _ => new UserDetailRoutePage());
 
         int count = resolver.RouteCount;
         int expected = 2;
@@ -103,7 +103,7 @@ public class RouteTests
     public async Task Resolve_StaticPath_ReturnsCorrectType()
     {
         var resolver = CreateResolver();
-        resolver.Register(typeof(HomeRoutePage), "/home");
+        resolver.Register(typeof(HomeRoutePage), "/home", _ => new HomeRoutePage());
 
         var match = resolver.Resolve("/home");
         bool isNotNull = match is not null;
@@ -117,7 +117,7 @@ public class RouteTests
     public async Task Resolve_PathWithParameter_ExtractsParameter()
     {
         var resolver = CreateResolver();
-        resolver.Register(typeof(UserDetailRoutePage), "/users/{id}");
+        resolver.Register(typeof(UserDetailRoutePage), "/users/{id}", _ => new UserDetailRoutePage());
 
         var match = resolver.Resolve("/users/42");
         bool hasIdParam = match?.Parameters.ContainsKey("id") == true;
@@ -131,7 +131,7 @@ public class RouteTests
     public async Task Resolve_PathWithMultipleParameters_ExtractsAll()
     {
         var resolver = CreateResolver();
-        resolver.Register(typeof(ProductRoutePage), "/products/{category}/{id}");
+        resolver.Register(typeof(ProductRoutePage), "/products/{category}/{id}", _ => new ProductRoutePage());
 
         var match = resolver.Resolve("/products/electronics/99");
 
@@ -146,7 +146,7 @@ public class RouteTests
     public async Task Resolve_MissingRoute_ReturnsNull()
     {
         var resolver = CreateResolver();
-        resolver.Register(typeof(HomeRoutePage), "/home");
+        resolver.Register(typeof(HomeRoutePage), "/home", _ => new HomeRoutePage());
 
         var match = resolver.Resolve("/nonexistent");
         bool isNull = match is null;
@@ -157,43 +157,27 @@ public class RouteTests
     public async Task Register_DuplicateRoute_ThrowsInvalidOperationException()
     {
         var resolver = CreateResolver();
-        resolver.Register(typeof(HomeRoutePage), "/home");
+        resolver.Register(typeof(HomeRoutePage), "/home", _ => new HomeRoutePage());
 
-        var action = () => resolver.Register(typeof(UnroutedPage), "/home");
+        var action = () => resolver.Register(typeof(UnroutedPage), "/home", _ => new UnroutedPage());
         await Assert.That(action).ThrowsException();
     }
 
     [Test]
-    public async Task Register_SameComponentTwice_KeepsOneRouteAndAddsTheFactory()
+    public async Task Register_SameComponentTwice_KeepsOneRoute()
     {
-        // An untrimmed app finds a generated route again in its assembly scan.
         var resolver = CreateResolver();
-        resolver.Register(typeof(HomeRoutePage), "/home");
+        resolver.Register(typeof(HomeRoutePage), "/home", _ => new HomeRoutePage());
         resolver.Register(typeof(HomeRoutePage), "/home", _ => new HomeRoutePage());
 
-        var match = resolver.Resolve("/home");
         await Assert.That(resolver.RouteCount).IsEqualTo(1);
-        await Assert.That(match!.Factory).IsNotNull();
-    }
-
-    [Test]
-    public async Task Resolve_CarriesTheGeneratedFactory()
-    {
-        var resolver = CreateResolver();
-        resolver.Register(typeof(TypedUserRoutePage), "/users/{id:int}", parameters =>
-            new TypedUserRoutePage { Id = int.Parse(parameters["id"], System.Globalization.CultureInfo.InvariantCulture) });
-
-        var match = resolver.Resolve("/users/7");
-        var page = match!.Factory!(match.Parameters);
-
-        await Assert.That(((TypedUserRoutePage)page).Id).IsEqualTo(7);
     }
 
     [Test]
     public async Task Resolve_CaseInsensitive()
     {
         var resolver = CreateResolver();
-        resolver.Register(typeof(HomeRoutePage), "/Home");
+        resolver.Register(typeof(HomeRoutePage), "/Home", _ => new HomeRoutePage());
 
         var match = resolver.Resolve("/HOME");
         bool isNotNull = match is not null;
@@ -204,7 +188,7 @@ public class RouteTests
     public async Task Resolve_LeadingTrailingSlashesIgnored()
     {
         var resolver = CreateResolver();
-        resolver.Register(typeof(HomeRoutePage), "/home/");
+        resolver.Register(typeof(HomeRoutePage), "/home/", _ => new HomeRoutePage());
 
         var match = resolver.Resolve("home");
         bool isNotNull = match is not null;
@@ -215,8 +199,8 @@ public class RouteTests
     public async Task Reset_ClearsAllRoutes()
     {
         var resolver = CreateResolver();
-        resolver.Register(typeof(HomeRoutePage), "/home");
-        resolver.Register(typeof(UserDetailRoutePage), "/users/{id}");
+        resolver.Register(typeof(HomeRoutePage), "/home", _ => new HomeRoutePage());
+        resolver.Register(typeof(UserDetailRoutePage), "/users/{id}", _ => new UserDetailRoutePage());
 
         resolver.Reset();
 
@@ -229,7 +213,7 @@ public class RouteTests
     public async Task Resolve_ParameterWithSpecialChars_WorksCorrectly()
     {
         var resolver = CreateResolver();
-        resolver.Register(typeof(UserDetailRoutePage), "/users/{id}");
+        resolver.Register(typeof(UserDetailRoutePage), "/users/{id}", _ => new UserDetailRoutePage());
 
         var match = resolver.Resolve("/users/abc-123");
         string? id = match?.Parameters["id"];
@@ -240,9 +224,9 @@ public class RouteTests
     public async Task Register_AfterReset_WorksAgain()
     {
         var resolver = CreateResolver();
-        resolver.Register(typeof(HomeRoutePage), "/home");
+        resolver.Register(typeof(HomeRoutePage), "/home", _ => new HomeRoutePage());
         resolver.Reset();
-        resolver.Register(typeof(HomeRoutePage), "/home");
+        resolver.Register(typeof(HomeRoutePage), "/home", _ => new HomeRoutePage());
 
         int count = resolver.RouteCount;
         int expected = 1;
@@ -255,17 +239,70 @@ public class RouteTests
         protected override Node Render() => Node.Empty;
     }
 
-    [Test]
-    public async Task TypedRouteParam_BindsToTypedProperty()
-    {
-        // A component with a public parameterless ctor + matching typed property gets the
-        // route value converted and bound (the contract CASCADENAV002 validates).
-        var page = Navigator.CreateComponentFromRoute(
-            typeof(TypedUserRoutePage),
-            new System.Collections.Generic.Dictionary<string, string> { ["id"] = "42" });
+    // ── Generated route table ──────────────────────────────────────────
+    // The pages below carry [Route]; this project runs Cascade.Generators, so these tests
+    // exercise the factories the generator actually emits, the same ones an app gets.
 
-        await Assert.That(page is TypedUserRoutePage).IsTrue();
-        await Assert.That(((TypedUserRoutePage)page).Id).IsEqualTo(42);
+    [Test]
+    public async Task Generated_ResolverFindsRoutePagesWithoutManualRegistration()
+    {
+        var match = new RouteResolver().Resolve("/generated/users/42");
+
+        await Assert.That(match!.ComponentType).IsEqualTo(typeof(GeneratedUserPage));
+        await Assert.That(((GeneratedUserPage)match.Factory(match.Parameters)).Id).IsEqualTo(42);
+    }
+
+    [Test]
+    public async Task Generated_FactoryConvertsEachValueToItsPropertyType()
+    {
+        var ticket = Guid.NewGuid();
+        var match = new RouteResolver().Resolve("/generated/users/7")!;
+        match.Parameters["tab"] = "photos";
+        match.Parameters["score"] = "1,234.5";
+        match.Parameters["ticket"] = ticket.ToString();
+        match.Parameters["name"] = "Ada";
+        match.Parameters["pinned"] = "true";
+
+        var page = (GeneratedUserPage)match.Factory(match.Parameters);
+
+        await Assert.That(page.Id).IsEqualTo(7);
+        await Assert.That(page.Tab).IsEqualTo(GeneratedTab.Photos);
+        await Assert.That(page.Score).IsEqualTo(1234.5);
+        await Assert.That(page.Ticket).IsEqualTo(ticket);
+        await Assert.That(page.Name).IsEqualTo("Ada");
+        await Assert.That(page.Pinned).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task Generated_FactoryLeavesDefaultsForValuesThatDoNotParse()
+    {
+        var match = new RouteResolver().Resolve("/generated/users/1")!;
+        var page = (GeneratedUserPage)match.Factory(new Dictionary<string, string> { ["id"] = "x", ["tab"] = "nope" });
+
+        await Assert.That(page.Id).IsEqualTo(0);
+        await Assert.That(page.Tab).IsNull();
+    }
+
+    [Test]
+    public async Task Generated_StringConstructorGetsPathValuesInPatternOrder()
+    {
+        var match = new RouteResolver().Resolve("/generated/albums/summer/photos/7")!;
+        var page = (GeneratedPhotoPage)match.Factory(match.Parameters);
+
+        await Assert.That(page.Album).IsEqualTo("summer");
+        await Assert.That(page.Photo).IsEqualTo("7");
+    }
+
+    [Test]
+    public async Task Generated_NavigatePushesTheBuiltPage()
+    {
+        var navigator = new Navigator(new HomeRoutePage(), PageTransition.None);
+        var pushed = new List<Component>();
+        navigator.PagePushed += pushed.Add;
+
+        navigator.Navigate("/generated/users/9");
+
+        await Assert.That(pushed.Count == 1 && pushed[0] is GeneratedUserPage { Id: 9 }).IsTrue();
     }
 
     [Test]
@@ -273,11 +310,33 @@ public class RouteTests
     {
         var resolver = new RouteResolver();
         resolver.Reset();
-        resolver.Register(typeof(TypedUserRoutePage), "/users/{id:int}");
-        resolver.MarkScanned();
+        resolver.Register(typeof(TypedUserRoutePage), "/users/{id:int}", _ => new TypedUserRoutePage());
+        resolver.UseRegisteredRoutesOnly();
 
         var match = resolver.Resolve("/users/42");
         await Assert.That(match).IsNotNull();
         await Assert.That(match!.Parameters["id"]).IsEqualTo("42");
     }
+}
+
+internal enum GeneratedTab { Info, Photos }
+
+[Route("/generated/users/{id:int}")]
+internal sealed class GeneratedUserPage : Component
+{
+    public int Id { get; set; }
+    public GeneratedTab? Tab { get; set; }
+    public double Score { get; set; }
+    public Guid Ticket { get; set; }
+    public string Name { get; set; } = "";
+    public bool Pinned { get; set; }
+    protected override Node Render() => Node.Empty;
+}
+
+[Route("/generated/albums/{album}/photos/{photo}")]
+internal sealed class GeneratedPhotoPage(string album, string photo) : Component
+{
+    public string Album => album;
+    public string Photo => photo;
+    protected override Node Render() => Node.Empty;
 }

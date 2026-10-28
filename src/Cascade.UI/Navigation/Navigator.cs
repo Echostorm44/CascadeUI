@@ -1,6 +1,4 @@
 using System.Diagnostics.CodeAnalysis;
-using System.Globalization;
-using System.Reflection;
 
 namespace Cascade.UI;
 
@@ -239,21 +237,7 @@ public partial class Navigator : Component, INavigator
             return;
         }
 
-        Component instance;
-        if (match.Factory is not null)
-        {
-            instance = match.Factory(match.Parameters);
-        }
-        else if (ReflectionRouting.IsSupported)
-        {
-            instance = CreateComponentFromRoute(match.ComponentType, match.Parameters);
-        }
-        else
-        {
-            throw new InvalidOperationException(
-                $"Route '{path}' resolved to {match.ComponentType.Name}, which has no generated factory and reflection is off " +
-                "in trimmed builds. Give it a public parameterless constructor, or one taking a string per route parameter.");
-        }
+        var instance = match.Factory(match.Parameters);
 
         CaptureOutgoingState();
 
@@ -468,83 +452,6 @@ public partial class Navigator : Component, INavigator
         }
 
         return component;
-    }
-
-    /// <summary>
-    /// The reflection fallback for routes without a generated factory: the same construction and
-    /// parameter binding the generator emits, done through <see cref="Activator"/> and property reflection.
-    /// </summary>
-    [RequiresUnreferencedCode("Constructs the route's component and binds its properties through reflection.")]
-    internal static Component CreateComponentFromRoute(Type componentType, IReadOnlyDictionary<string, string> parameters)
-    {
-        object? instance;
-
-        // Typed model: if the component has a public parameterless constructor, default-
-        // construct it and bind each route parameter to a matching public property
-        // (converting to the property's own type — this is what CASCADENAV002 validates).
-        // Otherwise fall back to the legacy model of passing values as constructor args.
-        if (componentType.GetConstructor(Type.EmptyTypes) is not null)
-        {
-            instance = Activator.CreateInstance(componentType);
-            if (instance is Component c)
-            {
-                BindRouteParameters(c, parameters);
-            }
-        }
-        else
-        {
-            var args = parameters.Values.Cast<object>().ToArray();
-            instance = Activator.CreateInstance(componentType, args);
-        }
-
-        if (instance is not Component component)
-        {
-            throw new InvalidOperationException(
-                $"Type {componentType.Name} is not a Component.");
-        }
-
-        return component;
-    }
-
-    [RequiresUnreferencedCode("Binds route parameters to the component's properties through reflection.")]
-    private static void BindRouteParameters(Component component, IReadOnlyDictionary<string, string> parameters)
-    {
-        var type = component.GetType();
-        foreach (var kvp in parameters)
-        {
-            var prop = type.GetProperty(
-                kvp.Key,
-                BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-            if (prop is null || !prop.CanWrite)
-            {
-                continue;
-            }
-
-            try
-            {
-                prop.SetValue(component, ConvertRouteValue(kvp.Value, prop.PropertyType));
-            }
-            catch (Exception ex) when (ex is FormatException or InvalidCastException or OverflowException or ArgumentException)
-            {
-                // Leave the property at its default if the URL value can't convert.
-            }
-        }
-    }
-
-    private static object? ConvertRouteValue(string value, Type target)
-    {
-        if (target == typeof(string))
-        {
-            return value;
-        }
-
-        var underlying = Nullable.GetUnderlyingType(target) ?? target;
-        if (underlying == typeof(Guid))
-        {
-            return Guid.Parse(value);
-        }
-
-        return Convert.ChangeType(value, underlying, CultureInfo.InvariantCulture);
     }
 
     private static void CompleteResult(NavigationEntry entry, object? result)

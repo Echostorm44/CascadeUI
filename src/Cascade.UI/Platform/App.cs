@@ -659,11 +659,24 @@ public static class App
 
 
     /// <summary>
-    /// Initiates a clean shutdown of the application.
+    /// True while <see cref="Run{TRoot}"/> is running the app's event loop.
+    /// </summary>
+    public static bool IsRunning => Dispatcher.IsInitialized;
+
+    /// <summary>
+    /// Initiates a clean shutdown of the application: the event loop ends, then the
+    /// <see cref="OnShutdown"/> handlers run. Safe to call from any thread.
     /// </summary>
     /// <param name="exitCode">The process exit code. Default: 0.</param>
     public static void Exit(int exitCode = 0)
     {
+        // The Win32 quit message goes to the calling thread's queue, so from another thread it
+        // never reached the loop and the app kept running.
+        if (Dispatcher.IsInitialized && !Dispatcher.IsOnUiThread)
+        {
+            Dispatcher.Post(() => { Exit(exitCode); });
+            return;
+        }
         if (Dispatcher.messageLoop is not null)
         {
             Dispatcher.messageLoop.Quit(exitCode);

@@ -182,8 +182,16 @@ internal sealed class Win32MessageLoop : IDisposable
     /// <summary>
     /// Posts WM_QUIT to terminate the message loop.
     /// </summary>
+    /// <summary>The code passed to <see cref="Quit"/>, or null while no quit has been requested.</summary>
+    internal int? RequestedExitCode { get; private set; }
+
+    /// <summary>Whether <see cref="Quit"/> ran on the loop's thread (where WM_QUIT must be posted).</summary>
+    internal bool QuitOnMainThread { get; private set; }
+
     internal void Quit(int code = 0)
     {
+        RequestedExitCode = code;
+        QuitOnMainThread = IsOnMainThread;
         exitCode = code;
         running = false;
         Win32.PostQuitMessage(code);

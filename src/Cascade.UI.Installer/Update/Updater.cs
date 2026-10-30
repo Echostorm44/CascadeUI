@@ -113,7 +113,9 @@ public static class Updater
     /// <summary>
     /// Hands off to the startup shim to apply the staged update and relaunch. Spawns
     /// <c>cascade-update</c> with this process's id, then exits so the shim can swap files the running
-    /// app would otherwise lock.
+    /// app would otherwise lock. In a running Cascade app the exit goes through <see cref="App.Exit"/>
+    /// (shutdown handlers run) and this method returns; the process ends once the event loop does.
+    /// Without one it ends the process immediately.
     /// </summary>
     public static void ApplyAndRestart()
     {
@@ -161,6 +163,14 @@ public static class Updater
         }
         Process.Start(startInfo);
 
+        // A running app exits through App.Exit so its OnShutdown handlers run (saving state, wiping
+        // caches) before the shim swaps the files; the shim waits for this process either way.
+        // Environment.Exit used to skip them.
+        if (App.IsRunning)
+        {
+            App.Exit(0);
+            return;
+        }
         Environment.Exit(0);
     }
 }

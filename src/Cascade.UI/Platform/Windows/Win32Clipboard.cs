@@ -130,6 +130,43 @@ internal static unsafe class Win32Clipboard
         return processId;
     }
 
+    // Executables that own the clipboard on behalf of the other end of a Remote Desktop connection:
+    // rdpclip on the remote machine; mstsc (classic client), msrdc (Remote Desktop / Windows App
+    // client) and vmconnect (Hyper-V enhanced session) on the local one.
+    private static readonly string[] RemoteDesktopRelays = ["rdpclip.exe", "mstsc.exe", "msrdc.exe", "vmconnect.exe"];
+
+    /// <summary>
+    /// Whether the clipboard owner is a Remote Desktop clipboard relay. Only the owner window
+    /// counts: an ownerless copy made while the client is the foreground window is local.
+    /// </summary>
+    internal static bool IsOwnedByRemoteDesktop()
+    {
+        nint window = Win32.GetClipboardOwner();
+        if (window == 0)
+        {
+            return false;
+        }
+        Win32.GetWindowThreadProcessId(window, out uint processId);
+        return processId != 0 && IsRemoteDesktopRelay(GetProcessPath(processId));
+    }
+
+    internal static bool IsRemoteDesktopRelay(string? processPath)
+    {
+        if (string.IsNullOrEmpty(processPath))
+        {
+            return false;
+        }
+        string file = System.IO.Path.GetFileName(processPath);
+        foreach (string relay in RemoteDesktopRelays)
+        {
+            if (file.Equals(relay, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     internal static string? GetProcessPath(uint processId)
     {
         nint process = Win32.OpenProcess(Win32.PROCESS_QUERY_LIMITED_INFORMATION, false, processId);

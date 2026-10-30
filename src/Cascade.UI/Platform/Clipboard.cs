@@ -278,6 +278,7 @@ public static class Clipboard
         uint sequenceNumber = 0;
         var source = ClipboardSource.OtherApp;
         bool excluded = false;
+        bool remote = false;
         ClipboardSourceApp? sourceApp = null;
 
         if (OperatingSystem.IsWindows())
@@ -291,7 +292,10 @@ public static class Clipboard
             }
             lastNotifiedSequence = sequenceNumber;
             source = Win32Clipboard.IsOwnChange(sequenceNumber) ? ClipboardSource.ThisApp : ClipboardSource.OtherApp;
-            excluded = Win32Clipboard.IsExcludedFromHistory();
+            // Relayed content is checked first: the exclusion check reads a format, which for a relay
+            // is a round trip to the other machine.
+            remote = Win32Clipboard.IsOwnedByRemoteDesktop();
+            excluded = !remote && Win32Clipboard.IsExcludedFromHistory();
             uint processId = Win32Clipboard.GetSourceProcessId();
             sourceApp = processId != 0 ? new ClipboardSourceApp(processId) : null;
         }
@@ -313,6 +317,7 @@ public static class Clipboard
         var args = new ClipboardChangedEventArgs(content, sequenceNumber, source)
         {
             IsExcludedFromHistory = excluded,
+            IsFromRemoteDesktop = remote,
             SourceApp = sourceApp,
         };
         handler(args);
@@ -382,6 +387,17 @@ public sealed class ClipboardChangedEventArgs : EventArgs
     /// CanIncludeInClipboardHistory = 0. Clipboard histories must skip it. Windows only.
     /// </summary>
     public bool IsExcludedFromHistory { get; init; }
+
+    /// <summary>
+    /// True when the clipboard owner is a Remote Desktop clipboard relay (rdpclip on the remote
+    /// machine; mstsc, msrdc or vmconnect on the client): the content was copied on the other
+    /// machine. Nothing has been read from it. Clipboard histories should skip it: every read is a
+    /// round trip to the other machine, and eagerly reading every format of relayed content can make
+    /// the two relays echo the clipboard back and forth until formats are listed with no data behind
+    /// them. <see cref="IsExcludedFromHistory"/> is not evaluated (always false) for relayed content,
+    /// because evaluating it means a read. Windows only.
+    /// </summary>
+    public bool IsFromRemoteDesktop { get; init; }
 
     /// <summary>
     /// The app that put the content on the clipboard (the clipboard owner, or the foreground app when

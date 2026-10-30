@@ -227,4 +227,29 @@ public class Win32ClipboardTests
         var args = new ClipboardChangedEventArgs(content, 0u, ClipboardSource.ThisApp);
         await Assert.That(args.Source).IsEqualTo(ClipboardSource.ThisApp);
     }
+
+    // ── Remote Desktop relays ────────────────────────────────────────
+
+    [Test]
+    [Arguments(@"C:\Windows\System32\rdpclip.exe", true)]
+    [Arguments(@"C:\Windows\System32\mstsc.exe", true)]
+    [Arguments(@"C:\Program Files\Remote Desktop\msrdc.exe", true)]
+    [Arguments(@"C:\Windows\System32\vmconnect.exe", true)]
+    [Arguments(@"C:\WINDOWS\SYSTEM32\RDPCLIP.EXE", true)]
+    [Arguments(@"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe", false)]
+    [Arguments(@"C:\Tools\notmstsc.exe", false)]
+    [Arguments("", false)]
+    [Arguments(null, false)]
+    public async Task RemoteDesktopRelay_IsRecognisedByExecutableName(string? path, bool expected)
+    {
+        await Assert.That(Win32Clipboard.IsRemoteDesktopRelay(path)).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task ChangedEventArgs_IsFromRemoteDesktop_DefaultsToFalse()
+    {
+        ClipboardContent content = ClipboardContent.FromWin32Availability(new ClipboardAvailability());
+        var args = new ClipboardChangedEventArgs(content, 0u, ClipboardSource.OtherApp);
+        await Assert.That(args.IsFromRemoteDesktop).IsFalse();
+    }
 }

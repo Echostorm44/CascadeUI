@@ -1409,6 +1409,15 @@ internal static class NodeTreeWalker
         }
     }
 
+    /// <summary>
+    /// The host of <paramref name="component"/>. A nested component in a re-rendered parent's
+    /// tree is the stand-in the parent just built (<see cref="Component.StandsInFor"/>), not the
+    /// mounted instance the hosts are keyed by; without resolving it, nothing under a nested
+    /// component was visible to tree, find or inspect.
+    /// </summary>
+    private static bool TryGetHost(Component component, out ComponentHost host)
+        => componentHostMap.TryGetValue(component.StandsInFor ?? component, out host!);
+
     private static void MapComponentHost(ComponentHost host)
     {
         componentHostMap[host.Component] = host;
@@ -1484,7 +1493,7 @@ internal static class NodeTreeWalker
             sourceLine = sourceFile is not null ? uiNode.SourceLine : null;
         }
 
-        if (node is Component component && componentHostMap.TryGetValue(component, out var host))
+        if (node is Component component && TryGetHost(component, out var host))
         {
             renderCount = host.RenderCount;
 
@@ -1511,7 +1520,7 @@ internal static class NodeTreeWalker
     {
         if (node is Component component)
         {
-            if (componentHostMap.TryGetValue(component, out var host) && host.RenderedTree is not null)
+            if (TryGetHost(component, out var host) && host.RenderedTree is not null)
             {
                 if (ReferenceEquals(component, mountedRoot) && OverlayChromes() is { Count: > 0 } chromes)
                 {
@@ -1768,7 +1777,7 @@ internal static class NodeTreeWalker
 
     private static IReadOnlyList<SignalDependency> GetSignalDependenciesForNode(object node)
     {
-        if (node is Component component && componentHostMap.TryGetValue(component, out var host))
+        if (node is Component component && TryGetHost(component, out var host))
         {
             var scope = host.LastTrackingScope;
             if (scope is not null)

@@ -113,3 +113,13 @@ internal sealed class InputsChild : Component
 
     protected override Node Render() => new Label($"{title} {count}");
 }
+
+/// <summary>Sets <see cref="InputsParent"/>'s data from other test classes.</summary>
+internal static class InputsParentAccess
+{
+    public static void Reset(string title)
+    {
+        InputsParent.Title = title;
+        InputsParent.Count = 0;
+    }
+}

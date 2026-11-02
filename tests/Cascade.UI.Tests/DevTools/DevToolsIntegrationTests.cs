@@ -81,6 +81,27 @@ public class DevToolsIntegrationTests
         await Assert.That(children[0]).IsAssignableTo<Column>();
     }
 
+    [Test]
+    public async Task NodeTreeWalker_NestedComponent_AfterItsParentReRenders_ShowsItsTree()
+    {
+        // The parent's tree holds the stand-in instance it built on its last render, not the
+        // mounted child the hosts are keyed by: tree, find and inspect saw nothing under it.
+        Cascade.UI.Tests.Core.InputsParentAccess.Reset("nested");
+        using var orchestrator = new FrameOrchestrator(() => { }, () => { });
+        orchestrator.MountRoot<Cascade.UI.Tests.Core.InputsParent>(400, 200);
+        orchestrator.Tick();
+        ((Cascade.UI.Tests.Core.InputsParent)orchestrator.RootHost!.Component).Refresh();
+        orchestrator.Tick();
+
+        NodeTreeWalker.SetRoot(orchestrator.RootHost!);
+        var column = (Column)orchestrator.RootHost!.Component.RenderedTree!;
+        var standIn = (Component)column.Children[0];
+        var children = NodeTreeWalker.GetChildren(standIn);
+
+        await Assert.That(standIn.StandsInFor).IsNotNull();
+        await Assert.That(children.Count).IsEqualTo(1);
+        await Assert.That(children[0]).IsAssignableTo<Label>();
+    }
     // ── Snapshot / Tree Structure ───────────────────────────────
 
     [Test]

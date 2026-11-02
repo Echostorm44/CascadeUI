@@ -6,6 +6,17 @@ namespace Cascade.UI;
 /// </summary>
 public sealed class Avatar : Node
 {
+    /// <summary>The diameter of an avatar of size <paramref name="size"/> (Md when null).</summary>
+    internal static float PixelSize(AvatarSize? size) => size switch
+    {
+        AvatarSize.Xs => 20f,
+        AvatarSize.Sm => 28f,
+        AvatarSize.Lg => 48f,
+        AvatarSize.Xl => 64f,
+        AvatarSize.Xxl => 96f,
+        _ => 36f,
+    };
+
     /// <summary>
     /// Creates an anonymous avatar with a generic person silhouette.
     /// </summary>
@@ -168,6 +179,39 @@ public sealed class GroupAvatar : Node
     }
 
     internal AvatarSize? SizePreset { get; private set; }
+
+    /// <summary>The diameter of each member avatar.</summary>
+    internal float MemberSize => Avatar.PixelSize(SizePreset ?? AvatarSize.Md);
+
+    /// <summary>How far each avatar is from the previous: they overlap by a third.</summary>
+    internal float Step => MathF.Round(MemberSize * 0.68f);
+
+    /// <summary>The avatars drawn: up to <see cref="Max"/> members.</summary>
+    internal int ShownCount => Math.Min(Avatars.Count, Math.Max(Max, 0));
+
+    /// <summary>Members not shown, counted on a "+N" badge after the avatars.</summary>
+    internal int OverflowCount => Avatars.Count - ShownCount;
+
+    /// <summary>The group's width: each shown avatar and the overflow badge, overlapping.</summary>
+    internal float GroupWidth
+    {
+        get
+        {
+            int circles = ShownCount + (OverflowCount > 0 ? 1 : 0);
+            return circles == 0 ? 0f : MemberSize + (circles - 1) * Step;
+        }
+    }
+
+    // One Avatar per member, kept across paints so hover animation state stays put.
+    private Avatar[]? memberAvatars;
+
+    internal Avatar MemberAvatar(int index)
+    {
+        memberAvatars ??= new Avatar[Avatars.Count];
+        return memberAvatars[index] ??= Avatars[index].AvatarUrl is { Length: > 0 } url
+            ? new Avatar(url, Avatars[index].Name)
+            : new Avatar(Avatars[index].Name);
+    }
 }
 
 /// <summary>

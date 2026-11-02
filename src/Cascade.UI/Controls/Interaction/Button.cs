@@ -34,7 +34,7 @@ public sealed class Button : Node
     internal bool IsLoading { get; set; }
     internal string? VariantName { get; set; }
     internal TextStyle? StyleOverride { get; set; }
-    internal int? TabIndexValue { get; set; }
+
     internal Action? OnContextMenuHandler { get; set; }
     internal LocKey TooltipText { get; set; }
 }
@@ -129,11 +129,10 @@ public static class ButtonExtensions
         return button;
     }
 
-    /// <summary>Sets the keyboard tab order index.</summary>
+    /// <summary>Sets the keyboard tab order index (the same as the <see cref="FocusExtensions.TabIndex{T}"/> every node has).</summary>
     public static Button TabIndex(this Button button, int index)
     {
-        button.TabIndexValue = index;
-        return button;
+        return FocusExtensions.TabIndex(button, (TabIndex)index);
     }
 
     /// <summary>Registers a context menu (right-click) handler.</summary>

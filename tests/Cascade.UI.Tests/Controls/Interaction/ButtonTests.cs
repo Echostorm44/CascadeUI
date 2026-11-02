@@ -141,7 +141,7 @@ public class ButtonTests
     {
         var button = new Button("OK", NoOp).TabIndex(3);
 
-        int? index = button.TabIndexValue;
+        int? index = button.LayoutData.FocusData?.TabIndexValue;
         var expected = 3;
         await Assert.That(index).IsEqualTo(expected);
     }

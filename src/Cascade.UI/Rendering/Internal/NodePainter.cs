@@ -779,6 +779,10 @@ internal sealed partial class NodePainter
                 PaintAvatar(av, bounds);
                 break;
 
+            case GroupAvatar group:
+                PaintGroupAvatar(group, bounds);
+                break;
+
             case ProgressRing pr:
                 PaintProgressRing(pr, bounds);
                 break;
@@ -1594,8 +1598,17 @@ internal sealed partial class NodePainter
             textColor = textColor.Opacity(textOpacity);
         }
 
-        // Label in the variant's TextStyle (or .Style()), as MeasureButton sized it.
-        PaintButtonContent(btn, bounds, bt, textColor);
+        // Label in the variant's TextStyle (or .Style()), as MeasureButton sized it. A loading
+        // button keeps its size and shows a spinner in the label's place.
+        if (btn.IsLoading)
+        {
+            float spinnerSize = MathF.Min(ButtonLabelStyle.StyleFor(bt, btn.StyleOverride).Size * 1.1f, bounds.Height * 0.6f);
+            DrawSpinnerArc(bounds.Center, spinnerSize / 2f, MathF.Max(1.5f, spinnerSize / 9f), textColor);
+        }
+        else
+        {
+            PaintButtonContent(btn, bounds, bt, textColor);
+        }
 
         // Tooltip overlay (deferred)
         DeferTooltipIfHovered(btn, btn.TooltipText.Resolve(), bounds);
@@ -5766,7 +5779,8 @@ internal sealed partial class NodePainter
         var trackColor = pb.TrackColorOverride ?? t.TrackColor;
         var fillColor = pb.FillColorOverride ?? t.FillColor;
         float barHeight = pb.HeightOverride ?? t.BarHeight;
-        bool reducedMotion = ControlStateAnimator.ReducedMotion;
+        // Animated(false) draws the value as it is: no spring, no completion pulse.
+        bool reducedMotion = ControlStateAnimator.ReducedMotion || !pb.AnimatedEnabled;
 
         // ShowLabel: the value as text right of the bar, in a column wide enough for the widest
         // label (100%) so the bar does not change length as the number grows.
@@ -5863,6 +5877,12 @@ internal sealed partial class NodePainter
         var color = sep.Color ?? theme.Colors.Border;
         float inset = sep.InsetAmount ?? 0f;
 
+        if (!string.IsNullOrEmpty(sep.LabelText))
+        {
+            PaintLabelledSeparator(sep, bounds, color, inset);
+            return;
+        }
+
         // Separators are static divider lines — a plain hairline with a short soft
         // inset at each end. There is deliberately no entrance animation: a divider
         // that animates in from the centre freezes half-drawn whenever it sits inside
@@ -5890,6 +5910,43 @@ internal sealed partial class NodePainter
                 new Point(x, top + fadeLen),
                 new Point(x, bottom - fadeLen),
                 new Stroke(color, sep.Thickness));
+        }
+    }
+
+    /// <summary>A separator with a label in its middle: the line stops either side of the text.</summary>
+    private void PaintLabelledSeparator(Separator sep, Rect bounds, ColorValue color, float inset)
+    {
+        string label = sep.LabelText!;
+        const float Gap = 8f;
+        var labelSize = LayoutSolver.MeasureSeparatorLabel(label);
+        var stroke = new Stroke(color, sep.Thickness);
+        if (sep.SeparatorOrientation == Orientation.Horizontal)
+        {
+            float y = bounds.Y + bounds.Height / 2f;
+            float middle = bounds.X + bounds.Width / 2f;
+            float textLeft = middle - labelSize.Width / 2f;
+            float textRight = middle + labelSize.Width / 2f;
+            if (textLeft - Gap > bounds.X + inset)
+            {
+                ctx.DrawLine(new Point(bounds.X + inset, y), new Point(textLeft - Gap, y), stroke);
+                ctx.DrawLine(new Point(textRight + Gap, y), new Point(bounds.Right - inset, y), stroke);
+            }
+            PaintText(label, new Rect(textLeft - 1f, bounds.Y, labelSize.Width + 2f, bounds.Height), 1f, theme.Colors.TextMuted,
+                fontSize: LayoutSolver.SeparatorLabelFontSize, alignment: TextAlignment.Center);
+        }
+        else
+        {
+            float x = bounds.X + bounds.Width / 2f;
+            float middle = bounds.Y + bounds.Height / 2f;
+            float textTop = middle - labelSize.Height / 2f;
+            float textBottom = middle + labelSize.Height / 2f;
+            if (textTop - Gap > bounds.Y + inset)
+            {
+                ctx.DrawLine(new Point(x, bounds.Y + inset), new Point(x, textTop - Gap), stroke);
+                ctx.DrawLine(new Point(x, textBottom + Gap), new Point(x, bounds.Bottom - inset), stroke);
+            }
+            PaintText(label, new Rect(bounds.X, textTop, bounds.Width, labelSize.Height), 0f, theme.Colors.TextMuted,
+                fontSize: LayoutSolver.SeparatorLabelFontSize, alignment: TextAlignment.Center);
         }
     }
 
@@ -6303,13 +6360,23 @@ internal sealed partial class NodePainter
             speedMs = 1000f;
         }
 
+        DrawSpinnerArc(center, radius, strokeWidth, spinner.SpinnerColor ?? theme.Colors.Primary, speedMs);
+    }
+
+    /// <summary>
+    /// The spinning quarter arc of a spinner (and of a loading button), one turn per
+    /// <paramref name="periodMs"/>. Keeps frames coming while it is on screen.
+    /// </summary>
+    private void DrawSpinnerArc(Point center, float radius, float strokeWidth, ColorValue color, float periodMs = 1000f)
+    {
+        HasActiveSpinners = true;
         double elapsedMs = Stopwatch.GetElapsedTime(0).TotalMilliseconds;
-        float rotationDegrees = (float)((elapsedMs / speedMs * 360.0) % 360.0);
+        float rotationDegrees = (float)((elapsedMs / periodMs * 360.0) % 360.0);
         // Draw the active arc with continuous rotation by passing the rotated start angle
         // directly instead of using a transform, avoiding a GPU renderer bug where rotated
         // arcs are not rendered correctly via the arc fast path.
         ctx.DrawArc(center, radius, Angle.Degrees(rotationDegrees), Angle.Degrees(90),
-            new Stroke(spinner.SpinnerColor ?? theme.Colors.Primary, strokeWidth, StrokeCap.Round, StrokeJoin.Round));
+            new Stroke(color, strokeWidth, StrokeCap.Round, StrokeJoin.Round));
     }
 
     // ── IconButton ─────────────────────────────────────────────────────
@@ -6384,6 +6451,14 @@ internal sealed partial class NodePainter
         {
             float pressAlpha = LerpF(0f, 0.12f, pressT);
             ctx.DrawRect(paintBounds, theme.Colors.Text.Opacity(pressAlpha), radius: radius);
+        }
+
+        // A loading icon button shows a spinner in the icon's place.
+        if (ib.IsLoading)
+        {
+            float spinnerSize = ib.IconSizeOverride ?? IconButton.GlyphSizeFor(side);
+            DrawSpinnerArc(paintBounds.Center, spinnerSize / 2f, MathF.Max(1.5f, spinnerSize / 9f), theme.Colors.Text);
+            return;
         }
 
         // Draw the icon as stroked lines from its SVG path data
@@ -8378,7 +8453,8 @@ internal sealed partial class NodePainter
 
         // The pill layout reserved room for (Tag.PillWidth); measured again here in paint's own text
         // measurement, so the two agree to within a rounding.
-        float actualPillWidth = Tag.PillWidth(measuredTextSize.Width, isRemovable);
+        float leadingWidth = tag.MeasureLeading(textHeight);
+        float actualPillWidth = Tag.PillWidth(measuredTextSize.Width, isRemovable, leadingWidth);
 
         // Center the correctly-sized pill within the allocated bounds
         float pillX = (bounds.Width - actualPillWidth) / 2f;
@@ -8396,9 +8472,19 @@ internal sealed partial class NodePainter
         // Border
         ctx.DrawRect(pillRect, stroke: new Stroke(borderColor, 1f), radius: radius);
 
+        // Leading content (a small avatar, an icon), each centred vertically, before the label.
+        float leadingX = pillX + paddingH;
+        foreach (var leading in tag.LeadingNodes())
+        {
+            var size = leading.LayoutData.Bounds;
+            leading.LayoutData.Bounds = new Rect(leadingX, (bounds.Height - size.Height) / 2f, size.Width, size.Height);
+            PaintRecursive(leading);
+            leadingX += size.Width + Tag.LeadingGap;
+        }
+
         // Label text — positioned within the pill
         float textY = (bounds.Height - textHeight) / 2f;
-        float textX = pillX + paddingH;
+        float textX = pillX + paddingH + leadingWidth;
         var textBounds = new Rect(textX, textY, measuredTextSize.Width, textHeight);
         PaintText(tag.Label, textBounds, 0, textColor, fontSize: fontSize);
 
@@ -8406,7 +8492,7 @@ internal sealed partial class NodePainter
         if (isRemovable)
         {
             float xSize = 4f;
-            float xCenterX = pillX + paddingH + textWidth + xGap + xIconWidth / 2f;
+            float xCenterX = pillX + paddingH + leadingWidth + textWidth + xGap + xIconWidth / 2f;
             float xCenterY = bounds.Height / 2f;
             var xColor = theme.Colors.TextMuted;
 
@@ -8463,6 +8549,39 @@ internal sealed partial class NodePainter
             hash = (hash ^ c) * 16777619;
         }
         return hash;
+    }
+
+    /// <summary>
+    /// A group avatar: the members overlapping left to right, the earlier ones on top, each
+    /// ringed in the background colour so the edges read; a "+N" badge counts the rest.
+    /// </summary>
+    private void PaintGroupAvatar(GroupAvatar group, Rect bounds)
+    {
+        float size = group.MemberSize;
+        float ring = MathF.Max(1.5f, size / 18f);
+        float top = bounds.Y + (bounds.Height - size) / 2f;
+        var background = theme.Colors.Background;
+
+        // The badge sits rightmost and lowest; members are drawn right to left so the first is on top.
+        if (group.OverflowCount > 0)
+        {
+            float x = bounds.X + group.ShownCount * group.Step;
+            var center = new Point(x + size / 2f, top + size / 2f);
+            ctx.DrawCircle(center, size / 2f + ring, background);
+            ctx.DrawCircle(center, size / 2f, theme.Colors.SurfaceAlt);
+            PaintText($"+{group.OverflowCount}", new Rect(x, top, size, size), 0f, theme.Colors.Text,
+                fontSize: size * 0.36f, alignment: TextAlignment.Center, fontWeight: FontWeight.SemiBold);
+        }
+
+        for (int i = group.ShownCount - 1; i >= 0; i--)
+        {
+            float x = bounds.X + i * group.Step;
+            ctx.DrawCircle(new Point(x + size / 2f, top + size / 2f), size / 2f + ring, background);
+            using (ctx.PushTranslate(x, top))
+            {
+                PaintAvatar(group.MemberAvatar(i), new Rect(0f, 0f, size, size));
+            }
+        }
     }
 
     private void PaintAvatar(Avatar av, Rect bounds)
@@ -9251,7 +9370,7 @@ internal sealed partial class NodePainter
             (int)Math.Round(gaugeContentY * 10f),
             (int)Math.Round(bounds.Width * 10f));
         float animatedValue;
-        if (reducedMotion)
+        if (reducedMotion || !gauge.AnimatedEnabled)
         {
             animatedValue = normalizedValue;
         }

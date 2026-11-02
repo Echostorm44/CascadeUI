@@ -327,6 +327,8 @@ internal static class LayoutSolver
 
             Avatar av => MeasureAvatar(av, constraints),
 
+            GroupAvatar group => MeasureGroupAvatar(group, constraints),
+
             ProgressRing pr => MeasureProgressRing(pr, constraints),
 
             ISegmentedControl sc => MeasureSegmentedControl(sc, constraints),
@@ -1733,6 +1735,8 @@ internal static class LayoutSolver
 
     private static Size MeasureSeparator(Separator sep, LayoutConstraints constraints)
     {
+        // A labelled separator is as tall (or, vertical, as wide) as its label.
+        Size label = string.IsNullOrEmpty(sep.LabelText) ? Size.Zero : MeasureSeparatorLabel(sep.LabelText);
         if (sep.SeparatorOrientation == Orientation.Horizontal)
         {
             // Horizontal separator: fill available width, thickness tall
@@ -1741,7 +1745,7 @@ internal static class LayoutSolver
                 : constraints.MaxWidth;
             return new Size(
                 constraints.ConstrainWidth(width),
-                constraints.ConstrainHeight(sep.Thickness));
+                constraints.ConstrainHeight(MathF.Max(sep.Thickness, label.Height)));
         }
         else
         {
@@ -1750,10 +1754,24 @@ internal static class LayoutSolver
                 ? 200f
                 : constraints.MaxHeight;
             return new Size(
-                constraints.ConstrainWidth(sep.Thickness),
+                constraints.ConstrainWidth(MathF.Max(sep.Thickness, label.Width)),
                 constraints.ConstrainHeight(height));
         }
     }
+
+    /// <summary>The caption-sized label of a separator, as the painter draws it.</summary>
+    internal static Size MeasureSeparatorLabel(string text)
+    {
+        float size = SeparatorLabelFontSize;
+        if (DefaultFontPath is null)
+        {
+            return new Size(text.Length * size * AverageCharWidthRatio, size * DefaultLineHeightMultiplier);
+        }
+        return TextLayoutEngine.Layout(text, new TextLayoutOptions { FontPath = DefaultFontPath, FontSize = size, NoWrap = true }).BoundingBox;
+    }
+
+    /// <summary>The font size of a separator's label.</summary>
+    internal static float SeparatorLabelFontSize { get; set; } = 12f;
 
     private static Size MeasureCard(Card card, LayoutConstraints constraints)
     {
@@ -1917,7 +1935,8 @@ internal static class LayoutSolver
             : tag.Label.Length * fontSize * AverageCharWidthRatio;
         float textHeight = fontSize * DefaultLineHeightMultiplier;
 
-        float totalWidth = Tag.PillWidth(textWidth, removable: tag.OnRemove != null);
+        float leadingWidth = tag.MeasureLeading(textHeight);
+        float totalWidth = Tag.PillWidth(textWidth, removable: tag.OnRemove != null, leadingWidth);
         float totalHeight = textHeight + Tag.PaddingVertical * 2f;
 
         return new Size(
@@ -1927,20 +1946,18 @@ internal static class LayoutSolver
 
     private static Size MeasureAvatar(Avatar av, LayoutConstraints constraints)
     {
-        float size = av.CustomSize ?? av.SizePreset switch
-        {
-            AvatarSize.Xs  => 20f,
-            AvatarSize.Sm  => 28f,
-            AvatarSize.Md  => 36f,
-            AvatarSize.Lg  => 48f,
-            AvatarSize.Xl  => 64f,
-            AvatarSize.Xxl => 96f,
-            _              => 36f
-        };
+        float size = av.CustomSize ?? Avatar.PixelSize(av.SizePreset);
 
         return new Size(
             constraints.ConstrainWidth(size),
             constraints.ConstrainHeight(size));
+    }
+
+    private static Size MeasureGroupAvatar(GroupAvatar group, LayoutConstraints constraints)
+    {
+        return new Size(
+            constraints.ConstrainWidth(group.GroupWidth),
+            constraints.ConstrainHeight(group.Avatars.Count == 0 ? 0f : group.MemberSize));
     }
 
     private static Size MeasureProgressRing(ProgressRing pr, LayoutConstraints constraints)

@@ -3207,7 +3207,7 @@ internal sealed partial class InputDispatcher
         // Enter/Space on focused button → invoke click
         if (evt.Key is Key.Enter or Key.Space)
         {
-            if (focusedNode is Button btn && !btn.IsDisabled)
+            if (focusedNode is Button btn && !btn.IsDisabled && !btn.IsLoading)
             {
                 btn.OnClick();
                 return;
@@ -3219,7 +3219,7 @@ internal sealed partial class InputDispatcher
                 return;
             }
 
-            if (focusedNode is IconButton ib && !ib.IsDisabled)
+            if (focusedNode is IconButton ib && !ib.IsDisabled && !ib.IsLoading)
             {
                 ib.OnClick();
                 return;
@@ -4578,13 +4578,13 @@ internal sealed partial class InputDispatcher
         // Direct control click handlers
         switch (node)
         {
-            case Button btn when !btn.IsDisabled:
+            case Button btn when !btn.IsDisabled && !btn.IsLoading:
                 btn.OnClick();
                 return;
             case LinkButton lb when !lb.IsDisabled:
                 lb.OnClick();
                 return;
-            case IconButton ib when !ib.IsDisabled:
+            case IconButton ib when !ib.IsDisabled && !ib.IsLoading:
                 ib.OnClick();
                 return;
             case Checkbox cb when cb.BoolValue is { } binding:

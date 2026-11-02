@@ -670,6 +670,7 @@ internal sealed class FrameOrchestrator : IDisposable
                 LayoutSolver.ButtonTokens = Theme.Button;
                 LayoutSolver.BodyFontSize = Theme.Typography.Scale.Body.Size;
                 LayoutSolver.BodyFontWeight = Theme.Typography.Scale.Body.Weight;
+                LayoutSolver.SeparatorLabelFontSize = Theme.Typography.Scale.Caption.Size;
                 LayoutSolver.H1FontSize = Theme.Typography.Scale.H1.Size;
                 LayoutSolver.H2FontSize = Theme.Typography.Scale.H2.Size;
                 LayoutSolver.H3FontSize = Theme.Typography.Scale.H3.Size;

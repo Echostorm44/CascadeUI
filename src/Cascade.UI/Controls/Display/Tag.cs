@@ -17,11 +17,46 @@ public sealed class Tag : Node
     internal const float TextBuffer = 2f;   // keeps the × off the last glyph
     internal const float FontScale = 0.85f; // of the body text size
 
-    /// <summary>The pill's width for a label whose text measures <paramref name="textWidth"/>.</summary>
-    internal static float PillWidth(float textWidth, bool removable)
+    internal const float LeadingGap = 6f;
+
+    /// <summary>
+    /// The pill's width for a label whose text measures <paramref name="textWidth"/>, after
+    /// <paramref name="leadingWidth"/> of leading content (see <see cref="LeadingNodes"/>).
+    /// </summary>
+    internal static float PillWidth(float textWidth, bool removable, float leadingWidth = 0f)
     {
-        float width = PaddingHorizontal + textWidth + TextBuffer + PaddingHorizontal;
+        float width = PaddingHorizontal + leadingWidth + textWidth + TextBuffer + PaddingHorizontal;
         return removable ? width + RemoveGap + RemoveIconWidth : width;
+    }
+
+    /// <summary>The leading content drawn before the label, in order: the leading node, then the icon.</summary>
+    internal IEnumerable<Node> LeadingNodes()
+    {
+        if (!Leading.IsLayoutEmpty)
+        {
+            yield return Leading;
+        }
+        if (!TagIcon.IsLayoutEmpty)
+        {
+            yield return TagIcon;
+        }
+    }
+
+    /// <summary>
+    /// Lays out the leading content no taller than <paramref name="maxHeight"/>, and returns the
+    /// room it takes before the label: each node's width and a gap after it. Layout and paint
+    /// both call this, so the pill they size is the pill that is drawn.
+    /// </summary>
+    internal float MeasureLeading(float maxHeight)
+    {
+        float width = 0f;
+        foreach (var node in LeadingNodes())
+        {
+            var size = LayoutSolver.Measure(node, LayoutConstraints.Loose(new Size(float.PositiveInfinity, maxHeight)));
+            node.LayoutData.Bounds = new Rect(0f, 0f, size.Width, size.Height);
+            width += size.Width + LeadingGap;
+        }
+        return width;
     }
 
     /// <summary>

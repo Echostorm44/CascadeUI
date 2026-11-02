@@ -44,7 +44,7 @@ public sealed class Card : Node
     internal EdgeInsets? PaddingOverride { get; set; }
     internal float? CornerRadiusOverride { get; set; }
     internal ShadowValue? ElevationOverride { get; set; }
-    internal bool IsPaddingRemoved { get; set; }
+
 
     /// <summary>Makes the card interactive (clickable with hover/press effects).</summary>
     public Card OnClick(Action onClick)
@@ -57,7 +57,6 @@ public sealed class Card : Node
     public Card ContentPadding(EdgeInsets padding)
     {
         PaddingOverride = padding;
-        IsPaddingRemoved = false;
         return this;
     }
 
@@ -78,7 +77,6 @@ public sealed class Card : Node
     /// <summary>Removes the card's default padding for full-bleed content.</summary>
     public Card NoPadding()
     {
-        IsPaddingRemoved = true;
         PaddingOverride = EdgeInsets.Zero;
         return this;
     }

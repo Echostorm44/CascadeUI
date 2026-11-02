@@ -67,6 +67,96 @@ public class ModifierRenderTests
         await Assert.That(RenderHarness.LongestRun(underlined)).IsGreaterThan(RenderHarness.LongestRun(plain) + 20);
     }
 
+    [Test]
+    public async Task SeparatorLabel_DrawsTheTextWithTheLineEitherSide()
+    {
+        using var app = new RenderHarness(() => new Separator().Label("OR").Width(300));
+        var frame = app.Frame();
+        var size = LayoutSolver.MeasureSeparatorLabel("OR");
+
+        // Text in the middle, lines at both ends, and the line stops short of the text.
+        await Assert.That(size.Height).IsGreaterThan(8f);
+        await Assert.That(frame.Count(p => p.X > 140 && p.X < 160 && p.R > 70)).IsGreaterThan(5);
+        await Assert.That(frame.Count(p => p.X < 40 && p.R > 25)).IsGreaterThan(5);
+        await Assert.That(frame.Count(p => p.X > 260 && p.X < 300 && p.R > 25)).IsGreaterThan(5);
+    }
+
+    [Test]
+    public async Task ButtonLoading_DrawsASpinner_AndIgnoresClicks()
+    {
+        int clicks = 0;
+        using var loading = new RenderHarness(() => new Button("Save changes", () => clicks++).Loading().Width(160));
+        using var normal = new RenderHarness(() => new Button("Save changes", () => clicks++).Width(160));
+        var spinning = loading.Frame();
+        var labelled = normal.Frame();
+
+        // The label's wide run of text is gone; something (the arc) is drawn in the middle.
+        int Bright(RenderHarness.Pixels f) => f.Count(p => p.R > 200 && p.G > 200 && p.B > 200);
+        await Assert.That(Bright(spinning)).IsGreaterThan(0);
+        await Assert.That(Bright(spinning)).IsLessThan(Bright(labelled) / 2);
+        loading.Click(80, 15);
+        await Assert.That(clicks).IsEqualTo(0);
+        normal.Click(80, 15);
+        await Assert.That(clicks).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task IconButtonLoading_IgnoresClicks()
+    {
+        int clicks = 0;
+        using var app = new RenderHarness(() => new IconButton(Icons.Play, () => clicks++).Loading());
+        app.Frame();
+        app.Click(20, 20);
+
+        await Assert.That(clicks).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task ProgressBarAnimatedFalse_DrawsTheValueAtOnce()
+    {
+        using var app = new RenderHarness(() => new ProgressBar(1f).Animated(false).FillColor(Red).Width(300));
+        var frame = app.Frame();
+
+        // Without the spring the first frame is already full: red to the far end of the track.
+        await Assert.That(frame.Count(p => p.X > 280 && p.R > 200 && p.G < 60)).IsGreaterThan(0);
+    }
+
+    [Test]
+    public async Task GroupAvatar_DrawsOverlappingMembers_AndAnOverflowBadge()
+    {
+        var people = new AvatarInfo[] { new("Ann Lee"), new("Bo Ray"), new("Cy Tan"), new("Di Moe"), new("Ed Fox") };
+        var group = new GroupAvatar(people, max: 3).Size(AvatarSize.Lg);
+        using var app = new RenderHarness(() => group);
+        var frame = app.Frame();
+
+        // Three 48 px avatars and a "+2" badge, each 32 px after the last: 48 + 3 * 33.
+        await Assert.That(group.GroupWidth).IsEqualTo(48f + 3 * 33f);
+        await Assert.That(group.OverflowCount).IsEqualTo(2);
+        await Assert.That(frame.Count(p => p.X < 147 && p.Y < 48 && Math.Max(p.R, Math.Max(p.G, p.B)) > 60)).IsGreaterThan(3000);
+    }
+
+    [Test]
+    public async Task TagIcon_IsDrawnBeforeTheLabel_AndWidensThePill()
+    {
+        var plain = LayoutSolver.Measure(new Tag("Chillout"), LayoutConstraints.Loose(new Size(400, 100)));
+        var iconTag = new Tag("Chillout").Icon(new IconView(Icons.Star, 14).Color(Red));
+        using var app = new RenderHarness(() => iconTag);
+        var frame = app.Frame();
+        var withIcon = LayoutSolver.Measure(iconTag, LayoutConstraints.Loose(new Size(400, 100)));
+
+        await Assert.That(withIcon.Width).IsGreaterThan(plain.Width + 14f);
+        await Assert.That(frame.Count(p => p.X < 40 && p.R > 150 && p.G < 60)).IsGreaterThan(10);
+    }
+
+    [Test]
+    public async Task ButtonTabIndex_IsTheNodesTabIndex()
+    {
+        var button = new Button("x", () => { }).TabIndex(5);
+        var other = new Label("y").TabIndex(5);
+
+        await Assert.That(button.LayoutData.FocusData!.TabIndexValue).IsEqualTo(5);
+        await Assert.That(other.LayoutData.FocusData!.TabIndexValue).IsEqualTo(5);
+    }
     private static RenderHarness.Pixels HoveredLinkPixels(bool underline)
     {
         using var app = new RenderHarness(() => new LinkButton("Open the station list", () => { }).Underline(underline));
@@ -115,6 +205,14 @@ internal sealed class RenderHarness : IDisposable
     }
 
     public void Tick() => orchestrator.Tick();
+
+    public void Click(float x, float y)
+    {
+        orchestrator.Input.HandleMouseEvent(new NativeMouseEvent { X = x, Y = y, Type = NativeMouseEventType.MouseMove });
+        orchestrator.Input.HandleMouseEvent(new NativeMouseEvent { X = x, Y = y, Type = NativeMouseEventType.MouseDown, Button = NativeMouseButton.Left });
+        orchestrator.Input.HandleMouseEvent(new NativeMouseEvent { X = x, Y = y, Type = NativeMouseEventType.MouseUp, Button = NativeMouseButton.Left });
+        orchestrator.Tick();
+    }
 
     public void MoveMouse(float x, float y)
     {

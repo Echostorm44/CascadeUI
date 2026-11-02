@@ -89,14 +89,12 @@ public class CardTests
     }
 
     [Test]
-    public async Task NoPadding_SetsFlagAndZeroPadding()
+    public async Task NoPadding_SetsZeroPadding()
     {
         var card = new Card(Node.Empty).NoPadding();
 
-        bool removed = card.IsPaddingRemoved;
         var padding = card.PaddingOverride;
         var expected = EdgeInsets.Zero;
-        await Assert.That(removed).IsTrue();
         await Assert.That(padding).IsEqualTo(expected);
     }
 

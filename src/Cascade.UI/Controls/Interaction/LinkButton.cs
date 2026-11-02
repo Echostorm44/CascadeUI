@@ -48,7 +48,10 @@ public static class LinkButtonExtensions
         return button;
     }
 
-    /// <summary>Controls whether the link text is underlined (default is true).</summary>
+    /// <summary>
+    /// Whether the link underlines itself when hovered or pressed (default true). False keeps
+    /// the text plain; the colour still marks it as a link.
+    /// </summary>
     public static LinkButton Underline(this LinkButton button, bool underline = true)
     {
         button.IsUnderlined = underline;

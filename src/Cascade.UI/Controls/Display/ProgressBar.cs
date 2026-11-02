@@ -71,6 +71,10 @@ public sealed class ProgressBar : Node
         return this;
     }
 
+    /// <summary>The label text for <paramref name="value"/> (0-1): the custom format, else a whole percentage.</summary>
+    internal static string FormatLabel(ProgressBar bar, float value)
+        => bar.LabelFormatter?.Invoke(value) ?? $"{MathF.Round(value * 100f).ToString(System.Globalization.CultureInfo.CurrentCulture)}%";
+
     /// <summary>Sets a custom label format.</summary>
     public ProgressBar LabelFormat(Func<float, string> formatter)
     {

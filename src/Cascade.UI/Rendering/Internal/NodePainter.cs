@@ -5768,6 +5768,24 @@ internal sealed partial class NodePainter
         float barHeight = pb.HeightOverride ?? t.BarHeight;
         bool reducedMotion = ControlStateAnimator.ReducedMotion;
 
+        // ShowLabel: the value as text right of the bar, in a column wide enough for the widest
+        // label (100%) so the bar does not change length as the number grows.
+        if (pb.ShowLabelEnabled && pb.Mode == ProgressMode.Determinate)
+        {
+            float labelSize = theme.Typography.Scale.Caption.Size;
+            string label = ProgressBar.FormatLabel(pb, Math.Clamp(pb.Value, 0f, 1f));
+            float columnWidth = MathF.Max(
+                ctx.MeasureText(ProgressBar.FormatLabel(pb, 1f), labelSize).Width,
+                ctx.MeasureText(label, labelSize).Width);
+            const float LabelGap = 8f;
+            if (bounds.Width > columnWidth + LabelGap + 8f)
+            {
+                var labelBounds = new Rect(bounds.Right - columnWidth, bounds.Y, columnWidth, bounds.Height);
+                PaintText(label, labelBounds, 0, theme.Colors.TextMuted, fontSize: labelSize, alignment: TextAlignment.End);
+                bounds = new Rect(bounds.X, bounds.Y, bounds.Width - columnWidth - LabelGap, bounds.Height);
+            }
+        }
+
         // Center the bar vertically within bounds
         var trackBounds = new Rect(
             bounds.X,
@@ -5910,6 +5928,17 @@ internal sealed partial class NodePainter
         if (!isClickable || (hoverT < 0.01f && pressT < 0.01f))
         {
             shadow = t.Shadow;
+        }
+        if (card.ElevationOverride is { } elevation)
+        {
+            shadow = ShadowSpec.FromDrop(new DropShadow
+            {
+                Blur = elevation.BlurRadius,
+                Spread = elevation.SpreadRadius,
+                OffsetX = elevation.OffsetX,
+                OffsetY = elevation.OffsetY,
+                Color = elevation.Color,
+            });
         }
 
         // Apply vertical lift
@@ -6280,7 +6309,7 @@ internal sealed partial class NodePainter
         // directly instead of using a transform, avoiding a GPU renderer bug where rotated
         // arcs are not rendered correctly via the arc fast path.
         ctx.DrawArc(center, radius, Angle.Degrees(rotationDegrees), Angle.Degrees(90),
-            new Stroke(theme.Colors.Primary, strokeWidth, StrokeCap.Round, StrokeJoin.Round));
+            new Stroke(spinner.SpinnerColor ?? theme.Colors.Primary, strokeWidth, StrokeCap.Round, StrokeJoin.Round));
     }
 
     // ── IconButton ─────────────────────────────────────────────────────
@@ -6595,7 +6624,7 @@ internal sealed partial class NodePainter
 
         // Underline — slides in from left on hover, smoothly animated
         float underlineProgress = Math.Max(hoverT, pressT);
-        if (underlineProgress > 0.001f && disabledT < 0.99f)
+        if (lb.IsUnderlined && underlineProgress > 0.001f && disabledT < 0.99f)
         {
             string text = lb.Label.Resolve();
             float fontSize = theme.Typography.Scale.Body.Size;
@@ -8310,6 +8339,13 @@ internal sealed partial class NodePainter
         var borderColor = isSelected
             ? theme.Colors.Primary.Opacity(0.5f)
             : theme.Colors.Border;
+        if (tag.TagColorOverride is { } tagColor)
+        {
+            // A coloured tag: tinted fill and border, text in the colour.
+            bgColor = tagColor.Opacity(isSelected ? 0.3f : 0.16f);
+            borderColor = tagColor.Opacity(isSelected ? 0.7f : 0.45f);
+            textColor = tagColor;
+        }
 
         // Hover/press color effects (lerp with spring progress)
         if (isInteractive)

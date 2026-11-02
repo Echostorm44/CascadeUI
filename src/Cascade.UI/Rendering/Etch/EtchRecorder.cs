@@ -349,14 +349,18 @@ internal sealed class EtchRecorder
 
     private static void RecordGlyphRun(EtchBackend backend, EtchBackend.GlyphOp op, DrawRecording recording, ulong layerHandle, bool provenance)
     {
-        float rasterSize = op.FontSize * Math.Max(op.ScaleX, op.ScaleY);
+        float deviceScale = Math.Max(op.ScaleX, op.ScaleY);
+        float rasterSize = op.FontSize * deviceScale;
         var face = backend.GetOrCreateFontFace(op.FontHandle, rasterSize);
         if (face == null || op.GlyphIds.Length == 0)
         {
             return;
         }
         recording.Glyphs(new GlyphRunData(face, (int)op.FontHandle, op.GlyphIds, op.Positions, rasterSize, Straight(op.Color),
-            provenance ? new GlyphRunSource(op, layerHandle) : null));
+            provenance ? new GlyphRunSource(op, layerHandle) : null)
+        {
+            OutlineWidth = op.OutlineWidth * deviceScale,
+        });
     }
 
     private static StrokeParameters StrokeOf(EtchBackend.SceneOp op)

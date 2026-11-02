@@ -1833,7 +1833,8 @@ internal sealed partial class NodePainter
             alignment: lbl.Alignment,
             overflow: lbl.OverflowMode,
             maxLines: lbl.MaxLineCount ?? 0,
-            noWrap: lbl.WrapMode == TextWrap.NoWrap);
+            noWrap: lbl.WrapMode == TextWrap.NoWrap,
+            outline: lbl.OutlineStyle);
     }
 
     // ── TextInput ──────────────────────────────────────────────────────
@@ -11346,7 +11347,7 @@ internal sealed partial class NodePainter
         var textSize = ctx.MeasureText(text, fs);
         float tx = cellX + pad;
         float ty = cellY + (cellH - fs) / 2f;
-        ctx.DrawText(text, MathF.Round(tx), MathF.Round(ty), fs, color);
+        ctx.DrawText(text, MathF.Round(tx), MathF.Round(ty), fs, color, outline: label.OutlineStyle);
     }
 
     private void PaintRowExpandIndicator(
@@ -12672,7 +12673,8 @@ internal sealed partial class NodePainter
         TextOverflow overflow = TextOverflow.Clip,
         int maxLines = 1,
         FontWeight fontWeight = FontWeight.Regular,
-        bool noWrap = false)
+        bool noWrap = false,
+        TextOutline? outline = null)
     {
         if (string.IsNullOrEmpty(text))
         {
@@ -12768,7 +12770,8 @@ internal sealed partial class NodePainter
                 overflow: overflow,
                 maxWidth: availableWidth,
                 maxLines: maxLines,
-                noWrap: noWrap);
+                noWrap: noWrap,
+                outline: outline);
             return;
         }
 
@@ -12778,7 +12781,8 @@ internal sealed partial class NodePainter
             overflow: overflow,
             maxWidth: availableWidth,
             maxLines: maxLines,
-            noWrap: noWrap);
+            noWrap: noWrap,
+            outline: outline);
     }
 
     private static Rect ScaleBounds(Rect bounds, float scale)

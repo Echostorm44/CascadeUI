@@ -748,7 +748,12 @@ internal sealed class EtchBackend : IDisposable
         }
     }
 
-    public void DrawGlyphs(ulong frame, ulong fontHandle, ReadOnlySpan<ushort> glyphIds, ReadOnlySpan<float> positions, float fontSize, ColorValue color)
+    /// <summary>
+    /// Records a glyph run. A positive <paramref name="outlineWidth"/> (logical pixels) records the
+    /// glyphs' outline instead: each glyph grown outward by that width, in <paramref name="color"/>
+    /// (see <see cref="TextOutline"/>).
+    /// </summary>
+    public void DrawGlyphs(ulong frame, ulong fontHandle, ReadOnlySpan<ushort> glyphIds, ReadOnlySpan<float> positions, float fontSize, ColorValue color, float outlineWidth = 0f)
     {
         if (glyphIds.Length == 0 || fontSize <= 0)
         {
@@ -778,6 +783,7 @@ internal sealed class EtchBackend : IDisposable
             FontSize = fontSize,
             FontHandle = fontHandle,
             Color = color,
+            OutlineWidth = outlineWidth,
             ScaleX = _currentTransform.M11,
             ScaleY = _currentTransform.M22,
             ClipBounds = _currentClipBounds,
@@ -987,6 +993,9 @@ internal sealed class EtchBackend : IDisposable
         public float FontSize;
         public ulong FontHandle;
         public ColorValue Color;
+
+        /// <summary>0 for the glyphs; otherwise the run draws their outline this wide (logical pixels).</summary>
+        public float OutlineWidth;
         public float ScaleX = 1f;
         public float ScaleY = 1f;
         public Rect ClipBounds;

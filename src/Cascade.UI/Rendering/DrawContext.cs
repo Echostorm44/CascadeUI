@@ -640,7 +640,9 @@ public sealed class DrawContext
     /// <remarks>
     /// Uses the TextLayoutEngine (HarfBuzz shaping, UAX #14 line breaking, alignment)
     /// to produce glyph positions, then sends them to the GPU backend for rendering.
-    /// When no backend is available (headless mode), this is a no-op.
+    /// When no backend is available (headless mode), this is a no-op. With an
+    /// <paramref name="outline"/>, every line's outline is drawn before any line's text, so a
+    /// thick outline never covers the line above or below.
     /// </remarks>
     public void DrawText(string text, float x, float y, float fontSize,
         ColorValue color, string? fontPath = null,
@@ -648,7 +650,8 @@ public sealed class DrawContext
         TextOverflow overflow = TextOverflow.Clip,
         float maxWidth = float.PositiveInfinity,
         int maxLines = 0,
-        bool noWrap = false)
+        bool noWrap = false,
+        TextOutline? outline = null)
     {
         if (backend is null || string.IsNullOrEmpty(text))
         {
@@ -684,6 +687,20 @@ public sealed class DrawContext
             return;
         }
 
+        if (outline is { IsVisible: true } textOutline)
+        {
+            DrawLayoutLines(layout, x, y, fontSize, textOutline.Color, textOutline.Width, resolvedFont, fontHandle);
+        }
+        DrawLayoutLines(layout, x, y, fontSize, color, 0f, resolvedFont, fontHandle);
+    }
+
+    /// <summary>
+    /// Draws every line of <paramref name="layout"/>: the glyphs, or with a positive
+    /// <paramref name="outlineWidth"/> their outline.
+    /// </summary>
+    private void DrawLayoutLines(TextLayoutResult layout, float x, float y, float fontSize,
+        ColorValue color, float outlineWidth, string resolvedFont, ulong fontHandle)
+    {
         // Snap line origin and baseline to the pixel grid for crisp
         // rendering, but preserve HarfBuzz's relative glyph offsets so
         // kerning and spacing stay accurate. Rounding each glyph X
@@ -737,7 +754,7 @@ public sealed class DrawContext
                 // Use stackalloc for small glyph runs (the overwhelmingly
                 // common case for UI text) and ArrayPool for long runs.
                 DrawGlyphRun(fontHandle, glyphsArray, 0, glyphsArray.Length,
-                    lineOriginX, baselineY, fontSize, color);
+                    lineOriginX, baselineY, fontSize, color, outlineWidth);
             }
             else
             {
@@ -759,7 +776,7 @@ public sealed class DrawContext
                     }
 
                     DrawGlyphRun(runFontHandle, glyphsArray, run.GlyphStartIndex, run.GlyphCount,
-                        lineOriginX, baselineY, fontSize, color);
+                        lineOriginX, baselineY, fontSize, color, outlineWidth);
                 }
             }
         }
@@ -775,7 +792,7 @@ public sealed class DrawContext
         GlyphPosition[] glyphs,
         int glyphStart, int glyphCount,
         float lineOriginX, float baselineY,
-        float fontSize, ColorValue color)
+        float fontSize, ColorValue color, float outlineWidth)
     {
         if (backend is null || glyphCount == 0)
         {
@@ -797,7 +814,7 @@ public sealed class DrawContext
                 posSlice[i * 2] = lineOriginX + glyph.X;
                 posSlice[i * 2 + 1] = baselineY + glyph.Y;
             }
-            backend.DrawGlyphs(frame, fontHandle, idSlice, posSlice, fontSize, color);
+            backend.DrawGlyphs(frame, fontHandle, idSlice, posSlice, fontSize, color, outlineWidth);
         }
         else
         {
@@ -814,7 +831,7 @@ public sealed class DrawContext
                     posSpan[i * 2] = lineOriginX + glyph.X;
                     posSpan[i * 2 + 1] = baselineY + glyph.Y;
                 }
-                backend.DrawGlyphs(frame, fontHandle, idSpan, posSpan, fontSize, color);
+                backend.DrawGlyphs(frame, fontHandle, idSpan, posSpan, fontSize, color, outlineWidth);
             }
             finally
             {

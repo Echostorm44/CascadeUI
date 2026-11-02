@@ -44,6 +44,7 @@ public sealed class Label : Node
     internal TextAlignment Alignment { get; set; } = TextAlignment.Start;
     internal bool IsSelectable { get; set; }
     internal TextDecoration DecorationMode { get; set; } = TextDecoration.None;
+    internal TextOutline? OutlineStyle { get; set; }
 
     // ── Styling ───────────────────────────────────────────────────────
 
@@ -80,6 +81,18 @@ public sealed class Label : Node
     public Label Color(ColorValue color)
     {
         TextColorOverride = color;
+        return this;
+    }
+
+    /// <summary>
+    /// Outlines the text: each glyph grown outward by <paramref name="width"/> logical pixels with
+    /// round corners, in <paramref name="color"/>, drawn under the text. Keeps light text readable
+    /// over a busy image. The outline does not change the label's size; it may draw up to
+    /// <paramref name="width"/> past its edges. A width of 0 (or less) removes it.
+    /// </summary>
+    public Label Outline(ColorValue color, float width = 2f)
+    {
+        OutlineStyle = width > 0f ? new TextOutline(color, width) : null;
         return this;
     }
 
@@ -184,6 +197,19 @@ public enum TextAlignment
 
     /// <summary>Justified text — stretched to fill the line.</summary>
     Justify
+}
+
+/// <summary>
+/// An outline around text, drawn under it: each glyph grown outward by <see cref="Width"/>
+/// logical pixels with round corners, in <see cref="Color"/>. Widths are rendered to a quarter of
+/// a device pixel, up to about 63 device pixels.
+/// </summary>
+/// <param name="Color">The outline colour.</param>
+/// <param name="Width">How far the outline reaches past each glyph's edge, in logical pixels.</param>
+public readonly record struct TextOutline(ColorValue Color, float Width)
+{
+    /// <summary>Whether the outline draws anything: a positive width and a visible colour.</summary>
+    public bool IsVisible => Width > 0f && Color.A > 0f;
 }
 
 /// <summary>

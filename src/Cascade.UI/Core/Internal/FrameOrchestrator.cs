@@ -116,11 +116,42 @@ internal sealed class FrameOrchestrator : IDisposable
             {
                 pixelRatio = value;
                 retainedFrameValid = false;
+                displaySize = null;
             }
         }
     }
 
     private float pixelRatio = 1f;
+
+    // WindowContext.Current for this window, published before every render.
+    private readonly WindowContextSource windowContext = new();
+
+    // The display the window is on, re-read after a resize or scale change (it may have moved).
+    private Size? displaySize;
+
+    /// <summary>The window's state (normal, maximized, ...), read every frame. Null: Normal.</summary>
+    internal Func<WindowState>? WindowStateProvider { get; set; }
+
+    /// <summary>The size of the display the window is on, in logical pixels. Null: the window's own size.</summary>
+    internal Func<Size?>? DisplaySizeProvider { get; set; }
+
+    /// <summary>
+    /// Publishes this window's size, size class, state and scale as <see cref="WindowContext.Current"/>
+    /// and makes it the current window. Components that read it re-render when it changes.
+    /// </summary>
+    private void PublishWindowContext()
+    {
+        displaySize ??= DisplaySizeProvider?.Invoke();
+        windowContext.Publish(new WindowContext
+        {
+            Size = new Size(windowWidth, windowHeight),
+            SizeClass = WindowContext.SizeClassFor(windowWidth, Breakpoints.Default),
+            State = WindowStateProvider?.Invoke() ?? WindowState.Normal,
+            DisplayScale = PixelRatio,
+            DisplaySize = displaySize ?? new Size(windowWidth, windowHeight),
+        });
+        WindowContextSource.Active = windowContext;
+    }
 
     /// <summary>
     /// Callback invoked each frame to acquire a frame handle from the GPU backend.
@@ -355,6 +386,7 @@ internal sealed class FrameOrchestrator : IDisposable
         // Make this window the one the static APIs (Dialog, ContextMenu, ...) talk to before the
         // root mounts, so OnMounted can already open a dialog.
         inputDispatcher.SetRoot(null);
+        PublishWindowContext();
 
         var root = new TRoot();
         rootHost = new ComponentHost(root, renderScheduler, treeDepth: 0);
@@ -418,7 +450,9 @@ internal sealed class FrameOrchestrator : IDisposable
         SharedScheduler.Instance.Tick(deltaTime);
         overlays.Advance(deltaTime);
 
-        // 2. Process dirty re-renders (depth-sorted)
+        // 2. Process dirty re-renders (depth-sorted). A changed window context marks its readers
+        // dirty first, so they render for this frame's size.
+        PublishWindowContext();
 #if DEBUG
         long renderStart = Stopwatch.GetTimestamp();
 #endif
@@ -572,6 +606,7 @@ internal sealed class FrameOrchestrator : IDisposable
         windowWidth = width;
         windowHeight = height;
         retainedFrameValid = false;
+        displaySize = null;
 
         // An open menu was placed against the old window edges; close it, as native menus do
         // when their window changes.

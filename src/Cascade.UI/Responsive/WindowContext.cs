@@ -32,18 +32,27 @@ public record WindowContext
     /// </summary>
     public static WindowContext Current
     {
-        get => current.Value ?? defaultContext;
+        get
+        {
+            if (WindowContextSource.Active is { } source)
+            {
+                SignalTracker.RecordRead(source.Signal);
+                return source.Value;
+            }
+            return defaultContext;
+        }
     }
 
-    /// <summary>
-    /// Sets the current window context for the active async flow.
-    /// </summary>
-    internal static void SetCurrent(WindowContext context)
+    /// <summary>The size class of a window <paramref name="width"/> logical pixels wide.</summary>
+    internal static WindowSizeClass SizeClassFor(float width, Breakpoints breakpoints)
     {
-        current.Value = context;
+        return width >= breakpoints.Large ? WindowSizeClass.Large
+            : width >= breakpoints.Expanded ? WindowSizeClass.Expanded
+            : width >= breakpoints.Medium ? WindowSizeClass.Medium
+            : WindowSizeClass.Compact;
     }
 
-    private static readonly AsyncLocal<WindowContext> current = new();
+    // What Current returns with no window (tests, tools).
     private static readonly WindowContext defaultContext = new()
     {
         Size = new Size(1280, 720),
@@ -88,4 +97,31 @@ public record WindowContext
     /// Full display resolution in logical pixels.
     /// </summary>
     public Size DisplaySize { get; init; }
+}
+
+/// <summary>
+/// One window's <see cref="WindowContext"/>: the value its frame loop publishes and the signal a
+/// component's Render() subscribes to by reading <see cref="WindowContext.Current"/>. Publishing
+/// a different value re-renders those components.
+/// </summary>
+internal sealed class WindowContextSource
+{
+    /// <summary>The window whose frame is being produced on this thread.</summary>
+    [ThreadStatic]
+    internal static WindowContextSource? Active;
+
+    internal SignalSource Signal { get; } = new("WindowContext.Current");
+
+    internal WindowContext Value { get; private set; } = new();
+
+    /// <summary>Makes <paramref name="value"/> current, notifying readers when it differs.</summary>
+    internal void Publish(WindowContext value)
+    {
+        if (Value == value)
+        {
+            return;
+        }
+        Value = value;
+        Signal.NotifySubscribers();
+    }
 }

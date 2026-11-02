@@ -235,6 +235,15 @@ public static class App
         orchestrator.ScheduleWake = frameClock.WakeAt;
         orchestrator.CancelWake = frameClock.CancelWake;
         orchestrator.FrameClockCounters = () => (frameClock.PostedFrames, frameClock.PostedWakes);
+        orchestrator.WindowStateProvider = () => window.IsFullScreen ? WindowState.FullScreen
+            : window.IsMinimized ? WindowState.Minimized
+            : window.IsMaximized ? WindowState.Maximized
+            : WindowState.Normal;
+        orchestrator.DisplaySizeProvider = () =>
+        {
+            var monitor = window.GetMonitorInfo().MonitorArea;
+            return monitor.Width > 0 ? new Size(monitor.Width, monitor.Height) : null;
+        };
 
         // Wire the GPU backend. Etch is the default renderer — a windowed app always
         // needs one, and forgetting to opt in used to open a blank, non-rendering
@@ -502,6 +511,9 @@ public static class App
         var orchestrator = new FrameOrchestrator(
             requestFrame: () => loop.StartFrameTimer(16),
             cancelFrame:  () => loop.StopFrameTimer());
+        orchestrator.WindowStateProvider = () => window.IsMinimized ? WindowState.Minimized
+            : window.IsMaximized ? WindowState.Maximized
+            : WindowState.Normal;
 
         window.Destroyed = () =>
         {
@@ -573,6 +585,9 @@ public static class App
             var window = new X11Window();
             nativeLinuxWindow = window;
             window.Create(x11Display, title, w, h, WindowStyle.Normal);
+            orchestrator.WindowStateProvider = () => window.IsMinimized ? WindowState.Minimized
+                : window.IsMaximized ? WindowState.Maximized
+                : WindowState.Normal;
 
             window.Destroyed = () =>
             {
@@ -594,6 +609,9 @@ public static class App
             var window = new WaylandWindow();
             nativeLinuxWaylandWindow = window;
             window.Create(waylandDisplay, title, w, h, WindowStyle.Normal);
+            orchestrator.WindowStateProvider = () => window.IsMinimized ? WindowState.Minimized
+                : window.IsMaximized ? WindowState.Maximized
+                : WindowState.Normal;
 
             window.Destroyed = () =>
             {

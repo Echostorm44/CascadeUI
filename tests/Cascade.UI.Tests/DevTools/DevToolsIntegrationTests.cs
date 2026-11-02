@@ -102,6 +102,21 @@ public class DevToolsIntegrationTests
         await Assert.That(children.Count).IsEqualTo(1);
         await Assert.That(children[0]).IsAssignableTo<Label>();
     }
+    [Test]
+    public async Task NodeTreeWalker_ListView_ShowsItsRows()
+    {
+        // A list's rows come from its render callback, not from node children: the walker
+        // listed none, so nothing in any list could be found or inspected.
+        var list = new ListView<string>(["alpha", "beta"], item => new Label(item));
+        NodeTreeWalker.SetRoot(list);
+
+        var children = NodeTreeWalker.GetChildren(list);
+        var rows = NodeTreeWalker.GetChildren(children[0]);
+
+        await Assert.That(children.Count).IsEqualTo(1);
+        await Assert.That(rows.Count).IsEqualTo(2);
+        await Assert.That(((Label)rows[1]).Text).IsEqualTo("beta");
+    }
     // ── Snapshot / Tree Structure ───────────────────────────────
 
     [Test]

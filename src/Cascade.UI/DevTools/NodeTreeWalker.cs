@@ -1540,6 +1540,13 @@ internal static class NodeTreeWalker
             return [];
         }
 
+        // A list's rows are not children in the node tree: it builds them from its render
+        // callback (only the on-screen slice when virtualized), as hit testing and paint read them.
+        if (uiNode is IListViewNode list)
+        {
+            return list.GetContentNode() is { IsLayoutEmpty: false } content ? [content] : [];
+        }
+
         // Layout containers
         var nodeChildren = NodeDiffer.GetChildren(uiNode);
         if (nodeChildren.Count > 0)

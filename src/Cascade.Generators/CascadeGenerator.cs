@@ -13,6 +13,7 @@ public sealed class CascadeGenerator : IIncrementalGenerator
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         ReactivityGenerator.Register(context);
+        InputAdoptionGenerator.Register(context);
         LocalizationGenerator.Register(context);
         IconPackGenerator.Register(context);
         FontVerifier.Register(context);

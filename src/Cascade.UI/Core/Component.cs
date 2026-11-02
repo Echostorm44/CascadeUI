@@ -310,12 +310,13 @@ public abstract class Component : Node, IDisposable
 
     /// <summary>
     /// Called on the live instance when its parent re-renders, with the new instance the parent
-    /// built. A framework component whose output comes from a constructor argument (a builder,
-    /// not state) takes the newer one here, so it does not keep rendering what the first render
-    /// captured.
+    /// built: the live one takes the new one's inputs (its readonly fields set from constructor
+    /// parameters, copied by generated code, see <see cref="ComponentInputs"/>), so it does not keep
+    /// rendering what its first instance was built with.
     /// </summary>
     internal virtual void AdoptInputsFrom(Component newer)
     {
+        ComponentInputs.Adopt(this, newer);
     }
 
     /// <summary>

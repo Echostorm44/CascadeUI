@@ -281,9 +281,42 @@ public abstract class Component : Node, IDisposable
 
     /// <summary>
     /// The host that mounted this component, while it is mounted. The frame publishes each
-    /// component's laid-out bounds through it.
+    /// component's laid-out bounds through it. A stand-in (see <see cref="StandsInFor"/>) reports
+    /// the live instance's host.
     /// </summary>
-    internal ComponentHost? Host { get; set; }
+    internal ComponentHost? Host
+    {
+        get => standsInFor?.Host ?? host;
+        set => host = value;
+    }
+
+    private ComponentHost? host;
+    private Component? standsInFor;
+    private Node? renderedTree;
+
+    /// <summary>
+    /// When a parent re-renders it builds a new instance of each child component, but the child
+    /// that is already mounted - with its state - is the one that lives on. The new instance stays
+    /// in the parent's tree, carrying the parent's fresh modifiers, and stands in for the live one:
+    /// its <see cref="RenderedTree"/> and <see cref="Host"/> are the live instance's, so layout,
+    /// paint, hit testing and bounds reach the real content. Without this a nested component
+    /// rendered nothing after its parent's first re-render.
+    /// </summary>
+    internal Component? StandsInFor
+    {
+        get => standsInFor;
+        set => standsInFor = ReferenceEquals(value, this) ? null : value?.standsInFor ?? value;
+    }
+
+    /// <summary>
+    /// Called on the live instance when its parent re-renders, with the new instance the parent
+    /// built. A framework component whose output comes from a constructor argument (a builder,
+    /// not state) takes the newer one here, so it does not keep rendering what the first render
+    /// captured.
+    /// </summary>
+    internal virtual void AdoptInputsFrom(Component newer)
+    {
+    }
 
     /// <summary>
     /// Called by <see cref="ComponentHost"/> whenever layout gives this component new bounds,
@@ -299,7 +332,11 @@ public abstract class Component : Node, IDisposable
     /// after each render pass. Used by the layout solver to measure through
     /// Component nodes in the tree.
     /// </summary>
-    internal Node? RenderedTree { get; set; }
+    internal Node? RenderedTree
+    {
+        get => standsInFor is { } live ? live.RenderedTree : renderedTree;
+        set => renderedTree = value;
+    }
 
     // ── Disposal ──────────────────────────────────────────────────────
 

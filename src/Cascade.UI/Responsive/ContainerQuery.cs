@@ -29,7 +29,9 @@ public readonly record struct ContainerInfo
 /// </summary>
 public class ContainerQuery : Component
 {
-    private readonly Func<ContainerInfo, Node> builder;
+    // Not readonly: when the parent re-renders, the mounted instance takes the newest builder
+    // (AdoptInputsFrom), which captures the parent's current data.
+    private Func<ContainerInfo, Node> builder;
 
     /// <summary>
     /// Creates a new <see cref="ContainerQuery"/> that evaluates the
@@ -54,6 +56,14 @@ public class ContainerQuery : Component
     protected override Node Render()
     {
         return builder(new ContainerInfo { Size = new Size(Bounds.Width, Bounds.Height) });
+    }
+
+    internal override void AdoptInputsFrom(Component newer)
+    {
+        if (newer is ContainerQuery query)
+        {
+            builder = query.builder;
+        }
     }
 
     internal override void OnLayoutBoundsUpdated(Rect current)

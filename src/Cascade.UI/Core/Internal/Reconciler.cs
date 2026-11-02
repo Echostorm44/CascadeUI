@@ -459,6 +459,15 @@ internal sealed class Reconciler
         {
             newHosts[key] = host;
             oldHosts.Remove(key);
+
+            // The mounted instance lives on; the one the parent just built stands in for it in
+            // the new tree (see Component.StandsInFor) and hands over its inputs.
+            if (op.NewNode is Component newer && !ReferenceEquals(newer, host.Component))
+            {
+                newer.StandsInFor = host.Component;
+                host.Component.AdoptInputsFrom(newer);
+            }
+
             // Parent re-rendered and produced this child again — mark dirty
             // so it re-renders to pick up changed captured state.
             scheduler.MarkDirty(host);

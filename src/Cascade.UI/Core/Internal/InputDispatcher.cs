@@ -265,8 +265,27 @@ internal sealed partial class InputDispatcher
     /// <summary>True when a PasswordInput has focus and the caret should be animating.</summary>
     internal static bool IsPasswordCaretActive => FocusManager.FocusedElement is PasswordInput;
 
-    /// <summary>The current PasswordInput editing buffer, or null when not editing.</summary>
-    internal static string? PasswordEditBuffer { get; private set; }
+    /// <summary>The current PasswordInput editing buffer, or null when not editing. Leaving the field clears its selection.</summary>
+    internal static string? PasswordEditBuffer
+    {
+        get => passwordEditBuffer;
+        private set
+        {
+            passwordEditBuffer = value;
+            if (value is null)
+            {
+                PasswordAllSelected = false;
+            }
+        }
+    }
+
+    private static string? passwordEditBuffer;
+
+    /// <summary>
+    /// Ctrl+A selected the whole password: the next character, paste or Backspace replaces it. A password
+    /// field's caret stays at the end (its characters are hidden), so all-or-nothing is the only selection.
+    /// </summary>
+    internal static bool PasswordAllSelected { get; private set; }
 
     /// <summary>Whether the password is currently revealed (show/hide toggle).</summary>
     internal static bool PasswordRevealed { get; private set; }
@@ -418,6 +437,7 @@ internal sealed partial class InputDispatcher
     private float scrollbarDragStartY;
     private float scrollbarDragStartOffset;
     private ScrollView? scrollbarDragTarget;
+    private IListViewNode? listScrollbarDragTarget;
 
     // TextArea scrollbar drag state
     private bool textAreaScrollbarDragging;
@@ -614,6 +634,30 @@ internal sealed partial class InputDispatcher
             return;
         }
 
+        // A ListView's scrollbar drag: the same, against the list's own offset.
+        if (scrollbarDragging && listScrollbarDragTarget is { } dragList)
+        {
+            if (evt.Type == NativeMouseEventType.MouseMove)
+            {
+                float trackRange = dragList.ScrollbarTrackBounds.Height - dragList.ScrollbarThumbHeight;
+                if (trackRange > 0)
+                {
+                    float newOffset = Math.Clamp(scrollbarDragStartOffset + (evt.Y - scrollbarDragStartY) / trackRange * dragList.MaxY, 0f, dragList.MaxY);
+                    if (Math.Abs(newOffset - dragList.OffsetY) > 0.001f)
+                    {
+                        dragList.OffsetY = newOffset;
+                        RequestRepaint?.Invoke();
+                    }
+                }
+            }
+            else if (evt.Type == NativeMouseEventType.MouseUp)
+            {
+                scrollbarDragging = false;
+                listScrollbarDragTarget = null;
+            }
+            return;
+        }
+
         // Scrollbar drag — intercept all mouse events while dragging
         if (scrollbarDragging && scrollbarDragTarget != null)
         {
@@ -792,6 +836,17 @@ internal sealed partial class InputDispatcher
                 scrollbarDragStartY = evt.Y;
                 scrollbarDragStartOffset = targetSv.OffsetY;
                 scrollbarDragTarget = targetSv;
+                return;
+            }
+
+            if (HitTester.FindScrollableListViewAt(rootNode, evt.X, evt.Y) is { } targetList
+                && targetList.ScrollbarTrackBounds.Width > 0
+                && targetList.ScrollbarTrackBounds.Contains(new Point(evt.X, evt.Y)))
+            {
+                scrollbarDragging = true;
+                scrollbarDragStartY = evt.Y;
+                scrollbarDragStartOffset = targetList.OffsetY;
+                listScrollbarDragTarget = targetList;
                 return;
             }
         }
@@ -3814,27 +3869,50 @@ internal sealed partial class InputDispatcher
     /// </summary>
     private static bool HandlePasswordInputKey(PasswordInput pwd, NativeKeyEvent evt)
     {
-        if (PasswordEditBuffer == null)
-        {
-            PasswordEditBuffer = pwd.Value.Value ?? string.Empty;
-        }
-
+        PasswordEditBuffer ??= pwd.Value.Value ?? string.Empty;
         CaretResetTimestamp = Stopwatch.GetTimestamp();
+        bool ctrl = evt.Modifiers.HasFlag(ModifierKeys.Ctrl);
+        bool shift = evt.Modifiers.HasFlag(ModifierKeys.Shift);
 
-        // Printable characters
-        if (evt.Character >= ' ' && evt.Character != 127)
+        // Ctrl+A selects the whole password, so typing or pasting replaces it.
+        if (ctrl && evt.Key == Key.A)
         {
-            PasswordEditBuffer += evt.Character;
-            pwd.Value.OnChange(PasswordEditBuffer);
+            PasswordAllSelected = PasswordEditBuffer.Length > 0;
             return true;
         }
 
-        // Backspace
+        // Ctrl+V / Shift+Insert paste. Copy and cut are deliberately absent: the text is a secret.
+        if ((ctrl && evt.Key == Key.V) || (shift && evt.Key == Key.Insert))
+        {
+            var content = Clipboard.GetContentAsync().GetAwaiter().GetResult();
+            string? pasted = content.HasText ? content.GetTextAsync().GetAwaiter().GetResult() : null;
+            if (!string.IsNullOrEmpty(pasted))
+            {
+                // One line: a key copied from a web page often brings a line break with it.
+                InsertIntoPassword(pwd, pasted.Replace("\r", "", StringComparison.Ordinal).Replace("\n", "", StringComparison.Ordinal));
+            }
+            return true;
+        }
+
+        if (ctrl && evt.Key is Key.C or Key.X)
+        {
+            return true;
+        }
+
+        // Printable characters
+        if (evt.Character is { } typed && typed >= ' ' && typed != 127 && !ctrl)
+        {
+            InsertIntoPassword(pwd, typed.ToString());
+            return true;
+        }
+
+        // Backspace removes the last character, or everything when it is all selected.
         if (evt.Character == '\b')
         {
             if (PasswordEditBuffer.Length > 0)
             {
-                PasswordEditBuffer = PasswordEditBuffer[..^1];
+                PasswordEditBuffer = PasswordAllSelected ? string.Empty : PasswordEditBuffer[..^1];
+                PasswordAllSelected = false;
                 pwd.Value.OnChange(PasswordEditBuffer);
             }
             return true;
@@ -3843,6 +3921,7 @@ internal sealed partial class InputDispatcher
         // Delete key clears all
         if (evt.Key == Key.Delete)
         {
+            PasswordAllSelected = false;
             if (PasswordEditBuffer.Length > 0)
             {
                 PasswordEditBuffer = string.Empty;
@@ -3854,6 +3933,19 @@ internal sealed partial class InputDispatcher
         return false;
     }
 
+    // Appends (or, with everything selected, replaces) and keeps within MaxLength.
+    private static void InsertIntoPassword(PasswordInput pwd, string text)
+    {
+        string current = PasswordAllSelected ? string.Empty : PasswordEditBuffer ?? string.Empty;
+        PasswordAllSelected = false;
+        string next = current + text;
+        if (pwd.MaxLengthValue is { } max && next.Length > max)
+        {
+            next = next[..Math.Max(max, current.Length)];
+        }
+        PasswordEditBuffer = next;
+        pwd.Value.OnChange(next);
+    }
     /// <summary>
     /// Handles keyboard input for a focused TextArea.
     /// Supports caret-aware insertion, deletion, navigation, and text selection.
@@ -4642,10 +4734,15 @@ internal sealed partial class InputDispatcher
             case ITreeView tv:
                 HandleTreeViewClick(tv);
                 return;
-            case Tag { OnToggle: not null } tag:
-                bool selected = tag.Selected?.Value ?? false;
-                tag.OnToggle!(!selected);
+            // A selectable tag flips its binding (the only handler a Tag(label, binding) has) and tells OnToggle.
+            case Tag { Selected: not null } or Tag { OnToggle: not null }:
+            {
+                var tag = (Tag)node;
+                bool selected = !(tag.Selected?.Value ?? false);
+                tag.Selected?.OnChange(selected);
+                tag.OnToggle?.Invoke(selected);
                 return;
+            }
             case Tag { OnRemove: not null } tag:
                 tag.OnRemove!();
                 return;

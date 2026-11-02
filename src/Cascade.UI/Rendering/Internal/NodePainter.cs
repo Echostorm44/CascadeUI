@@ -11901,6 +11901,14 @@ internal sealed partial class NodePainter
                 new Rect(bounds.Right - 8f, thumbY, 4f, thumbH),
                 theme.Colors.Border,
                 radius: 2f);
+
+            // A grab area wider than the thin thumb, for dragging.
+            lvn.ScrollbarTrackBounds = new Rect(absoluteX + bounds.Right - 14f, absoluteY + bounds.Y + 4f, 14f, trackH);
+            lvn.ScrollbarThumbHeight = thumbH;
+        }
+        else
+        {
+            lvn.ScrollbarTrackBounds = default;
         }
 
         // Drag-to-reorder: an accent insertion line at the drop position.
@@ -15201,6 +15209,10 @@ internal sealed partial class NodePainter
 
             // Draw text with infinite maxWidth (never wraps) and apply horizontal scroll
             float textX = MathF.Round(inputBounds.X + t.PaddingH - scrollX);
+            if (focused && InputDispatcher.PasswordAllSelected)
+            {
+                ctx.DrawRect(new Rect(textX, inputBounds.Y + 4f, textSize.Width, inputHeight - 8f), theme.Colors.Primary.Opacity(0.3f));
+            }
             ctx.DrawText(displayText, textX, textY, fontSize, textColor,
                 maxWidth: float.PositiveInfinity, maxLines: 1);
         }

@@ -103,7 +103,6 @@ public class ModifierCoverageTests
         "NumberInput.PrefixNode",
         "NumberInput.SuffixNode",
         "NumberInput.ValidationTriggerMode",
-        "PasswordInput.MaxLengthValue",
         "PasswordInput.ValidationTriggerMode",
         "PinInput.ValidationTriggerMode",
         "QrCode.LogoBackgroundEnabled",

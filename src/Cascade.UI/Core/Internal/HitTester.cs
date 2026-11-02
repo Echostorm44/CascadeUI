@@ -326,6 +326,7 @@ internal static class HitTester
                Banner { OnDismiss: not null } or
                StepIndicator { StepClickHandler: not null } or
                Card { ClickHandler: not null } or
+               Tag { Selected: not null } or
                Tag { OnToggle: not null } or
                Tag { OnRemove: not null } or
                ITabularDataNode;

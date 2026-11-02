@@ -39,6 +39,10 @@ internal interface IListViewNode
     float OffsetY { get; set; }
     /// <summary>Maximum scroll offset (content height minus viewport), set by layout.</summary>
     float MaxY { get; set; }
+    /// <summary>The scrollbar's grab area in window coordinates (empty when nothing scrolls), set by the painter.</summary>
+    Rect ScrollbarTrackBounds { get; set; }
+    /// <summary>The scrollbar thumb's height, set by the painter, so a drag maps pointer travel to offset.</summary>
+    float ScrollbarThumbHeight { get; set; }
     /// <summary>Viewport height available to the list, set by layout each frame.</summary>
     float ViewportHeight { get; set; }
     /// <summary>Y position (logical) at which the built visible-row slice should be placed.</summary>
@@ -666,6 +670,10 @@ public sealed class ListView<T> : Node, IListViewNode
 
     float IListViewNode.TotalContentHeight { get => totalContentHeight; set => totalContentHeight = value; }
     float IListViewNode.MaxY { get => maxY; set => maxY = value; }
+    private Rect scrollbarTrackBounds;
+    private float scrollbarThumbHeight;
+    Rect IListViewNode.ScrollbarTrackBounds { get => scrollbarTrackBounds; set => scrollbarTrackBounds = value; }
+    float IListViewNode.ScrollbarThumbHeight { get => scrollbarThumbHeight; set => scrollbarThumbHeight = value; }
     float IListViewNode.ViewportHeight { get => viewportHeight; set => viewportHeight = value; }
     float IListViewNode.ContentOffsetY => contentOffsetY;
     bool IListViewNode.CanVirtualize => fixedItemHeight.HasValue && Sections is null && Items.Count > 0;

@@ -266,6 +266,81 @@ public class ModifierRenderTests
     }
 
     [Test]
+    [NotInParallel("Clipboard")]
+    public async Task PasswordInput_Pastes_SelectsAll_AndKeepsMaxLength()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        string value = "old";
+        var field = new PasswordInput(new Bindable<string>("old", v => value = v)).MaxLength(10);
+        using var app = new RenderHarness(() => field.Width(240));
+        app.Frame();
+        FocusManager.RequestFocus(field);
+        await Clipboard.WriteTextAsync("0123456789abc\r\n");
+
+        // Ctrl+A then paste replaces the old text; the line break goes, and MaxLength cuts the rest.
+        app.Press(Key.A, ModifierKeys.Ctrl);
+        app.Press(Key.V, ModifierKeys.Ctrl);
+        await Assert.That(value).IsEqualTo("0123456789");
+
+        // Select all, then a typed character replaces it all.
+        app.Press(Key.A, ModifierKeys.Ctrl);
+        app.Press(Key.X, character: 'x');
+        await Assert.That(value).IsEqualTo("x");
+
+        // Without a selection, paste appends.
+        await Clipboard.WriteTextAsync("yz");
+        app.Press(Key.Insert, ModifierKeys.Shift);
+        await Assert.That(value).IsEqualTo("xyz");
+    }
+
+    [Test]
+    public async Task SelectableTag_WithOnlyABinding_TogglesOnClick()
+    {
+        var seen = new List<bool>();
+        int toggles = 0;
+        using (var plain = new RenderHarness(() => new Tag("DI.FM", new Bindable<bool>(true, seen.Add))))
+        {
+            plain.Frame();
+            plain.Click(15, 12);
+        }
+        using (var both = new RenderHarness(() => new Tag("DI.FM", new Bindable<bool>(false, seen.Add), _ => toggles++)))
+        {
+            both.Frame();
+            both.Click(15, 12);
+        }
+
+        await Assert.That(string.Join(",", seen)).IsEqualTo("False,True");
+        await Assert.That(toggles).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task ListViewScrollbar_DragsTheList()
+    {
+        var rows = Enumerable.Range(0, 100).Select(i => $"Row {i}").ToList();
+        var list = new ListView<string>(rows, row => new Label(row)).ItemHeight(30).Plain(true).Size(300, 180);
+        using var app = new RenderHarness(() => new Column(children: [list]).Padding(EdgeInsets.Only(left: 50, top: 20)));
+        app.Frame();
+        var node = (IListViewNode)list;
+        var track = node.ScrollbarTrackBounds;
+
+        // The grab area hugs the list's right edge, where the thumb is drawn.
+        await Assert.That(track.Right).IsEqualTo(350f).Within(1f);
+        await Assert.That(track.Height).IsGreaterThan(100f);
+
+        float x = track.X + track.Width / 2f;
+        float y = track.Y + 10f;
+        app.Drag(x, y, x, y + 60f);
+
+        // 60 px of travel over (track - thumb) moves the offset that share of MaxY.
+        float expected = 60f / (track.Height - node.ScrollbarThumbHeight) * node.MaxY;
+        await Assert.That(node.OffsetY).IsEqualTo(Math.Min(expected, node.MaxY)).Within(1f);
+    }
+
+    [Test]
     public async Task ThreeStateCheckbox_ClickChecks_AndUnchecksWhenChecked()
     {
         var seen = new List<CheckboxValue>();
@@ -374,10 +449,19 @@ internal sealed class RenderHarness : IDisposable
         orchestrator.Tick();
     }
 
-    public void Press(Key key)
+    public void Press(Key key, ModifierKeys modifiers = ModifierKeys.None, char? character = null)
     {
-        orchestrator.Input.HandleKeyEvent(new NativeKeyEvent { Key = key, Type = NativeKeyEventType.KeyDown });
+        orchestrator.Input.HandleKeyEvent(new NativeKeyEvent { Key = key, Type = NativeKeyEventType.KeyDown, Modifiers = modifiers, Character = character });
         orchestrator.Input.HandleKeyEvent(new NativeKeyEvent { Key = key, Type = NativeKeyEventType.KeyUp });
+        orchestrator.Tick();
+    }
+
+    public void Drag(float fromX, float fromY, float toX, float toY)
+    {
+        orchestrator.Input.HandleMouseEvent(new NativeMouseEvent { X = fromX, Y = fromY, Type = NativeMouseEventType.MouseMove });
+        orchestrator.Input.HandleMouseEvent(new NativeMouseEvent { X = fromX, Y = fromY, Type = NativeMouseEventType.MouseDown, Button = NativeMouseButton.Left });
+        orchestrator.Input.HandleMouseEvent(new NativeMouseEvent { X = toX, Y = toY, Type = NativeMouseEventType.MouseMove });
+        orchestrator.Input.HandleMouseEvent(new NativeMouseEvent { X = toX, Y = toY, Type = NativeMouseEventType.MouseUp, Button = NativeMouseButton.Left });
         orchestrator.Tick();
     }
 

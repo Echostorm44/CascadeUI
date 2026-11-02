@@ -105,11 +105,11 @@ internal sealed class Reconciler
                 break;
 
             case DiffKind.Delete:
-                HandleDelete(op.OldNode!, oldHosts);
+                HandleDelete(op.OldNode!, oldHosts, op.Index);
                 break;
 
             case DiffKind.Replace:
-                HandleDelete(op.OldNode!, oldHosts);
+                HandleDelete(op.OldNode!, oldHosts, op.Index);
                 break;
 
             case DiffKind.ReuseComponent:
@@ -365,6 +365,7 @@ internal sealed class Reconciler
                 {
                     newHosts[key] = existing;
                     oldHosts.Remove(key);
+                    StandIn(component, existing);
                 }
                 else
                 {
@@ -391,6 +392,7 @@ internal sealed class Reconciler
                     {
                         newHosts[key] = existing;
                         oldHosts.Remove(key);
+                        StandIn(childComp, existing);
                     }
                     else
                     {
@@ -408,11 +410,13 @@ internal sealed class Reconciler
         }
     }
 
-    private void HandleDelete(Node node, Dictionary<string, ComponentHost> oldHosts)
+    private void HandleDelete(Node node, Dictionary<string, ComponentHost> oldHosts, int index)
     {
         if (node is Component component)
         {
-            var key = GetComponentKey(component);
+            // Keyed by its place among its siblings, as it was mounted: position 0 here would find
+            // (and unmount) a different component of the same type that happens to be first.
+            var key = GetComponentKey(component, index);
             if (oldHosts.TryGetValue(key, out var host))
             {
                 if (host.IsMounted)
@@ -442,7 +446,7 @@ internal sealed class Reconciler
         var children = NodeDiffer.GetChildren(node);
         for (int i = 0; i < children.Count; i++)
         {
-            HandleDelete(children[i], oldHosts);
+            HandleDelete(children[i], oldHosts, i);
         }
     }
 
@@ -453,25 +457,34 @@ internal sealed class Reconciler
         int depth)
     {
         var oldComponent = (Component)op.OldNode!;
-        var key = GetComponentKey(oldComponent);
+        // Keyed by its place among its siblings, as it was mounted (see WalkAndMount).
+        var key = GetComponentKey(oldComponent, op.Index);
 
         if (oldHosts.TryGetValue(key, out var host))
         {
             newHosts[key] = host;
             oldHosts.Remove(key);
-
-            // The mounted instance lives on; the one the parent just built stands in for it in
-            // the new tree (see Component.StandsInFor) and hands over its inputs.
-            if (op.NewNode is Component newer && !ReferenceEquals(newer, host.Component))
-            {
-                newer.StandsInFor = host.Component;
-                host.Component.AdoptInputsFrom(newer);
-            }
+            StandIn((Component)op.NewNode!, host);
 
             // Parent re-rendered and produced this child again — mark dirty
             // so it re-renders to pick up changed captured state.
             scheduler.MarkDirty(host);
         }
+    }
+
+    /// <summary>
+    /// The mounted instance lives on; the one the parent just built stands in for it in the new
+    /// tree (see <see cref="Component.StandsInFor"/>) and hands over its inputs.
+    /// </summary>
+    private static void StandIn(Component newer, ComponentHost host)
+    {
+        if (ReferenceEquals(newer, host.Component))
+        {
+            return;
+        }
+
+        newer.StandsInFor = host.Component;
+        host.Component.AdoptInputsFrom(newer);
     }
 
     private void WalkAndMount(Node node, Dictionary<string, ComponentHost> hosts, int depth, int index)

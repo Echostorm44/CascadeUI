@@ -54,7 +54,14 @@ public class ComponentReuseTests
     public async Task ANestedComponent_StillPaintsAfterItsParentRerenders_AndTheMountedInstanceLivesOn()
     {
         swatchesBuilt = 0;
-        content = () => new Column(children: [new Swatch()]).Padding(EdgeInsets.All(10));
+        // Not the first child: components are keyed by their place among their siblings, and the
+        // reuse path once looked them up as if they were always first, so only a first child worked.
+        content = () => new Column(children:
+        [
+            new Column(children: []).Size(10, 10),
+            new Column(children: []).Size(10, 10),
+            new Swatch(),
+        ]).Padding(EdgeInsets.All(10));
 
         using var frame = new Frame(300, 200);
         await Assert.That(frame.PaintedMagenta()).IsTrue().Because("the first frame paints the swatch");
@@ -74,6 +81,24 @@ public class ComponentReuseTests
     }
 
     [Test]
+    public async Task TwoSiblingsOfOneType_EachKeepTheirOwnInstance()
+    {
+        swatchesBuilt = 0;
+        content = () => new Row(spacing: 10, children: [new Swatch(), new Column(children: []).Size(5, 5), new Swatch()]);
+
+        using var frame = new Frame(300, 200);
+        int paintedBefore = frame.MagentaCount();
+        await Assert.That(paintedBefore).IsEqualTo(2);
+
+        mountedHost!.Rerender();
+        frame.Tick();
+
+        // Four built (two per render), both of the first render's still mounted and painting.
+        await Assert.That(swatchesBuilt).IsEqualTo(4);
+        await Assert.That(frame.MagentaCount()).IsEqualTo(2).Because("a sibling was taken for the other, or unmounted");
+    }
+
+    [Test]
     public async Task AContainerQuery_UsesTheBuilderFromItsParentsLatestRender()
     {
         int version = 1;
@@ -83,6 +108,7 @@ public class ComponentReuseTests
             int captured = version;
             return new Column(children:
             [
+                new Column(children: []).Size(10, 10),
                 new ContainerQuery(info =>
                 {
                     built.Add(captured);
@@ -127,8 +153,10 @@ public class ComponentReuseTests
 
         public void Tick() => orchestrator.Tick();
 
-        public bool PaintedMagenta() =>
-            backend.Commands.Any(op => op.Kind == EtchBackend.OpKind.DrawRect && op.Fill == Magenta);
+        public bool PaintedMagenta() => MagentaCount() > 0;
+
+        public int MagentaCount() =>
+            backend.Commands.Count(op => op.Kind == EtchBackend.OpKind.DrawRect && op.Fill == Magenta);
 
         public void Dispose()
         {

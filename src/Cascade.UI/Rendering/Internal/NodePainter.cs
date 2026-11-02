@@ -665,8 +665,12 @@ internal sealed partial class NodePainter
                 break;
 
             case IRadioGroup rg:
+            {
+                // A disabled group fades every option (the buttons themselves animate only hover/press).
+                using var fade = rg.IsGroupDisabled ? ctx.PushOpacity(theme.Radio.DisabledOpacity) : default;
                 PaintRecursive(rg.Content);
                 break;
+            }
 
             case Toggle tog:
                 PaintToggle(tog, bounds);
@@ -5607,9 +5611,10 @@ internal sealed partial class NodePainter
         float pressT = anim.Press.Current;
         float disabledT = anim.Disabled.Current;
 
-        // Track
+        // Track: at the left, or at the right with the label before it (LabelPosition(Left)).
+        bool labelLeft = tog.LabelPositionValue == ToggleLabelPosition.Left && !string.IsNullOrEmpty(tog.Label.Resolve());
         var trackBounds = new Rect(
-            bounds.X, bounds.Y + (bounds.Height - t.TrackHeight) / 2f,
+            labelLeft ? bounds.Right - t.TrackWidth : bounds.X, bounds.Y + (bounds.Height - t.TrackHeight) / 2f,
             t.TrackWidth, t.TrackHeight);
 
         // Track color crossfades during slide (not instant at midpoint)
@@ -5743,11 +5748,11 @@ internal sealed partial class NodePainter
             opacity.Dispose();
         }
 
-        // Label to the right of the track; with a description, the two are stacked and centred as a block.
+        // Label beside the track; with a description, the two are stacked and centred as a block.
         string labelText = tog.Label.Resolve();
         if (!string.IsNullOrEmpty(labelText))
         {
-            float textX = trackBounds.Right + theme.Spacing.Sm;
+            float textX = labelLeft ? bounds.X : trackBounds.Right + theme.Spacing.Sm;
             float textWidth = bounds.Width - t.TrackWidth - theme.Spacing.Sm;
             string descriptionText = tog.Description.Resolve();
             if (string.IsNullOrEmpty(descriptionText) || textWidth <= 0)
@@ -9143,49 +9148,37 @@ internal sealed partial class NodePainter
         }
 
         float fontSize = theme.Typography.Scale.Body.Size;
-        float separatorPad = 4f;
-        float itemPadH = 4f;
-        float cursorX = bounds.X;
         float centerY = bounds.Y + bounds.Height / 2f;
+        var arranged = bc.Arrange(fontSize, ctx.DefaultFontPath, bounds.Width);
+        int lastSegment = bc.Segments.Count - 1;
 
-        for (int i = 0; i < bc.Segments.Count; i++)
+        foreach (var item in arranged.Items)
         {
-            var seg = bc.Segments[i];
-            bool isLast = i == bc.Segments.Count - 1;
-            bool isClickable = seg.OnClick != null;
-
-            var textSize = ctx.MeasureText(seg.Label, fontSize);
-            float segWidth = textSize.Width + itemPadH * 2;
-
-            // Determine color: last segment is normal text, clickable segments are primary
-            var textColor = isLast ? theme.Colors.Text
-                : isClickable ? theme.Colors.Primary
+            // The current (last) segment is plain text, clickable ones are links, the rest muted.
+            var segment = item.Segment >= 0 ? bc.Segments[item.Segment] : null;
+            var textColor = item.Segment == lastSegment ? theme.Colors.Text
+                : segment?.OnClick is not null ? theme.Colors.Primary
                 : theme.Colors.TextMuted;
+            var textSize = ctx.MeasureText(item.Text, fontSize);
+            ctx.DrawText(item.Text, MathF.Round(bounds.X + item.X + Breadcrumb.ItemPaddingH), MathF.Round(centerY - textSize.Height / 2f), fontSize, textColor);
 
-            float textX = MathF.Round(cursorX + itemPadH);
-            float textY = MathF.Round(centerY - textSize.Height / 2f);
-            ctx.DrawText(seg.Label, textX, textY, fontSize, textColor);
-
-            cursorX += segWidth;
-
-            // Draw separator chevron (except after last segment)
-            if (!isLast)
+            if (item.SeparatorWidth <= 0f)
             {
-                float sepX = cursorX + separatorPad;
-                float chevronSize = fontSize * 0.35f;
-                float chevronY = centerY;
-
-                // Draw a simple > chevron
-                ctx.DrawLine(
-                    new Point(sepX, chevronY - chevronSize),
-                    new Point(sepX + chevronSize, chevronY),
-                    new Stroke(theme.Colors.TextMuted, 1.5f, StrokeCap.Round, StrokeJoin.Round));
-                ctx.DrawLine(
-                    new Point(sepX + chevronSize, chevronY),
-                    new Point(sepX, chevronY + chevronSize),
-                    new Stroke(theme.Colors.TextMuted, 1.5f, StrokeCap.Round, StrokeJoin.Round));
-
-                cursorX += chevronSize + separatorPad * 2 + separatorPad;
+                continue;
+            }
+            float sepX = bounds.X + item.SeparatorX;
+            if (!bc.SeparatorNode.IsLayoutEmpty)
+            {
+                var size = LayoutSolver.Measure(bc.SeparatorNode, LayoutConstraints.Loose(new Size(float.PositiveInfinity, bounds.Height)));
+                bc.SeparatorNode.LayoutData.Bounds = new Rect(sepX, centerY - size.Height / 2f, size.Width, size.Height);
+                PaintRecursive(bc.SeparatorNode);
+            }
+            else
+            {
+                float chevronSize = arranged.ChevronSize;
+                var chevron = new Stroke(theme.Colors.TextMuted, 1.5f, StrokeCap.Round, StrokeJoin.Round);
+                ctx.DrawLine(new Point(sepX, centerY - chevronSize), new Point(sepX + chevronSize, centerY), chevron);
+                ctx.DrawLine(new Point(sepX + chevronSize, centerY), new Point(sepX, centerY + chevronSize), chevron);
             }
         }
 
@@ -9193,7 +9186,6 @@ internal sealed partial class NodePainter
         bc.AbsoluteBounds = new Rect(absoluteX + bounds.X, absoluteY + bounds.Y,
             bounds.Width, bounds.Height);
     }
-
     // ── NumberInput ────────────────────────────────────────────────────
 
     private void PaintNumberInput(INumberInput ni, Rect bounds)

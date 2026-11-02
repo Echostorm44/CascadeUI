@@ -105,7 +105,14 @@ public sealed class RadioGroup<T> : Node, IRadioGroup where T : notnull
         if (node is RadioButton<T> rb)
         {
             rb.IsSelected = EqualityComparer<T>.Default.Equals(rb.Value, Value.Value);
-            rb.OnSelect = () => Value.OnChange(rb.Value);
+            // Read at click time: Disabled() and ReadOnly() are applied after construction.
+            rb.OnSelect = () =>
+            {
+                if (!IsDisabled && !IsReadOnly)
+                {
+                    Value.OnChange(rb.Value);
+                }
+            };
             return;
         }
 

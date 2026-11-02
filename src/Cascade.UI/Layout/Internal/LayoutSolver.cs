@@ -1988,25 +1988,10 @@ internal static class LayoutSolver
 
     private static Size MeasureBreadcrumb(Breadcrumb bc, LayoutConstraints constraints)
     {
-        float fontSize = BodyFontSize;
-        float separatorWidth = fontSize * 0.8f;
-        float paddingH = 4f;
-
-        float totalWidth = 0f;
-        for (int i = 0; i < bc.Segments.Count; i++)
-        {
-            float segTextWidth = bc.Segments[i].Label.Length * fontSize * AverageCharWidthRatio;
-            totalWidth += segTextWidth + paddingH * 2;
-            if (i < bc.Segments.Count - 1)
-            {
-                totalWidth += separatorWidth + paddingH * 2;
-            }
-        }
-
-        float height = fontSize * DefaultLineHeightMultiplier + 8f;
+        var arranged = bc.Arrange(BodyFontSize, DefaultFontPath, constraints.MaxWidth);
         return new Size(
-            constraints.ConstrainWidth(totalWidth),
-            constraints.ConstrainHeight(height));
+            constraints.ConstrainWidth(arranged.Width),
+            constraints.ConstrainHeight(arranged.Height));
     }
 
     private static Size MeasureNumberInput(INumberInput ni, LayoutConstraints constraints)

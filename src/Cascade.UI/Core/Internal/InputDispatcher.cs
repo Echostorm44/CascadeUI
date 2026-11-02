@@ -3226,6 +3226,17 @@ internal sealed partial class InputDispatcher
             }
         }
 
+        // Space flips a focused checkbox or toggle, as a click does.
+        if (evt.Key == Key.Space && focusedNode is Checkbox or Toggle)
+        {
+            if (TryToggle(focusedNode))
+            {
+                suppressNextCharacter = true;
+                RequestRepaint?.Invoke();
+            }
+            return;
+        }
+
         // App menu accelerators (MenuBar item shortcuts, e.g. Ctrl+Z / Ctrl+S) —
         // fire even while a control is focused, as long as that control did not
         // consume the key above (text controls return early when they do).
@@ -4573,6 +4584,28 @@ internal sealed partial class InputDispatcher
 
     // ── Gesture invocation ────────────────────────────────────────────
 
+    /// <summary>
+    /// Flips a checkbox or toggle unless it is disabled or read-only. A three-state checkbox goes
+    /// to checked, or from checked to unchecked. Returns whether the value changed.
+    /// </summary>
+    private static bool TryToggle(Node node)
+    {
+        switch (node)
+        {
+            case Checkbox { IsDisabled: false, IsReadOnly: false, BoolValue: { } binding }:
+                binding.OnChange(!binding.Value);
+                return true;
+            case Checkbox { IsDisabled: false, IsReadOnly: false, ThreeStateValue: { } state, OnChange: { } onChange }:
+                onChange(state == CheckboxValue.Checked ? CheckboxValue.Unchecked : CheckboxValue.Checked);
+                return true;
+            case Toggle { IsDisabled: false, IsReadOnly: false } toggle:
+                toggle.Value.OnChange(!toggle.Value.Value);
+                return true;
+            default:
+                return false;
+        }
+    }
+
     private void InvokeTap(Node node)
     {
         // Direct control click handlers
@@ -4587,14 +4620,11 @@ internal sealed partial class InputDispatcher
             case IconButton ib when !ib.IsDisabled && !ib.IsLoading:
                 ib.OnClick();
                 return;
-            case Checkbox cb when cb.BoolValue is { } binding:
-                binding.OnChange(!binding.Value);
+            case Checkbox or Toggle:
+                TryToggle(node);
                 return;
             case IRadioButton rb:
                 rb.Select();
-                return;
-            case Toggle toggle:
-                toggle.Value.OnChange(!toggle.Value.Value);
                 return;
             case HotkeyPicker picker when !picker.IsDisabled:
                 picker.IsRecording = true;
@@ -6210,39 +6240,21 @@ internal sealed partial class InputDispatcher
             return;
         }
 
-        float fontSize = 17f;
-        float separatorPad = 4f;
-        float itemPadH = 4f;
-
-        float cursorX = absBounds.X;
-        float clickX = lastMousePosition.X;
-
-        for (int i = 0; i < bc.Segments.Count; i++)
+        // The same arrangement the painter drew.
+        var arranged = bc.Arrange(LayoutSolver.BodyFontSize, LayoutSolver.DefaultFontPath, absBounds.Width);
+        float clickX = lastMousePosition.X - absBounds.X;
+        foreach (var item in arranged.Items)
         {
-            var seg = bc.Segments[i];
-            bool isLast = i == bc.Segments.Count - 1;
-            float segTextWidth = seg.Label.Length * fontSize * 0.55f;
-            float segWidth = segTextWidth + itemPadH * 2;
-
-            if (clickX >= cursorX && clickX < cursorX + segWidth)
+            if (clickX >= item.X && clickX < item.X + item.Width)
             {
-                if (!isLast && seg.OnClick != null)
+                if (item.Segment >= 0 && item.Segment < bc.Segments.Count - 1 && bc.Segments[item.Segment].OnClick is { } onClick)
                 {
-                    seg.OnClick();
+                    onClick();
                 }
                 return;
             }
-
-            cursorX += segWidth;
-
-            if (!isLast)
-            {
-                float chevronSize = fontSize * 0.35f;
-                cursorX += chevronSize + separatorPad * 3;
-            }
         }
     }
-
     // ── ToggleGroup helpers ───────────────────────────────────────────
 
     private void HandleToggleGroupClick(IToggleGroup tg)

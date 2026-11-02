@@ -27,15 +27,11 @@ namespace Cascade.UI.GoldenText;
 /// </summary>
 public class GlyphPlacementTests
 {
-    private static readonly string[] FontFiles =
-        ["Inter-Regular.ttf", "Inter-Medium.ttf", "Inter-SemiBold.ttf"];
+    private static readonly string[] FontFiles = InterFonts.Weights;
 
     // Glyphs with a single solid body so the ink centroid is stable.
     private static readonly char[] Letters = ['n', 'o', 'H', 'm', 'e'];
     private static readonly float[] Sizes = [13f, 16f, 24f];
-
-    private static string FontsDirectory => IOPath.Combine(
-        GoldenHarness.RepoRoot, "src", "Cascade.UI", "Fonts");
 
     [Test]
     public async Task PenSweep_CentroidAdvancesMonotonicallyByOnePixel()
@@ -45,8 +41,7 @@ public class GlyphPlacementTests
         foreach (string fontFile in FontFiles)
         {
             using var backend = new EtchBackend();
-            ulong fontHandle = backend.LoadFont(
-                await File.ReadAllBytesAsync(IOPath.Combine(FontsDirectory, fontFile)), 0);
+            ulong fontHandle = InterFonts.Load(backend, fontFile);
 
             foreach (float size in Sizes)
             {

@@ -498,7 +498,7 @@ public sealed class DrawContext
         {
             return exists;
         }
-        exists = File.Exists(path);
+        exists = File.Exists(FontLocator.FilePath(path));
         fontExistsCache[path] = exists;
         return exists;
     }
@@ -651,7 +651,9 @@ public sealed class DrawContext
         float maxWidth = float.PositiveInfinity,
         int maxLines = 0,
         bool noWrap = false,
-        TextOutline? outline = null)
+        TextOutline? outline = null,
+        float lineHeight = 0f,
+        TextDecoration decoration = TextDecoration.None)
     {
         if (backend is null || string.IsNullOrEmpty(text))
         {
@@ -673,6 +675,7 @@ public sealed class DrawContext
             Overflow = overflow,
             MaxLines = maxLines,
             NoWrap = noWrap,
+            LineHeight = lineHeight,
         };
 
         var layout = TextLayoutEngine.Layout(text, options);
@@ -692,6 +695,33 @@ public sealed class DrawContext
             DrawLayoutLines(layout, x, y, fontSize, textOutline.Color, textOutline.Width, resolvedFont, fontHandle);
         }
         DrawLayoutLines(layout, x, y, fontSize, color, 0f, resolvedFont, fontHandle);
+        if (decoration != TextDecoration.None)
+        {
+            DrawDecoration(layout, x, y, fontSize, color, resolvedFont, decoration);
+        }
+    }
+
+    /// <summary>
+    /// Underlines or strikes through every line of <paramref name="layout"/> across its glyphs, at
+    /// the font's own position and thickness, snapped to whole pixels.
+    /// </summary>
+    private void DrawDecoration(TextLayoutResult layout, float x, float y, float fontSize, ColorValue color,
+        string resolvedFont, TextDecoration decoration)
+    {
+        var metrics = TextLayoutEngine.GetDecorationMetrics(resolvedFont, fontSize);
+        (float offset, float thickness) = decoration == TextDecoration.Underline
+            ? (metrics.UnderlineOffset, metrics.UnderlineThickness)
+            : (metrics.StrikeoutOffset, metrics.StrikeoutThickness);
+        thickness = MathF.Max(1f, MathF.Round(thickness));
+        foreach (var line in layout.LinesArray)
+        {
+            if (line.GlyphsArray.Length == 0 || line.Width <= 0f)
+            {
+                continue;
+            }
+            float top = MathF.Round(y + line.Y + line.Baseline + offset - thickness / 2f);
+            DrawRect(new Rect(x + line.X, top, line.Width, thickness), color);
+        }
     }
 
     /// <summary>
@@ -856,8 +886,8 @@ public sealed class DrawContext
 
         try
         {
-            byte[] fontData = File.ReadAllBytes(fontPath);
-            ulong handle = backend.LoadFont(fontData, 0);
+            byte[] fontData = FontFiles.Bytes(FontLocator.FilePath(fontPath));
+            ulong handle = backend.LoadSharedFont(fontData, FontLocator.Variations(fontPath));
             fontHandleCache[fontPath] = handle;
             return handle;
         }

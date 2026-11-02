@@ -39,6 +39,13 @@ public readonly struct TextLayoutOptions : IEquatable<TextLayoutOptions>
     public float LineHeightMultiplier { get; init; }
 
     /// <summary>
+    /// A fixed line height in pixels (CSS <c>line-height</c>), overriding
+    /// <see cref="LineHeightMultiplier"/> when positive. The leading is split evenly above and
+    /// below the glyphs (half-leading), so the text stays centred in each line.
+    /// </summary>
+    public float LineHeight { get; init; }
+
+    /// <summary>
     /// Break lines only at hard line breaks, never to fit <see cref="MaxWidth"/>. Wider lines overflow
     /// (clipped by the caller) or, with <see cref="TextOverflow.Ellipsis"/>, are cut at a character.
     /// </summary>
@@ -65,6 +72,7 @@ public readonly struct TextLayoutOptions : IEquatable<TextLayoutOptions>
             && Alignment == other.Alignment
             && Overflow == other.Overflow
             && LineHeightMultiplier == other.LineHeightMultiplier
+            && LineHeight == other.LineHeight
             && NoWrap == other.NoWrap
             && string.Equals(FontPath, other.FontPath, StringComparison.Ordinal);
     }
@@ -85,6 +93,7 @@ public readonly struct TextLayoutOptions : IEquatable<TextLayoutOptions>
         hc.Add((int)Alignment);
         hc.Add((int)Overflow);
         hc.Add(LineHeightMultiplier);
+        hc.Add(LineHeight);
         hc.Add(NoWrap);
         return hc.ToHashCode();
     }
@@ -187,6 +196,12 @@ public static class TextLayoutEngine
         float descent = Math.Abs(metrics.Descender);
         float naturalLineHeight = ascent + descent + Math.Abs(metrics.LineGap);
         float lineHeight = naturalLineHeight * Math.Max(options.LineHeightMultiplier, 0.1f);
+        float baseline = ascent;
+        if (options.LineHeight > 0f && float.IsFinite(options.LineHeight))
+        {
+            lineHeight = options.LineHeight;
+            baseline = ascent + (lineHeight - (ascent + descent)) / 2f;
+        }
 
         // WP-3521b: mixed-direction (bidi) text needs per-run shaping + visual
         // reordering. Pure-LTR and pure-RTL (a single directional run) stay on the
@@ -202,7 +217,7 @@ public static class TextLayoutEngine
             var bidi = Etch.Text.Unicode.Minimal.BidiAlgorithm.Analyze(text.AsSpan());
             if (bidi.Runs.Length > 1)
             {
-                return LayoutBidi(text, options, ascent, lineHeight);
+                return LayoutBidi(text, options, baseline, lineHeight);
             }
             fastPathRtl = bidi.Runs.Length == 1 && (bidi.Runs[0].Level & 1) == 1;
         }
@@ -219,14 +234,14 @@ public static class TextLayoutEngine
         // Break into lines
         var lines = BreakIntoLines(
             text, shaped.Glyphs, breaks, xAtOffset,
-            options.NoWrap ? float.PositiveInfinity : options.MaxWidth, lineHeight, ascent, shaped.TotalAdvance);
+            options.NoWrap ? float.PositiveInfinity : options.MaxWidth, lineHeight, baseline, shaped.TotalAdvance);
 
         // Truncate to max lines
         if (options.MaxLines > 0 && lines.Count > options.MaxLines)
         {
             if (options.Overflow == TextOverflow.Ellipsis && lines.Count > 0)
             {
-                TruncateWithEllipsis(lines, options, shaper, xAtOffset, lineHeight, ascent);
+                TruncateWithEllipsis(lines, options, shaper, xAtOffset, lineHeight, baseline);
             }
             while (lines.Count > options.MaxLines)
             {
@@ -241,7 +256,7 @@ public static class TextLayoutEngine
             int lastKeptIndex = (options.MaxLines > 0 ? Math.Min(lines.Count, options.MaxLines) : lines.Count) - 1;
             if (!float.IsPositiveInfinity(options.MaxWidth) && lines[lastKeptIndex].Width > options.MaxWidth)
             {
-                TruncateWithEllipsis(lines, options, shaper, xAtOffset, lineHeight, ascent);
+                TruncateWithEllipsis(lines, options, shaper, xAtOffset, lineHeight, baseline);
             }
         }
 
@@ -649,6 +664,10 @@ public static class TextLayoutEngine
     }
 
     // ── Shaper management ───────────────────────────────────────────────
+
+    /// <summary>Underline and strikethrough placement for a font at a size.</summary>
+    internal static TextDecorationMetrics GetDecorationMetrics(string fontPath, float fontSize)
+        => GetOrCreateShaper(fontPath).GetDecorationMetrics(fontSize);
 
     static HarfBuzzShaper GetOrCreateShaper(string fontPath)
     {

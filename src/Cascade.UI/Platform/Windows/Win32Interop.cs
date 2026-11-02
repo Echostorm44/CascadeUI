@@ -157,6 +157,7 @@ internal static partial class Win32
 
     internal const int IDC_ARROW = 32512;
     internal const int IDC_SIZEWE = 32644;
+    internal const int IDC_IBEAM = 32513;
     internal const int IDC_SIZENS = 32645;
 
     // ── SetWindowPos Flags ───────────────────────────────────────────

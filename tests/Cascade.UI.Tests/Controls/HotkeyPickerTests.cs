@@ -73,7 +73,7 @@ public class HotkeyPickerTests
     {
         string? saved = LayoutSolver.DefaultFontPath;
         float savedSize = LayoutSolver.BodyFontSize;
-        LayoutSolver.DefaultFontPath = System.IO.Path.Combine(AppContext.BaseDirectory, "fonts", "Inter-Regular.ttf");
+        LayoutSolver.DefaultFontPath = System.IO.Path.Combine(AppContext.BaseDirectory, "fonts", "InterVariable.ttf");
         LayoutSolver.BodyFontSize = 22f;
         try
         {

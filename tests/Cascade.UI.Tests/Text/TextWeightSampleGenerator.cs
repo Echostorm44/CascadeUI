@@ -59,7 +59,7 @@ public class TextWeightSampleGenerator
             return; // decision-support artifact; only runs on demand
         }
 
-        string interPath = IOPath.Combine(AppContext.BaseDirectory, "fonts", "Inter-Regular.ttf");
+        string interPath = IOPath.Combine(AppContext.BaseDirectory, "fonts", "InterVariable.ttf");
         byte[] fontBytes = await File.ReadAllBytesAsync(interPath);
         string outDir = IOPath.Combine(RepoRoot(), "Documents", "text-weight-samples");
         Directory.CreateDirectory(outDir);
@@ -159,7 +159,7 @@ public class TextWeightSampleGenerator
             return;
         }
 
-        string interPath = IOPath.Combine(AppContext.BaseDirectory, "fonts", "Inter-Regular.ttf");
+        string interPath = IOPath.Combine(AppContext.BaseDirectory, "fonts", "InterVariable.ttf");
         byte[] fontBytes = await File.ReadAllBytesAsync(interPath);
         string outDir = IOPath.Combine(RepoRoot(), "Documents", "text-weight-samples");
         Directory.CreateDirectory(outDir);
@@ -416,7 +416,7 @@ public class TextWeightSampleGenerator
 
     private static CoverageTile RenderCoverage(string text, int size, byte[] fontBytes)
     {
-        string interPath = IOPath.Combine(AppContext.BaseDirectory, "fonts", "Inter-Regular.ttf");
+        string interPath = IOPath.Combine(AppContext.BaseDirectory, "fonts", "InterVariable.ttf");
         var opts = new TextLayoutOptions
         {
             FontPath = interPath,

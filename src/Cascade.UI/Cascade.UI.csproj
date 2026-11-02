@@ -158,8 +158,10 @@
        project-reference consumer's output; Pack + PackagePath ships them under build/assets
        so Cascade.UI.targets copies them into a NuGet consumer's output at Fonts/. -->
   <ItemGroup>
-    <Content Include="Fonts\*.ttf" CopyToOutputDirectory="PreserveNewest" LinkBase="Fonts"
+    <Content Include="Fonts\*.ttf;Fonts\Inter-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" LinkBase="Fonts"
              Pack="true" PackagePath="build\assets\Fonts" />
+    <!-- Inter is SIL OFL 1.1: the licence travels with the fonts, into the app's output too. -->
+    <None Include="Fonts\Inter-LICENSE.txt" Pack="true" PackagePath="licenses\Inter-LICENSE.txt" />
   </ItemGroup>
 
   <!-- The built-in icons are Lucide's (CONTROLS-020): ISC, plus MIT for the Feather-derived

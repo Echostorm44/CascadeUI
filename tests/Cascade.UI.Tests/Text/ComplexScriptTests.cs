@@ -16,7 +16,7 @@ public class ComplexScriptTests
 
     private static string InterPath()
     {
-        string p = System.IO.Path.Combine(AppContext.BaseDirectory, "fonts", "Inter-Regular.ttf");
+        string p = System.IO.Path.Combine(AppContext.BaseDirectory, "fonts", "InterVariable.ttf");
         if (!File.Exists(p)) { throw new FileNotFoundException(p); }
         return p;
     }

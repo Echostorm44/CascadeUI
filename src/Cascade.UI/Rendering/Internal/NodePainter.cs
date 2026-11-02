@@ -1824,7 +1824,14 @@ internal sealed partial class NodePainter
     {
         var textColor = lbl.TextColorOverride ?? theme.Colors.Text;
         var text = lbl.Text ?? lbl.LocText.Resolve();
-        var textStyle = lbl.TextStyleOverride ?? theme.Typography.Scale.Body;
+        // The same style and font the label was measured with (LayoutSolver.MeasureLabel).
+        var body = theme.Typography.Scale.Body;
+        if (lbl.IsSelectable)
+        {
+            PaintLabelSelection(lbl, bounds, body);
+        }
+        var textStyle = lbl.ResolveStyle(new TextStyle(body.Size, body.Weight, 0f));
+        string? fontPath = FontFamilyResolver.Resolve(lbl.FontFamilyOverride, textStyle.Weight, lbl.IsItalic, ctx.DefaultFontPath);
         // 1px horizontal padding gives room for glyphs with negative left bearings
         // (e.g., capital J) so they don't get clipped at the label edge.
         PaintText(text, bounds, 1f, textColor,
@@ -1834,7 +1841,55 @@ internal sealed partial class NodePainter
             overflow: lbl.OverflowMode,
             maxLines: lbl.MaxLineCount ?? 0,
             noWrap: lbl.WrapMode == TextWrap.NoWrap,
-            outline: lbl.OutlineStyle);
+            outline: lbl.OutlineStyle,
+            resolvedFontPath: fontPath,
+            lineHeight: Label.LineHeightPixels(textStyle),
+            decoration: lbl.DecorationMode);
+    }
+
+    /// <summary>Highlights a selectable label's selected text, under the text.</summary>
+    private void PaintLabelSelection(Label lbl, Rect bounds, TextStyle body)
+    {
+        (int start, int end) = InputDispatcher.LabelSelectionRange(lbl);
+        if (end <= start || LabelTextLayout(lbl, bounds, body, ctx.DefaultFontPath) is not { } drawn)
+        {
+            return;
+        }
+        var highlight = theme.Colors.Primary.Opacity(0.3f);
+        foreach (var rect in TextEditingEngine.SelectionRects(drawn.Layout, start, end))
+        {
+            ctx.DrawRect(new Rect(drawn.X + rect.X, drawn.Y + rect.Y, rect.Width, rect.Height), highlight);
+        }
+    }
+
+    /// <summary>
+    /// A label's text as <see cref="PaintLabel"/> draws it in <paramref name="bounds"/>: the
+    /// laid-out lines and their origin. Text selection hit-tests and highlights against this, so
+    /// it lines up with the drawn glyphs. Null when nothing is drawn.
+    /// </summary>
+    internal static (TextLayoutResult Layout, float X, float Y)? LabelTextLayout(Label lbl, Rect bounds, TextStyle body, string? defaultFontPath)
+    {
+        string text = lbl.Text ?? lbl.LocText.Resolve();
+        if (string.IsNullOrEmpty(text))
+        {
+            return null;
+        }
+        var style = lbl.ResolveStyle(new TextStyle(body.Size, body.Weight, 0f));
+        string? fontPath = FontFamilyResolver.Resolve(lbl.FontFamilyOverride, style.Weight, lbl.IsItalic, defaultFontPath);
+        if (fontPath is null)
+        {
+            return null;
+        }
+        float lineHeight = Label.LineHeightPixels(style);
+        int maxLines = lbl.MaxLineCount ?? 0;
+        bool noWrap = lbl.WrapMode == TextWrap.NoWrap;
+        if (PlaceText(text, bounds, 1f, style.Size, fontPath, maxLines, lbl.OverflowMode, noWrap, lineHeight) is not { } placed)
+        {
+            return null;
+        }
+        var layout = TextLayoutEngine.Layout(text,
+            placed.DrawOptions(fontPath, style.Size, lbl.Alignment, lbl.OverflowMode, maxLines, noWrap, lineHeight));
+        return (layout, placed.X, placed.Y);
     }
 
     // ── TextInput ──────────────────────────────────────────────────────
@@ -6172,7 +6227,17 @@ internal sealed partial class NodePainter
         if (source is not null)
         {
             float opacity = img.LayoutData.Opacity;
-            ctx.DrawImage(source, bounds, opacity);
+            var dest = Image.FitRect(img.FitMode, source.Width, source.Height, bounds);
+            if (dest.X < bounds.X - 0.01f || dest.Y < bounds.Y - 0.01f
+                || dest.Right > bounds.Right + 0.01f || dest.Bottom > bounds.Bottom + 0.01f)
+            {
+                using var clip = ctx.PushClip(bounds);
+                ctx.DrawImage(source, dest, opacity);
+            }
+            else
+            {
+                ctx.DrawImage(source, dest, opacity);
+            }
         }
         else
         {
@@ -11206,7 +11271,7 @@ internal sealed partial class NodePainter
         switch (node)
         {
             case Label label:
-                label.TextStyleOverride ??= new TextStyle(fontSize, FontWeight.Regular, fontSize * 1.4f);
+                label.FontSizeOverride ??= fontSize;
                 break;
 
             case Row row:
@@ -12674,7 +12739,10 @@ internal sealed partial class NodePainter
         int maxLines = 1,
         FontWeight fontWeight = FontWeight.Regular,
         bool noWrap = false,
-        TextOutline? outline = null)
+        TextOutline? outline = null,
+        string? resolvedFontPath = null,
+        float lineHeight = 0f,
+        TextDecoration decoration = TextDecoration.None)
     {
         if (string.IsNullOrEmpty(text))
         {
@@ -12685,17 +12753,89 @@ internal sealed partial class NodePainter
         // One line means one unbroken line: cut at a character (clip or ellipsis), never wrapped to
         // the first word-break with the rest hidden ("All Types" in a narrow select showed "All").
         noWrap |= maxLines == 1;
-        float availableWidth = bounds.Width - horizontalPadding * 2;
-        if (availableWidth <= 0)
+
+        // Resolve weight-specific font path
+        string? fontPath = resolvedFontPath;
+        if (fontPath is null && fontWeight is not (FontWeight.Regular or FontWeight.None) && ctx.DefaultFontPath != null)
+        {
+            fontPath = ctx.ResolveFontPath(ctx.DefaultFontPath, fontWeight);
+        }
+        fontPath ??= ctx.DefaultFontPath;
+        if (fontPath is null
+            || PlaceText(text, bounds, horizontalPadding, effectiveFontSize, fontPath, maxLines, overflow, noWrap, lineHeight) is not { } placed)
         {
             return;
         }
+        float x = placed.X;
+        float y = placed.Y;
+        bool singleLine = placed.SingleLine;
+        float availableWidth = placed.AvailableWidth;
 
-        // Resolve weight-specific font path
-        string? fontPath = null;
-        if (fontWeight is not (FontWeight.Regular or FontWeight.None) && ctx.DefaultFontPath != null)
+        // The text layout does not cut a line that is wider than maxWidth when the overflow mode is
+        // Clip, so a label wider than its box drew straight past the control's edge (a button
+        // narrower than its caption painted the caption over its neighbours). Clip it to the
+        // content box; Ellipsis already truncates to fit.
+        if (singleLine && overflow == TextOverflow.Clip && placed.SingleLineWidth > availableWidth)
         {
-            fontPath = ctx.ResolveFontPath(ctx.DefaultFontPath, fontWeight);
+            using var clip = ctx.PushClip(new Rect(bounds.X + horizontalPadding, bounds.Y, availableWidth, bounds.Height));
+            ctx.DrawText(text, x, y, effectiveFontSize, color,
+                fontPath: fontPath,
+                alignment: alignment,
+                overflow: overflow,
+                maxWidth: availableWidth,
+                maxLines: maxLines,
+                noWrap: noWrap,
+                outline: outline,
+                decoration: decoration);
+            return;
+        }
+
+        // A single line is centred by its ink above, so it keeps its natural line box; several
+        // lines take the requested line height, as they were measured.
+        ctx.DrawText(text, x, y, effectiveFontSize, color,
+            fontPath: fontPath,
+            alignment: alignment,
+            overflow: overflow,
+            maxWidth: availableWidth,
+            maxLines: maxLines,
+            noWrap: noWrap,
+            outline: outline,
+            lineHeight: singleLine ? 0f : lineHeight,
+            decoration: decoration);
+    }
+
+    /// <summary>Where <see cref="PaintText"/> puts a text block: its origin and how it was laid out.</summary>
+    internal readonly record struct TextPlacement(float X, float Y, bool SingleLine, float AvailableWidth, float SingleLineWidth)
+    {
+        /// <summary>The layout options the text is drawn with (what <see cref="DrawContext.DrawText"/> builds).</summary>
+        public TextLayoutOptions DrawOptions(string fontPath, float fontSize, TextAlignment alignment, TextOverflow overflow,
+            int maxLines, bool noWrap, float lineHeight) => new()
+        {
+            FontPath = fontPath,
+            FontSize = fontSize,
+            MaxWidth = AvailableWidth,
+            Alignment = alignment,
+            Overflow = overflow,
+            MaxLines = maxLines,
+            NoWrap = noWrap || maxLines == 1,
+            LineHeight = SingleLine ? 0f : lineHeight,
+        };
+    }
+
+    /// <summary>
+    /// Places a text block in <paramref name="bounds"/> as <see cref="PaintText"/> draws it: one
+    /// line centred by its ink, several lines centred by their laid-out height, snapped to whole
+    /// pixels. Shared with text selection, which must hit-test the text where it was drawn. Null
+    /// when there is no room.
+    /// </summary>
+    internal static TextPlacement? PlaceText(string text, Rect bounds, float horizontalPadding, float fontSize, string fontPath,
+        int maxLines, TextOverflow overflow, bool noWrap, float lineHeight)
+    {
+        noWrap |= maxLines == 1;
+        float availableWidth = bounds.Width - horizontalPadding * 2;
+        if (availableWidth <= 0)
+        {
+            return null;
         }
 
         float x = bounds.X + horizontalPadding;
@@ -12707,7 +12847,12 @@ internal sealed partial class NodePainter
         // == 1 is guaranteed single-line. The single-line width measure is cheap,
         // so use it to short-circuit the common (fits-on-one-line) case and only
         // pay for a full wrapping layout when the text can actually span lines.
-        Size singleLineSize = ctx.MeasureText(text, effectiveFontSize, fontPath);
+        Size singleLineSize = TextLayoutEngine.Layout(text, new TextLayoutOptions
+        {
+            FontPath = fontPath,
+            FontSize = fontSize,
+            MaxWidth = float.PositiveInfinity,
+        }).BoundingBox;
         bool singleLine = (noWrap && !text.Contains('\n', StringComparison.Ordinal))
             || ShouldCenterAsSingleLine(maxLines, text, singleLineSize.Width, availableWidth);
 
@@ -12721,7 +12866,7 @@ internal sealed partial class NodePainter
             // symmetric padding then centres this (already off-centre) line box.
             // Because a single line's ink height never exceeds the line height,
             // visual centring never pushes the glyph past the box edges.
-            var visual = ctx.MeasureGlyphVisualBounds(text, effectiveFontSize, fontPath);
+            var visual = TextLayoutEngine.GetGlyphVisualBounds(text, fontSize, fontPath);
             y = visual.HasValue
                 ? bounds.Y + bounds.Height / 2f - visual.Value.VisualCenterY
                 : bounds.Y + (bounds.Height - singleLineSize.Height) / 2f;
@@ -12734,55 +12879,21 @@ internal sealed partial class NodePainter
             // the box is deliberately taller than the text. Using the single-line
             // height here (the old maxLines <= 1 path) dropped the first line to
             // the vertical middle of the full multi-line box.
-            Size textSize = singleLineSize;
-            string? measureFont = fontPath ?? ctx.DefaultFontPath;
-            if (!string.IsNullOrEmpty(measureFont))
+            Size textSize = TextLayoutEngine.Layout(text, new TextLayoutOptions
             {
-                var measureOptions = new TextLayoutOptions
-                {
-                    FontPath = measureFont,
-                    FontSize = effectiveFontSize,
-                    MaxWidth = availableWidth,
-                    MaxLines = maxLines,
-                    Overflow = overflow,
-                    NoWrap = noWrap,
-                };
-                textSize = TextLayoutEngine.Layout(text, measureOptions).BoundingBox;
-            }
-
+                FontPath = fontPath,
+                FontSize = fontSize,
+                MaxWidth = availableWidth,
+                MaxLines = maxLines,
+                Overflow = overflow,
+                NoWrap = noWrap,
+                LineHeight = lineHeight,
+            }).BoundingBox;
             y = bounds.Y + (bounds.Height - textSize.Height) / 2f;
         }
 
         // Snap to pixel grid for crisp rendering, especially at small sizes
-        x = MathF.Round(x);
-        y = MathF.Round(y);
-
-        // The text layout does not cut a line that is wider than maxWidth when the overflow mode is
-        // Clip, so a label wider than its box drew straight past the control's edge (a button
-        // narrower than its caption painted the caption over its neighbours). Clip it to the
-        // content box; Ellipsis already truncates to fit.
-        if (singleLine && overflow == TextOverflow.Clip && singleLineSize.Width > availableWidth)
-        {
-            using var clip = ctx.PushClip(new Rect(bounds.X + horizontalPadding, bounds.Y, availableWidth, bounds.Height));
-            ctx.DrawText(text, x, y, effectiveFontSize, color,
-                fontPath: fontPath,
-                alignment: alignment,
-                overflow: overflow,
-                maxWidth: availableWidth,
-                maxLines: maxLines,
-                noWrap: noWrap,
-                outline: outline);
-            return;
-        }
-
-        ctx.DrawText(text, x, y, effectiveFontSize, color,
-            fontPath: fontPath,
-            alignment: alignment,
-            overflow: overflow,
-            maxWidth: availableWidth,
-            maxLines: maxLines,
-            noWrap: noWrap,
-            outline: outline);
+        return new TextPlacement(MathF.Round(x), MathF.Round(y), singleLine, availableWidth, singleLineSize.Width);
     }
 
     private static Rect ScaleBounds(Rect bounds, float scale)

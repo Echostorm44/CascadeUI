@@ -13,7 +13,7 @@ public class EllipsisNarrowTests
     {
         var options = new TextLayoutOptions
         {
-            FontPath = System.IO.Path.Combine(AppContext.BaseDirectory, "fonts", "Inter-Regular.ttf"),
+            FontPath = System.IO.Path.Combine(AppContext.BaseDirectory, "fonts", "InterVariable.ttf"),
             FontSize = 17f,
             MaxWidth = maxWidth,
             MaxLines = 1,

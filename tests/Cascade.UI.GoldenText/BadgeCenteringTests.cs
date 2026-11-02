@@ -29,8 +29,7 @@ namespace Cascade.UI.GoldenText;
 /// </summary>
 public class BadgeCenteringTests
 {
-    private static readonly string[] FontFiles =
-        ["Inter-Regular.ttf", "Inter-Medium.ttf", "Inter-SemiBold.ttf"];
+    private static readonly string[] FontFiles = InterFonts.Weights;
 
     // Digits (the reported "numbers sit low"), caps used in count/priority chips
     // and avatars, and a couple of descender/ascender glyphs as a stress test.
@@ -40,9 +39,6 @@ public class BadgeCenteringTests
     // Chip/avatar font sizes actually used in examples. 7.2px is the Avatar Xs
     // initial (20px * 0.36); small sizes stress hinting the most.
     private static readonly float[] Sizes = [7f, 7.2f, 8f, 9f, 10f, 11f, 12f, 13f, 16f, 20f, 24f];
-
-    private static string FontsDirectory => IOPath.Combine(
-        GoldenHarness.RepoRoot, "src", "Cascade.UI", "Fonts");
 
     // Caps and digits are what badges (digit counts, priority words) and avatars
     // (uppercased initials) actually render. Descenders are excluded from the
@@ -71,9 +67,9 @@ public class BadgeCenteringTests
         //   • horizontal: no origin snap, ¼px subpixel buckets → ≤ ¼ device px
         // Ground truth is the production rasteriser (GlyphRasterizer + GlyphPlacement).
         var failures = new List<string>();
-        string fontPath = IOPath.Combine(FontsDirectory, "Inter-SemiBold.ttf");
+        string fontPath = InterFonts.Locator("SemiBold");
         using var backend = new EtchBackend();
-        ulong fontHandle = backend.LoadFont(await File.ReadAllBytesAsync(fontPath), 0);
+        ulong fontHandle = InterFonts.Load(backend, "SemiBold");
         const float logicalFont = 7.2f;   // Avatar Xs initial
         const float boxLogical = 20f;
         float logicalAscent = TextLayoutEngine.GetGlyphInkBounds("A", logicalFont, fontPath)!.Value.Ascent;
@@ -152,9 +148,9 @@ public class BadgeCenteringTests
 
         foreach (string fontFile in FontFiles)
         {
-            string fontPath = IOPath.Combine(FontsDirectory, fontFile);
+            string fontPath = InterFonts.Locator(fontFile);
             using var backend = new EtchBackend();
-            ulong fontHandle = backend.LoadFont(await File.ReadAllBytesAsync(fontPath), 0);
+            ulong fontHandle = InterFonts.Load(backend, fontFile);
 
             foreach (float size in Sizes)
             {

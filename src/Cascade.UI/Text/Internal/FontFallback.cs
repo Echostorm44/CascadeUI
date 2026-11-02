@@ -32,86 +32,156 @@ internal static class FontFallback
         ["arial.ttf", "segoeui.ttf", "tahoma.ttf", "DejaVuSans.ttf"];
 
     /// <summary>
-    /// Resolves a weight-specific variant of a font file.
-    /// For example, segoeui.ttf → seguisb.ttf for SemiBold.
-    /// Returns the original path if no variant is found.
+    /// Resolves a weight-specific variant of a font file (the upright style). See
+    /// <see cref="ResolveFont"/>.
     /// </summary>
     internal static string ResolveFontForWeight(string regularFontPath, FontWeight weight)
+        => ResolveFont(regularFontPath, weight, italic: false);
+
+    /// <summary>
+    /// The font locator (see <see cref="FontLocator"/>) for <paramref name="weight"/> and
+    /// <paramref name="italic"/> in the family of <paramref name="regularFontPath"/>. The italic
+    /// style is a sibling file (InterVariable-Italic.ttf, segoeuii.ttf). A variable font serves
+    /// every weight from its weight axis; a static family by its weight files
+    /// (Inter-Light.ttf, seguisb.ttf), falling back to the nearest weight it has. Returns the
+    /// regular font when the family has neither.
+    /// </summary>
+    internal static string ResolveFont(string regularFontPath, FontWeight weight, bool italic)
     {
+        string path = FontLocator.FilePath(regularFontPath);
+        if (italic && ResolveItalicFile(path) is { } italicPath)
+        {
+            path = italicPath;
+        }
+        if (FontLocator.HasWeightAxis(path))
+        {
+            return FontLocator.WithWeight(path, weight);
+        }
         if (weight is FontWeight.Regular or FontWeight.None)
         {
-            return regularFontPath;
+            return path;
         }
 
-        string dir = System.IO.Path.GetDirectoryName(regularFontPath) ?? "";
-        string fileName = System.IO.Path.GetFileNameWithoutExtension(regularFontPath);
-        string ext = System.IO.Path.GetExtension(regularFontPath);
-
-        // Try known weight mappings for common system fonts (case-insensitive)
-        string[]? candidates = GetWeightCandidates(fileName, weight, ext);
-        if (candidates != null)
+        string dir = System.IO.Path.GetDirectoryName(path) ?? "";
+        string fileName = System.IO.Path.GetFileNameWithoutExtension(path);
+        string ext = System.IO.Path.GetExtension(path);
+        foreach (string candidate in StaticWeightCandidates(fileName, weight))
         {
-            foreach (string candidate in candidates)
+            string fullPath = System.IO.Path.Combine(dir, candidate + ext);
+            if (File.Exists(fullPath))
             {
-                string fullPath = System.IO.Path.Combine(dir, candidate);
-                if (File.Exists(fullPath))
-                {
-                    return fullPath;
-                }
+                return fullPath;
             }
         }
-
-        // Generic suffix approach: try appending weight suffix
-        string[] genericSuffixes = weight switch
-        {
-            FontWeight.Bold or FontWeight.ExtraBold or FontWeight.Black =>
-                ["-Bold", "b", "-bold", "bd"],
-            FontWeight.SemiBold or FontWeight.Medium =>
-                ["-Semibold", "sb", "-semibold", "-Medium", "-Bold", "b", "-bold", "bd"],
-            FontWeight.Light or FontWeight.ExtraLight or FontWeight.Thin =>
-                ["-Light", "l", "-light"],
-            _ => [],
-        };
-
-        foreach (string suffix in genericSuffixes)
-        {
-            string candidate = System.IO.Path.Combine(dir, fileName + suffix + ext);
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-        }
-
-        return regularFontPath;
+        return path;
     }
 
-    private static string[]? GetWeightCandidates(string fileName, FontWeight weight, string ext)
+    /// <summary>The italic sibling of a font file, or null when the family has none.</summary>
+    internal static string? ResolveItalicFile(string fontPath)
     {
-        bool isBoldish = weight is FontWeight.Bold or FontWeight.ExtraBold or FontWeight.Black;
-        bool isSemiBoldish = weight is FontWeight.SemiBold or FontWeight.Medium;
-        bool isLightish = weight is FontWeight.Light or FontWeight.ExtraLight or FontWeight.Thin;
+        string dir = System.IO.Path.GetDirectoryName(fontPath) ?? "";
+        string fileName = System.IO.Path.GetFileNameWithoutExtension(fontPath);
+        string ext = System.IO.Path.GetExtension(fontPath);
+        if (fileName.EndsWith("Italic", StringComparison.OrdinalIgnoreCase))
+        {
+            return fontPath;
+        }
 
-        // Case-insensitive comparison for font file names
-        return string.Equals(fileName, "segoeui", StringComparison.OrdinalIgnoreCase)
-            ? (isSemiBoldish ? ["seguisb" + ext] :
-               isBoldish ? ["segoeuib" + ext] :
-               isLightish ? ["segoeuil" + ext] : null)
-            : string.Equals(fileName, "arial", StringComparison.OrdinalIgnoreCase)
-            ? (isBoldish || isSemiBoldish ? ["arialbd" + ext] : null)
-            : string.Equals(fileName, "tahoma", StringComparison.OrdinalIgnoreCase)
-            ? (isBoldish || isSemiBoldish ? ["tahomabd" + ext] : null)
-            : string.Equals(fileName, "verdana", StringComparison.OrdinalIgnoreCase)
-            ? (isBoldish || isSemiBoldish ? ["verdanab" + ext] : null)
-            : string.Equals(fileName, "calibri", StringComparison.OrdinalIgnoreCase)
-            ? (isBoldish || isSemiBoldish ? ["calibrib" + ext] :
-               isLightish ? ["calibril" + ext] : null)
-            : string.Equals(fileName, "times", StringComparison.OrdinalIgnoreCase)
-            ? (isBoldish || isSemiBoldish ? ["timesbd" + ext] : null)
-            : string.Equals(fileName, "Inter-Regular", StringComparison.OrdinalIgnoreCase)
-            ? (isBoldish ? ["Inter-SemiBold" + ext, "Inter-Medium" + ext] :
-               isSemiBoldish ? ["Inter-SemiBold" + ext, "Inter-Medium" + ext] :
-               isLightish ? ["Inter-Regular" + ext] : null)
-            : null;
+        string[] candidates = fileName.EndsWith("-Regular", StringComparison.OrdinalIgnoreCase)
+            ? [fileName[..^"-Regular".Length] + "-Italic"]
+            : [fileName + "-Italic", fileName + "Italic", fileName + "i"];
+        foreach (string candidate in candidates)
+        {
+            string fullPath = System.IO.Path.Combine(dir, candidate + ext);
+            if (File.Exists(fullPath))
+            {
+                return fullPath;
+            }
+        }
+        return null;
+    }
+
+    // Static weight files, nearest weight first: "Family-Regular" / "Family-Italic" follow the
+    // standard naming (Family-Light, Family-BoldItalic); the Windows core fonts their own short
+    // names.
+    private static IEnumerable<string> StaticWeightCandidates(string fileName, FontWeight weight)
+    {
+        foreach (var nearest in NearestWeights(weight))
+        {
+            if (fileName.EndsWith("-Regular", StringComparison.OrdinalIgnoreCase))
+            {
+                yield return fileName[..^"-Regular".Length] + "-" + WeightName(nearest);
+            }
+            else if (fileName.EndsWith("-Italic", StringComparison.OrdinalIgnoreCase))
+            {
+                yield return fileName[..^"-Italic".Length] + "-" + WeightName(nearest) + "Italic";
+            }
+            else if (WindowsCoreFontWeight(fileName, nearest) is { } coreFont)
+            {
+                yield return coreFont;
+            }
+            else
+            {
+                yield return fileName + "-" + WeightName(nearest);
+            }
+        }
+    }
+
+    /// <summary>The weights to try for <paramref name="weight"/>: itself, then the others by distance (bolder first on a tie), never regular.</summary>
+    private static IEnumerable<FontWeight> NearestWeights(FontWeight weight)
+    {
+        int requested = (int)weight;
+        return Enum.GetValues<FontWeight>()
+            .Where(w => w is not (FontWeight.None or FontWeight.Regular))
+            .OrderBy(w => Math.Abs((int)w - requested))
+            .ThenByDescending(w => (int)w)
+            .Where(w => Math.Abs((int)w - requested) <= 200);
+    }
+
+    private static string WeightName(FontWeight weight) => weight switch
+    {
+        FontWeight.Thin => "Thin",
+        FontWeight.ExtraLight => "ExtraLight",
+        FontWeight.Light => "Light",
+        FontWeight.Medium => "Medium",
+        FontWeight.SemiBold => "SemiBold",
+        FontWeight.Bold => "Bold",
+        FontWeight.ExtraBold => "ExtraBold",
+        FontWeight.Black => "Black",
+        _ => "Regular",
+    };
+
+    // Windows' core fonts: regular and italic file names to their weight files.
+    private static string? WindowsCoreFontWeight(string fileName, FontWeight weight)
+    {
+        string name = fileName.ToLowerInvariant();
+        return (name, weight) switch
+        {
+            ("segoeui", FontWeight.Light or FontWeight.ExtraLight or FontWeight.Thin) => "segoeuil",
+            ("segoeui", FontWeight.SemiBold or FontWeight.Medium) => "seguisb",
+            ("segoeui", FontWeight.Bold) => "segoeuib",
+            ("segoeui", FontWeight.ExtraBold or FontWeight.Black) => "seguibl",
+            ("segoeuii", FontWeight.Light or FontWeight.ExtraLight or FontWeight.Thin) => "seguili",
+            ("segoeuii", FontWeight.SemiBold or FontWeight.Medium) => "seguisbi",
+            ("segoeuii", FontWeight.Bold) => "segoeuiz",
+            ("segoeuii", FontWeight.ExtraBold or FontWeight.Black) => "seguibli",
+            ("arial", FontWeight.SemiBold or FontWeight.Bold or FontWeight.ExtraBold or FontWeight.Black) => "arialbd",
+            ("ariali", FontWeight.SemiBold or FontWeight.Bold or FontWeight.ExtraBold or FontWeight.Black) => "arialbi",
+            ("calibri", FontWeight.Light or FontWeight.ExtraLight or FontWeight.Thin) => "calibril",
+            ("calibri", FontWeight.SemiBold or FontWeight.Bold or FontWeight.ExtraBold or FontWeight.Black) => "calibrib",
+            ("calibrii", FontWeight.Light or FontWeight.ExtraLight or FontWeight.Thin) => "calibrili",
+            ("calibrii", FontWeight.SemiBold or FontWeight.Bold or FontWeight.ExtraBold or FontWeight.Black) => "calibriz",
+            ("consola", FontWeight.SemiBold or FontWeight.Bold or FontWeight.ExtraBold or FontWeight.Black) => "consolab",
+            ("consolai", FontWeight.SemiBold or FontWeight.Bold or FontWeight.ExtraBold or FontWeight.Black) => "consolaz",
+            ("georgia", FontWeight.SemiBold or FontWeight.Bold or FontWeight.ExtraBold or FontWeight.Black) => "georgiab",
+            ("georgiai", FontWeight.SemiBold or FontWeight.Bold or FontWeight.ExtraBold or FontWeight.Black) => "georgiaz",
+            ("times", FontWeight.SemiBold or FontWeight.Bold or FontWeight.ExtraBold or FontWeight.Black) => "timesbd",
+            ("timesi", FontWeight.SemiBold or FontWeight.Bold or FontWeight.ExtraBold or FontWeight.Black) => "timesbi",
+            ("tahoma", FontWeight.SemiBold or FontWeight.Bold or FontWeight.ExtraBold or FontWeight.Black) => "tahomabd",
+            ("verdana", FontWeight.SemiBold or FontWeight.Bold or FontWeight.ExtraBold or FontWeight.Black) => "verdanab",
+            ("verdanai", FontWeight.SemiBold or FontWeight.Bold or FontWeight.ExtraBold or FontWeight.Black) => "verdanaz",
+            _ => null,
+        };
     }
 
     /// <summary>

@@ -21,7 +21,7 @@
     come from the Echostorm.Etch dependency's own build targets.
   -->
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)assets')">
-    <None Include="$(MSBuildThisFileDirectory)assets\Fonts\*.ttf">
+    <None Include="$(MSBuildThisFileDirectory)assets\Fonts\*.ttf;$(MSBuildThisFileDirectory)assets\Fonts\*.txt">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>Fonts\%(Filename)%(Extension)</Link>
       <Visible>false</Visible>

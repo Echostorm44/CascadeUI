@@ -102,6 +102,37 @@ public sealed class Image : Node
     internal Action<ImageProcessingContext>? ProcessingPipeline { get; set; }
     internal IReadOnlyList<string> ProcessingOperations { get; private set; } = Array.Empty<string>();
 
+    /// <summary>
+    /// Where an image of <paramref name="imageWidth"/> x <paramref name="imageHeight"/> pixels is
+    /// drawn in <paramref name="bounds"/> for <paramref name="fit"/>, centred as CSS
+    /// <c>object-fit</c> does (one image pixel is one logical pixel at its natural size). Cover
+    /// and None can overflow the bounds; the painter clips to them.
+    /// </summary>
+    internal static Rect FitRect(ImageFit fit, float imageWidth, float imageHeight, Rect bounds)
+    {
+        if (imageWidth <= 0f || imageHeight <= 0f || bounds.Width <= 0f || bounds.Height <= 0f || fit == ImageFit.Fill)
+        {
+            return bounds;
+        }
+
+        float containScale = MathF.Min(bounds.Width / imageWidth, bounds.Height / imageHeight);
+        float scale = fit switch
+        {
+            ImageFit.Contain => containScale,
+            ImageFit.Cover => MathF.Max(bounds.Width / imageWidth, bounds.Height / imageHeight),
+            ImageFit.None => 1f,
+            ImageFit.ScaleDown => MathF.Min(1f, containScale),
+            _ => 1f,
+        };
+        float width = imageWidth * scale;
+        float height = imageHeight * scale;
+        return new Rect(
+            bounds.X + (bounds.Width - width) / 2f,
+            bounds.Y + (bounds.Height - height) / 2f,
+            width,
+            height);
+    }
+
     // ── Source resolution ──────────────────────────────────────────────
 
     // Decoded file paths are cached so a per-frame `new Image(path)` in Render()

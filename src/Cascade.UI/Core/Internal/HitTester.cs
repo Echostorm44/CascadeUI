@@ -266,6 +266,32 @@ internal static class HitTester
         return null;
     }
 
+    /// <summary>
+    /// The selectable <see cref="Label"/> under the point, if any — even inside a tappable
+    /// container, which the plain hit test would return instead.
+    /// </summary>
+    internal static Label? FindSelectableLabelAt(Node root, float x, float y)
+    {
+        if (!Label.AnySelectable || root.IsLayoutEmpty || !root.LayoutData.IsVisible)
+        {
+            return null;
+        }
+
+        var path = new List<Node>();
+        if (HitTestCore(root, x, y, path) is null)
+        {
+            return null;
+        }
+        for (int i = path.Count - 1; i >= 0; i--)
+        {
+            if (path[i] is Label { IsSelectable: true } label)
+            {
+                return label;
+            }
+        }
+        return null;
+    }
+
     internal static bool IsInteractive(Node node)
     {
         // Nodes with gesture handlers are interactive

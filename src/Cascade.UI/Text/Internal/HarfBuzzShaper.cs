@@ -3,6 +3,7 @@ using Etch.Text.HarfBuzz;
 using Etch.Text.Rasterize;
 using Buffer = Etch.Text.HarfBuzz.Buffer;
 using FontFace = Etch.Text.Shape.FontFace;
+using FontVariation = Etch.Text.Shape.FontVariation;
 
 namespace Cascade.UI;
 
@@ -24,13 +25,16 @@ internal sealed class HarfBuzzShaper : IDisposable
     // up to ~0.4 px at small sizes. Loaded lazily; guarded by shapeLock.
     readonly Dictionary<float, FontFace?> inkFaces = [];
     byte[]? fontBytes;
+    readonly FontVariation[] variations;
 
+    /// <summary>The font locator (see <see cref="FontLocator"/>): a file path, maybe with a weight.</summary>
     internal string FontPath { get; }
 
     internal HarfBuzzShaper(string fontPath)
     {
         FontPath = fontPath;
-        blob = Blob.FromFile(fontPath);
+        variations = FontLocator.Variations(fontPath);
+        blob = Blob.FromFile(FontLocator.FilePath(fontPath));
         face = new Face(blob, 0);
         font = new Font(face);
         unitsPerEm = face.UnitsPerEm;
@@ -40,6 +44,10 @@ internal sealed class HarfBuzzShaper : IDisposable
         }
         font.SetScale(unitsPerEm, unitsPerEm);
         font.SetFunctionsOpenType();
+        if (variations.Length > 0)
+        {
+            font.SetVariations(variations);
+        }
     }
 
     /// <summary>
@@ -147,6 +155,29 @@ internal sealed class HarfBuzzShaper : IDisposable
                 Descender: fontSize * -0.2f * DpiScale,
                 LineGap:   0f
             );
+        }
+    }
+
+    /// <summary>
+    /// Where underlines and strikethroughs go at <paramref name="fontSize"/>, in logical pixels:
+    /// offsets from the baseline (positive is down) and thicknesses, from the font's post and OS/2
+    /// tables; typical proportions when the font has none.
+    /// </summary>
+    internal TextDecorationMetrics GetDecorationMetrics(float fontSize)
+    {
+        const float DpiScale = 96f / 72f;
+        lock (shapeLock)
+        {
+            font.SetScale((int)(fontSize * 64), (int)(fontSize * 64));
+            float Read(Etch.Text.HarfBuzz.Tag tag, float fallback)
+                => font.TryGetMetricsPosition(tag, out int value) && value != 0 ? value / 64f * DpiScale : fallback;
+
+            float pixelSize = fontSize * DpiScale;
+            return new TextDecorationMetrics(
+                UnderlineOffset: -Read(Font.MetricsTag.UnderlineOffset, -0.1f * pixelSize),
+                UnderlineThickness: Math.Abs(Read(Font.MetricsTag.UnderlineSize, 0.07f * pixelSize)),
+                StrikeoutOffset: -Read(Font.MetricsTag.StrikeoutOffset, 0.3f * pixelSize),
+                StrikeoutThickness: Math.Abs(Read(Font.MetricsTag.StrikeoutSize, 0.07f * pixelSize)));
         }
     }
 
@@ -305,8 +336,8 @@ internal sealed class HarfBuzzShaper : IDisposable
         FontFace? loaded = null;
         try
         {
-            fontBytes ??= File.ReadAllBytes(FontPath);
-            loaded = FontFace.Load(fontBytes, unitsPerEm, fontSize);
+            fontBytes ??= FontFiles.Bytes(FontLocator.FilePath(FontPath));
+            loaded = FontFace.Load(fontBytes, unitsPerEm, fontSize, variations);
             // Match the renderer's hinting (EtchBackend uses Slight) so the ink
             // box measured here is the exact bitmap that gets drawn — Normal
             // (the FontFace default) grid-fits harder and yields a different
@@ -431,6 +462,9 @@ internal readonly record struct ShaperResult(
 /// <summary>
 /// Font vertical metrics scaled to a specific font size.
 /// </summary>
+/// <summary>Underline and strikethrough placement: offsets from the baseline (positive is down) and thicknesses, logical pixels.</summary>
+internal readonly record struct TextDecorationMetrics(float UnderlineOffset, float UnderlineThickness, float StrikeoutOffset, float StrikeoutThickness);
+
 internal readonly record struct FontMetrics(
     float Ascender,
     float Descender,

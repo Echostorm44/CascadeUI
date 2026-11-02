@@ -35,7 +35,38 @@ public sealed class Label : Node
 
     // ── Internal modifier state set by fluent methods ──────────────────
 
-    internal TextStyle? TextStyleOverride { get; set; }
+    internal float? FontSizeOverride { get; set; }
+    internal FontWeight? FontWeightOverride { get; set; }
+
+    /// <summary>Line height as a multiple of the font size; 0 for the font's natural line height.</summary>
+    internal float? LineHeightOverride { get; set; }
+    internal bool IsItalic { get; set; }
+
+    /// <summary>
+    /// The size, weight and line height set on this label, the unset ones filled from the body
+    /// style; null when none is set. Setting it sets all three.
+    /// </summary>
+    internal TextStyle? TextStyleOverride
+    {
+        get => FontSizeOverride is null && FontWeightOverride is null && LineHeightOverride is null
+            ? null
+            : new TextStyle(FontSizeOverride ?? LayoutSolver.BodyFontSize, FontWeightOverride ?? UI.FontWeight.Regular, LineHeightOverride ?? 0f);
+        set
+        {
+            FontSizeOverride = value?.Size;
+            FontWeightOverride = value?.Weight;
+            LineHeightOverride = value?.LineHeight;
+        }
+    }
+
+    /// <summary>The style the label is measured and drawn in: its own settings over <paramref name="body"/>'s size and weight.</summary>
+    internal TextStyle ResolveStyle(TextStyle body)
+        => new(FontSizeOverride ?? body.Size, FontWeightOverride ?? body.Weight, LineHeightOverride ?? 0f);
+
+    /// <summary>The line height in pixels for <paramref name="style"/>, or 0 for the font's natural one.</summary>
+    internal static float LineHeightPixels(TextStyle style)
+        => style.LineHeight > 0f && float.IsFinite(style.LineHeight) ? style.Size * style.LineHeight : 0f;
+
     internal FontFamily? FontFamilyOverride { get; set; }
     internal ColorValue? TextColorOverride { get; set; }
     internal TextOverflow OverflowMode { get; set; } = TextOverflow.Clip;
@@ -48,25 +79,55 @@ public sealed class Label : Node
 
     // ── Styling ───────────────────────────────────────────────────────
 
-    /// <summary>Sets the text style (size, weight, line height).</summary>
+    /// <summary>
+    /// Sets the text style: size, weight and line height (a multiple of the size; 0 for the font's
+    /// natural line height).
+    /// </summary>
     public Label Style(TextStyle style)
     {
         TextStyleOverride = style;
         return this;
     }
 
-    /// <summary>Sets the font size, keeping weight and line height at defaults.</summary>
+    /// <summary>Sets the font size in logical pixels, keeping any weight and line height already set.</summary>
     public Label FontSize(float size)
     {
-        TextStyleOverride = new TextStyle(size, FontWeight.Regular, size * 1.4f);
+        FontSizeOverride = size;
         return this;
     }
 
-    /// <summary>Makes the text bold, preserving the current size if set.</summary>
+    /// <summary>Sets the font weight (Thin 100 to Black 900). The bundled Inter has every weight.</summary>
+    public Label FontWeight(FontWeight weight)
+    {
+        FontWeightOverride = weight;
+        return this;
+    }
+
+    /// <summary>Makes the text bold (weight 700), keeping the size.</summary>
     public Label Bold()
     {
-        var current = TextStyleOverride ?? new TextStyle(14f, FontWeight.Regular, 14f * 1.4f);
-        TextStyleOverride = new TextStyle(current.Size, FontWeight.Bold, current.LineHeight);
+        FontWeightOverride = UI.FontWeight.Bold;
+        return this;
+    }
+
+    /// <summary>
+    /// Sets the italic style. A family without an italic font (no <c>-Italic</c> sibling file) is
+    /// drawn upright.
+    /// </summary>
+    public Label Italic(bool italic = true)
+    {
+        IsItalic = italic;
+        return this;
+    }
+
+    /// <summary>
+    /// Sets the line height as a multiple of the font size (CSS <c>line-height</c>: 1.5 is 24 px
+    /// lines for 16 px text); the extra space is split above and below each line. 0 restores the
+    /// font's natural line height.
+    /// </summary>
+    public Label LineHeight(float multiple)
+    {
+        LineHeightOverride = multiple > 0f && float.IsFinite(multiple) ? multiple : 0f;
         return this;
     }
 
@@ -134,12 +195,19 @@ public sealed class Label : Node
 
     // ── Selection ─────────────────────────────────────────────────────
 
-    /// <summary>Enables or disables text selection.</summary>
-    public Label Selectable(bool enabled)
+    /// <summary>
+    /// Lets the user select the text with the mouse (drag; double-click for a word, triple-click
+    /// for all of it) and copy it with Ctrl+C.
+    /// </summary>
+    public Label Selectable(bool enabled = true)
     {
         IsSelectable = enabled;
+        AnySelectable |= enabled;
         return this;
     }
+
+    /// <summary>Whether any label was ever made selectable: pointer hit-testing for selection is skipped until one is.</summary>
+    internal static bool AnySelectable { get; private set; }
 
     // ── Decoration ────────────────────────────────────────────────────
 

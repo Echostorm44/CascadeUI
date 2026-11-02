@@ -14,7 +14,7 @@ public class TextInputIconAndCaretTests
     public void SetUp()
     {
         savedFont = LayoutSolver.DefaultFontPath;
-        LayoutSolver.DefaultFontPath = System.IO.Path.Combine(AppContext.BaseDirectory, "fonts", "Inter-Regular.ttf");
+        LayoutSolver.DefaultFontPath = System.IO.Path.Combine(AppContext.BaseDirectory, "fonts", "InterVariable.ttf");
         FocusManager.Reset();
     }
 

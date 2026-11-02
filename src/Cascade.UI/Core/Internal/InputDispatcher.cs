@@ -499,6 +499,7 @@ internal sealed partial class InputDispatcher
         }
 
         self.Overlays?.NotifyNodeReplaced(oldNode, newNode);
+        TransferLabelSelection(oldNode, newNode);
 
         if (ReferenceEquals(self.pressedNode, oldNode))
         {
@@ -857,6 +858,12 @@ internal sealed partial class InputDispatcher
 
     private void HandleMouseMove(Node? hitNode, NativeMouseEvent evt)
     {
+        if (TryExtendLabelSelection(evt))
+        {
+            UpdateHoverCursor(hitNode, evt.X, evt.Y);
+            return;
+        }
+
         // Update dropdown hover highlighting if a Select is open
         if (openSelect != null)
         {
@@ -1348,6 +1355,13 @@ internal sealed partial class InputDispatcher
         lastMouseModifiers = evt.Modifiers;
         mouseDownX = evt.X;
         mouseDownY = evt.Y;
+
+        // A press in a selectable label selects text there (and is not a tap on its container);
+        // a press anywhere else drops the selection.
+        if (TryBeginLabelSelection(evt))
+        {
+            return;
+        }
 
         // A ListView swipe is open: a left click either invokes a revealed action
         // button (fired on release) or, anywhere else, dismisses the swipe.
@@ -2306,6 +2320,11 @@ internal sealed partial class InputDispatcher
 
     private void HandleMouseUp(Node? hitNode, NativeMouseEvent evt)
     {
+        if (TryEndLabelSelection())
+        {
+            return;
+        }
+
         // A revealed swipe-action button was pressed on mouse-down — invoke on release.
         if (swipeButtonPending)
         {
@@ -2937,6 +2956,11 @@ internal sealed partial class InputDispatcher
     /// </summary>
     private void DispatchKey(NativeKeyEvent evt)
     {
+        if (TryCopyLabelSelection(evt))
+        {
+            return;
+        }
+
         // CommandPalette intercepts all input when open
         if (CommandPalette.IsOpen && CommandPalette.Instance != null)
         {
@@ -5854,7 +5878,7 @@ internal sealed partial class InputDispatcher
     /// </summary>
     /// <summary>
     /// Picks the pointer cursor for the current position and applies it if it changed.
-    /// Kinds: 0 arrow, 1 east-west resize, 2 north-south resize (see the window's
+    /// Kinds: 0 arrow, 1 east-west resize, 2 north-south resize, 3 text I-beam (see the window's
     /// <c>SetCursorOverride</c>). A column resize in progress keeps the resize cursor even when
     /// the pointer outruns the border, so it does not flicker mid-drag; otherwise a resizable
     /// column border in a table header, or a SplitView divider, asks for it. Anything else — and
@@ -5875,6 +5899,11 @@ internal sealed partial class InputDispatcher
         else if (hitNode is SplitView sv)
         {
             desiredCursor = sv.Orientation == SplitOrientation.Horizontal ? 1 : 2;
+        }
+        else if (labelSelectionActive || hitNode is TextInput { IsDisabled: false } or TextArea { IsDisabled: false }
+            || (rootNode is not null && FindSelectableLabelAt(x, y) is not null))
+        {
+            desiredCursor = 3;
         }
 
         if (desiredCursor != currentCursorKind)

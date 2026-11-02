@@ -286,6 +286,7 @@ internal sealed class EtchBackend : IDisposable
     {
         public byte[] Data;
         public int UnitsPerEm;
+        public global::Etch.Text.Shape.FontVariation[] Variations = [];
         public readonly Dictionary<float, FontFace> Faces = new();
 
         public FontEntry(byte[] data, int unitsPerEm)
@@ -737,6 +738,18 @@ internal sealed class EtchBackend : IDisposable
         return handle;
     }
 
+    /// <summary>
+    /// Loads a font from bytes the caller shares and never modifies (no copy is made), with the
+    /// design-axis settings its faces are created with: one handle per weight of a variable font.
+    /// </summary>
+    internal ulong LoadSharedFont(byte[] fontData, global::Etch.Text.Shape.FontVariation[] variations)
+    {
+        int unitsPerEm = ReadUnitsPerEm(fontData);
+        var handle = _nextFontHandle++;
+        _fonts[handle] = new FontEntry(fontData, unitsPerEm) { Variations = variations };
+        return handle;
+    }
+
     public void DestroyFont(ulong fontHandle)
     {
         if (_fonts.Remove(fontHandle, out var entry))
@@ -893,7 +906,7 @@ internal sealed class EtchBackend : IDisposable
         {
             return face;
         }
-        var newFace = FontFace.Load(entry.Data, entry.UnitsPerEm, fontSize);
+        var newFace = FontFace.Load(entry.Data, entry.UnitsPerEm, fontSize, entry.Variations);
         // Slight (vertical-only) hinting preserves thin stroke junctions that
         // full grid-fitting collapses (e.g. the stem/arch join of 'n' in Inter).
         // This matches the default used by Skia in Chrome and Flutter.

@@ -11,7 +11,7 @@ internal static class CpuFrame
     /// <summary>The Inter font the app ships, as tests load it.</summary>
     public static byte[] InterRegular()
     {
-        string path = System.IO.Path.Combine(AppContext.BaseDirectory, "fonts", "Inter-Regular.ttf");
+        string path = System.IO.Path.Combine(AppContext.BaseDirectory, "fonts", "InterVariable.ttf");
         if (!File.Exists(path))
         {
             throw new FileNotFoundException("Test font not found: " + path);

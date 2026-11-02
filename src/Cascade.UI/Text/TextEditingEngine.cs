@@ -699,16 +699,21 @@ public sealed class TextEditingEngine
     /// the given text layout. Returns one rect per visual line in the selection.
     /// </summary>
     public IReadOnlyList<TextSelectionRect> GetSelectionRects(TextLayoutResult layout)
+        => SelectionRects(layout, selection.Start, selection.End);
+
+    /// <summary>
+    /// The highlight rectangles of the text range [<paramref name="selStart"/>,
+    /// <paramref name="selEnd"/>) in <paramref name="layout"/>, in layout coordinates: one per
+    /// contiguous visual span on each line.
+    /// </summary>
+    internal static List<TextSelectionRect> SelectionRects(TextLayoutResult layout, int selStart, int selEnd)
     {
         var rects = new List<TextSelectionRect>();
 
-        if (selection.IsCollapsed || layout.Lines.Count == 0)
+        if (selEnd <= selStart || layout.Lines.Count == 0)
         {
             return rects;
         }
-
-        int selStart = selection.Start;
-        int selEnd = selection.End;
 
         for (int i = 0; i < layout.Lines.Count; i++)
         {

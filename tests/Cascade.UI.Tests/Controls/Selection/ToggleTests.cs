@@ -165,7 +165,7 @@ public class ToggleTests
     public async Task Description_MakesTheToggleTaller_AndWrapsWithinTheWidth()
     {
         string? saved = LayoutSolver.DefaultFontPath;
-        LayoutSolver.DefaultFontPath = System.IO.Path.Combine(AppContext.BaseDirectory, "fonts", "Inter-Regular.ttf");
+        LayoutSolver.DefaultFontPath = System.IO.Path.Combine(AppContext.BaseDirectory, "fonts", "InterVariable.ttf");
         try
         {
             var plain = new Toggle(CreateBoolBinding(false), "Ask before deleting");

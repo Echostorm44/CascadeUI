@@ -39,6 +39,9 @@ internal static class LayoutSolver
     /// </summary>
     internal static float BodyFontSize { get; set; } = 14f;
 
+    /// <summary>The theme's body text weight (an unstyled label's weight).</summary>
+    internal static FontWeight BodyFontWeight { get; set; } = FontWeight.Regular;
+
     // Checkbox/radio box geometry, synced from the active theme by FrameOrchestrator alongside
     // the font sizes above. These were hardcoded here (18/8 and 22/8) while the painter used the
     // theme's own tokens. Apple's checkbox is 20px, so the measure reserved 26px for box + gap
@@ -593,27 +596,23 @@ internal static class LayoutSolver
             return new Size(constraints.MinWidth, constraints.MinHeight);
         }
 
-        float fontSize = lbl.TextStyleOverride?.Size ?? BodyFontSize;
-        float lineHeight = lbl.TextStyleOverride?.LineHeight ?? (fontSize * DefaultLineHeightMultiplier);
+        // The painter resolves the same style and font (NodePainter.PaintLabel).
+        var style = lbl.ResolveStyle(new TextStyle(BodyFontSize, BodyFontWeight, 0f));
+        float fontSize = style.Size;
+        float lineHeightPixels = Label.LineHeightPixels(style);
+        float lineHeight = lineHeightPixels > 0f ? lineHeightPixels : fontSize * DefaultLineHeightMultiplier;
+        string? fontPath = FontFamilyResolver.Resolve(lbl.FontFamilyOverride, style.Weight, lbl.IsItalic, DefaultFontPath);
 
         Size textSize;
 
-        if (DefaultFontPath != null)
+        if (fontPath != null)
         {
-            // Use weight-specific font path when the label has bold/semibold styling
-            string fontPath = DefaultFontPath;
-            var weight = lbl.TextStyleOverride?.Weight ?? FontWeight.Regular;
-            if (weight is not (FontWeight.Regular or FontWeight.None)
-                && SemiBoldFontPath != null)
-            {
-                fontPath = SemiBoldFontPath;
-            }
-
             // Real text measurement with HarfBuzz shaping
             var options = new TextLayoutOptions
             {
                 FontPath = fontPath,
                 FontSize = fontSize,
+                LineHeight = lineHeightPixels,
                 MaxWidth = float.IsPositiveInfinity(constraints.MaxWidth)
                     ? float.PositiveInfinity
                     : constraints.MaxWidth,

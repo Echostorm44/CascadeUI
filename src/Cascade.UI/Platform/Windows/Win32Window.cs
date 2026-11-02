@@ -37,6 +37,7 @@ internal sealed class Win32Window : IDisposable
     private nint cursorArrow;
     private nint cursorSizeWE;
     private nint cursorSizeNS;
+    private nint cursorIBeam;
 
     // Frameless (App.Window.Chrome = WindowChrome.None): WM_NCCALCSIZE gives the whole window to the
     // client area. The frame styles stay, so DWM keeps the shadow, rounded corners and Snap; a
@@ -288,7 +289,8 @@ internal sealed class Win32Window : IDisposable
     }
 
     /// <summary>
-    /// Sets the cursor override kind. 0 = default arrow, 1 = horizontal resize, 2 = vertical resize.
+    /// Sets the cursor override kind. 0 = default arrow, 1 = horizontal resize, 2 = vertical resize,
+    /// 3 = text I-beam.
     /// </summary>
     internal void SetCursorOverride(int kind)
     {
@@ -302,6 +304,7 @@ internal sealed class Win32Window : IDisposable
         {
             1 => cursorSizeWE != 0 ? cursorSizeWE : (cursorSizeWE = Win32.LoadCursorW(0, Win32.IDC_SIZEWE)),
             2 => cursorSizeNS != 0 ? cursorSizeNS : (cursorSizeNS = Win32.LoadCursorW(0, Win32.IDC_SIZENS)),
+            3 => cursorIBeam != 0 ? cursorIBeam : (cursorIBeam = Win32.LoadCursorW(0, Win32.IDC_IBEAM)),
             _ => cursorArrow != 0 ? cursorArrow : (cursorArrow = Win32.LoadCursorW(0, Win32.IDC_ARROW))
         };
         Win32.SetCursor(cursor);

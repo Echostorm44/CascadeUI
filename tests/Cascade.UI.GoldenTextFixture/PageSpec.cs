@@ -31,17 +31,17 @@ internal sealed record PageSpec(
     /// lowercase <c>fonts</c> LinkBase so the fixture renders identically no
     /// matter where it is launched from.
     /// </summary>
-    public string FontPath => System.IO.Path.Combine(AppContext.BaseDirectory, "fonts", Weight switch
+    public string FontPath => System.IO.Path.Combine(AppContext.BaseDirectory, "Fonts", "InterVariable.ttf") + (Weight switch
     {
-        "regular" => "Inter-Regular.ttf",
-        "medium" => "Inter-Medium.ttf",
-        "semibold" => "Inter-SemiBold.ttf",
+        "regular" => "",
+        "medium" => "|wght=500",
+        "semibold" => "|wght=600",
         // The emoji page uses Inter as the primary font; emoji codepoints have no
         // Inter glyph and fall back to the system color-emoji font (WP-3520).
-        "emoji" => "Inter-Regular.ttf",
+        "emoji" => "",
         // The cjk page likewise uses Inter; CJK codepoints fall back to the system
         // Han font, exercising glyph-atlas density (WP-3522).
-        "cjk" => "Inter-Regular.ttf",
+        "cjk" => "",
         _ => throw new ArgumentException($"Unknown weight '{Weight}'. Use: regular, medium, semibold, emoji, cjk."),
     });
 

@@ -62,8 +62,7 @@ public class JunctionProbeTests
     /// </summary>
     private static readonly float[] ProbeSizes = [6f, 7f, 8f, 9f, 10f, 11f, 13f, 16f];
 
-    private static readonly string[] FontFiles =
-        ["Inter-Regular.ttf", "Inter-Medium.ttf", "Inter-SemiBold.ttf"];
+    private static readonly string[] FontFiles = InterFonts.Weights;
 
     /// <summary>
     /// Curated junction-strength probes. Junction strength = the largest
@@ -71,20 +70,18 @@ public class JunctionProbeTests
     /// ≤ T (component counts are not monotonic — at high thresholds
     /// fragments vanish and the survivor masquerades as connected).
     /// Thresholds sit between the measured Slight strength and the measured
-    /// Normal-hinting strength (2026-06-12 scan: Regular 16px 'm' s0.25 →
-    /// Slight 144 / Normal 112; Medium 13px 'm' s0.25 → 144 / 120;
-    /// SemiBold 13px 'm' s0 → 128 / 104), so production passes each with a
-    /// 16-step margin and the Normal fallback fails all three.
+    /// Normal-hinting strength. Re-tuned 2026-11-02 for the Inter variable font
+    /// (InterVariable.ttf at wght 400/500/600, which replaced the static files):
+    /// Regular 16px 'm' s0.75 → Slight 144 / Normal 96; Medium 15px 'm' s0.5 →
+    /// 168 / 120; SemiBold 15px 'm' s0.75 → 176 / 128. Production passes each with
+    /// a 16-step margin and the Normal fallback fails all three.
     /// </summary>
     private static readonly (string FontFile, float Size, char Letter, float SubpixelX, byte Threshold)[] CuratedProbes =
     [
-        ("Inter-Regular.ttf", 16f, 'm', 0.25f, 128),
-        ("Inter-Medium.ttf", 13f, 'm', 0.25f, 128),
-        ("Inter-SemiBold.ttf", 13f, 'm', 0f, 112),
+        ("Regular", 16f, 'm', 0.75f, 128),
+        ("Medium", 15f, 'm', 0.5f, 152),
+        ("SemiBold", 15f, 'm', 0.75f, 160),
     ];
-
-    private static string FontsDirectory => IOPath.Combine(
-        GoldenHarness.RepoRoot, "src", "Cascade.UI", "Fonts");
 
     /// <summary>
     /// Blanket net: every probe glyph must be a single connected component
@@ -304,13 +301,12 @@ public class JunctionProbeTests
 
     private static ulong LoadFont(EtchBackend backend, string fontFile)
     {
-        string path = IOPath.Combine(FontsDirectory, fontFile);
-        if (!File.Exists(path))
+        if (!File.Exists(InterFonts.VariableFontPath))
         {
-            throw new FileNotFoundException($"Probe font not found: {path}", path);
+            throw new FileNotFoundException($"Probe font not found: {InterFonts.VariableFontPath}", InterFonts.VariableFontPath);
         }
 
-        return backend.LoadFont(File.ReadAllBytes(path), 0);
+        return InterFonts.Load(backend, fontFile);
     }
 
     private static FontFace GetFace(EtchBackend backend, ulong fontHandle, float size, string fontFile)

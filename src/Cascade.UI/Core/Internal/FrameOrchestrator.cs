@@ -634,6 +634,7 @@ internal sealed class FrameOrchestrator : IDisposable
             {
                 LayoutSolver.ButtonTokens = Theme.Button;
                 LayoutSolver.BodyFontSize = Theme.Typography.Scale.Body.Size;
+                LayoutSolver.BodyFontWeight = Theme.Typography.Scale.Body.Weight;
                 LayoutSolver.H1FontSize = Theme.Typography.Scale.H1.Size;
                 LayoutSolver.H2FontSize = Theme.Typography.Scale.H2.Size;
                 LayoutSolver.H3FontSize = Theme.Typography.Scale.H3.Size;
@@ -702,37 +703,8 @@ internal sealed class FrameOrchestrator : IDisposable
     /// </summary>
     internal static string? ResolveFontPath(CascadeTheme? theme)
     {
-        if (theme?.Typography.FontFamily == null)
-        {
-            return null;
-        }
-
-        var family = theme.Typography.FontFamily;
-        string? fontPath = null;
-
-        if (family.Kind == FontFamilyKind.SystemDefault || family.Kind == FontFamilyKind.SystemCategory)
-        {
-            // Use FontFallback to find a system font that covers basic Latin
-            fontPath = FontFallback.FindFallbackFont('A');
-        }
-        else if (family.Kind == FontFamilyKind.Bundled && family.BundledName != null)
-        {
-            // Bundled fonts are resolved from the application's fonts directory.
-            // Try exact name, then common extensions, then name-Regular pattern.
-            string appDir = AppContext.BaseDirectory;
-            string fontsDir = System.IO.Path.Combine(appDir, "fonts");
-            fontPath = ResolveBundledFontFile(fontsDir, family.BundledName);
-
-            // Fall back to system font if bundled font is not found
-            if (fontPath == null)
-            {
-                fontPath = FontFallback.FindFallbackFont('A');
-            }
-        }
-
-        return fontPath;
+        return theme?.Typography.FontFamily is { } family ? FontFamilyResolver.RegularPath(family) : null;
     }
-
     /// <summary>
     /// Resolves a semibold font variant from the default font path.
     /// Used by LayoutSolver for measuring button labels and other bold text.
@@ -755,46 +727,6 @@ internal sealed class FrameOrchestrator : IDisposable
         // Only cache if we found a different (weight-specific) font
         cachedSemiBoldFontPath = resolved != basePath ? resolved : null;
         return cachedSemiBoldFontPath;
-    }
-
-    /// <summary>
-    /// Resolves a bundled font file from the fonts directory by family name.
-    /// Tries exact name, common extensions (.ttf, .otf, .ttc), and -Regular pattern.
-    /// </summary>
-    private static string? ResolveBundledFontFile(string fontsDir, string familyName)
-    {
-        if (!Directory.Exists(fontsDir))
-        {
-            return null;
-        }
-
-        // Exact name (e.g. "fonts/Inter" — unlikely but supported)
-        string exact = System.IO.Path.Combine(fontsDir, familyName);
-        if (File.Exists(exact))
-        {
-            return exact;
-        }
-
-        // Common font file extensions
-        string[] extensions = [".ttf", ".otf", ".ttc"];
-        foreach (string ext in extensions)
-        {
-            // Try "fonts/Inter.ttf"
-            string withExt = System.IO.Path.Combine(fontsDir, familyName + ext);
-            if (File.Exists(withExt))
-            {
-                return withExt;
-            }
-
-            // Try "fonts/Inter-Regular.ttf"
-            string withRegular = System.IO.Path.Combine(fontsDir, familyName + "-Regular" + ext);
-            if (File.Exists(withRegular))
-            {
-                return withRegular;
-            }
-        }
-
-        return null;
     }
 
     public void Dispose()

@@ -9,7 +9,7 @@ public class NoWrapLayoutTests
 {
     private const string Url = "https://github.com/Echostorm44/CascadeUI";
 
-    private static string InterPath() => System.IO.Path.Combine(AppContext.BaseDirectory, "fonts", "Inter-Regular.ttf");
+    private static string InterPath() => System.IO.Path.Combine(AppContext.BaseDirectory, "fonts", "InterVariable.ttf");
 
     private static TextLayoutResult Layout(string text, float maxWidth, bool noWrap, TextOverflow overflow, int maxLines = 0)
     {

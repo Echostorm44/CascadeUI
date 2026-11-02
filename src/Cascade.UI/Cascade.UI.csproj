@@ -162,6 +162,13 @@
              Pack="true" PackagePath="build\assets\Fonts" />
   </ItemGroup>
 
+  <!-- The built-in icons are Lucide's (CONTROLS-020): ISC, plus MIT for the Feather-derived
+       ones. Both licences ask that the notice travel with every copy, so it ships in the
+       package beside the assembly's own licence. -->
+  <ItemGroup>
+    <None Include="Icons\Lucide\LICENSE.txt" Pack="true" PackagePath="licenses\Lucide-LICENSE.txt" />
+  </ItemGroup>
+
   <ItemGroup>
     <InternalsVisibleTo Include="Cascade.UI.Tests" />
     <InternalsVisibleTo Include="cascade" />

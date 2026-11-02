@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Cascade.Tools.LucideImport</RootNamespace>
+    <!-- CA1515: an exe's types need not be internal-by-analyzer. CA1307/CA1846/CA1865 fire only
+         on the linked generator files below, asking for overloads that do not exist in the
+         netstandard2.0 the generator must target. -->
+    <NoWarn>CA1515;CA1307;CA1846;CA1865</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The generator's own SVG reader and naming, so the built-in pack and an app's icon
+         packs are read identically. Linked, not referenced: the generator is netstandard2.0
+         and ships as an analyzer. -->
+    <Compile Include="..\..\src\Cascade.Generators\SvgIconParser.cs" Link="Shared\SvgIconParser.cs" />
+    <Compile Include="..\..\src\Cascade.Generators\IconNames.cs" Link="Shared\IconNames.cs" />
+  </ItemGroup>
+</Project>

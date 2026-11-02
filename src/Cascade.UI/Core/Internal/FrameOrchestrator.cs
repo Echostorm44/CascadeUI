@@ -616,6 +616,9 @@ internal sealed class FrameOrchestrator : IDisposable
     private string? cachedSemiBoldFontPath;
     private bool semiBoldResolved;
 
+    private static readonly Action<Component, Rect> PublishComponentBounds =
+        static (component, bounds) => component.Host?.UpdateBounds(bounds);
+
     private void PerformLayout()
     {
         if (rootHost?.RenderedTree != null)
@@ -648,6 +651,12 @@ internal sealed class FrameOrchestrator : IDisposable
             var constraints = LayoutConstraints.Tight(
                 new Size(windowWidth, windowHeight));
             layoutEngine.Layout(rootHost.RenderedTree, constraints);
+
+            // Components learn where layout put them: Bounds, OnBoundsChanged and ContainerQuery
+            // all depend on it. The root fills the window; the rest come from one walk.
+            DiagnosticsHub.MarkPhase("layout.component_bounds");
+            rootHost.UpdateBounds(new Rect(0, 0, windowWidth, windowHeight));
+            HitTester.ForEachComponentBounds(rootHost.RenderedTree, 0f, 0f, PublishComponentBounds);
 
             // The dispatcher hit-tests this tree and places menus in this window; overlays are
             // laid out after the page so their anchors have their final positions.

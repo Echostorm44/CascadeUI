@@ -8265,22 +8265,18 @@ internal sealed partial class NodePainter
         }
 
         // Measure actual text to compute precise pill size
-        float fontSize = theme.Typography.Body.Size * 0.85f;
+        float fontSize = theme.Typography.Body.Size * Tag.FontScale;
         float textHeight = fontSize * 1.3f;
-        float paddingH = 12f;
-        float xIconWidth = 10f;
-        float xGap = 10f;
+        float paddingH = Tag.PaddingHorizontal;
+        float xIconWidth = Tag.RemoveIconWidth;
+        float xGap = Tag.RemoveGap;
 
         var measuredTextSize = ctx.MeasureText(tag.Label, fontSize);
-        // Small buffer to prevent × from kissing the last glyph
-        float textWidth = measuredTextSize.Width + 2f;
+        float textWidth = measuredTextSize.Width + Tag.TextBuffer;
 
-        // Compute actual pill width from measured text (not layout estimate)
-        float actualPillWidth = paddingH + textWidth + paddingH;
-        if (isRemovable)
-        {
-            actualPillWidth = paddingH + textWidth + xGap + xIconWidth + paddingH;
-        }
+        // The pill layout reserved room for (Tag.PillWidth); measured again here in paint's own text
+        // measurement, so the two agree to within a rounding.
+        float actualPillWidth = Tag.PillWidth(measuredTextSize.Width, isRemovable);
 
         // Center the correctly-sized pill within the allocated bounds
         float pillX = (bounds.Width - actualPillWidth) / 2f;

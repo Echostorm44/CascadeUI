@@ -280,6 +280,21 @@ public abstract class Component : Node, IDisposable
     }
 
     /// <summary>
+    /// The host that mounted this component, while it is mounted. The frame publishes each
+    /// component's laid-out bounds through it.
+    /// </summary>
+    internal ComponentHost? Host { get; set; }
+
+    /// <summary>
+    /// Called by <see cref="ComponentHost"/> whenever layout gives this component new bounds,
+    /// the first time included. For framework components whose output depends on their own
+    /// size, such as <see cref="ContainerQuery"/>.
+    /// </summary>
+    internal virtual void OnLayoutBoundsUpdated(Rect current)
+    {
+    }
+
+    /// <summary>
     /// The rendered node tree for this component, set by <see cref="ComponentHost"/>
     /// after each render pass. Used by the layout solver to measure through
     /// Component nodes in the tree.

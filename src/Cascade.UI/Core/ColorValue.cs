@@ -176,12 +176,23 @@ public readonly struct ColorValue : IEquatable<ColorValue>
     /// </summary>
     public string ToHex()
     {
-        float invA = a > 0 ? 1f / a : 0f;
-        byte rb = (byte)MathF.Round(MathF.Min(1f, MathF.Max(0f, LinearToSrgb(r * invA))) * 255f);
-        byte gb = (byte)MathF.Round(MathF.Min(1f, MathF.Max(0f, LinearToSrgb(g * invA))) * 255f);
-        byte bb = (byte)MathF.Round(MathF.Min(1f, MathF.Max(0f, LinearToSrgb(b * invA))) * 255f);
+        (byte rb, byte gb, byte bb) = ToSrgbBytes();
         byte ab = (byte)MathF.Round(MathF.Min(1f, MathF.Max(0f, a)) * 255f);
         return $"#{rb:X2}{gb:X2}{bb:X2}{ab:X2}";
+    }
+
+    /// <summary>
+    /// The color's channels as straight (not premultiplied), sRGB-encoded bytes: what an RGBA8
+    /// image that is treated as sRGB must hold. Writing the internal linear values instead darkens
+    /// every color but black and white, and shifts hues (a gold reads as orange).
+    /// </summary>
+    internal (byte R, byte G, byte B) ToSrgbBytes()
+    {
+        float invA = a > 0 ? 1f / a : 0f;
+        return (Encode(r * invA), Encode(g * invA), Encode(b * invA));
+
+        static byte Encode(float linear) =>
+            (byte)MathF.Round(MathF.Min(1f, MathF.Max(0f, LinearToSrgb(linear))) * 255f);
     }
 
     /// <summary>

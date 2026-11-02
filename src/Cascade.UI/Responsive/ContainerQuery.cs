@@ -44,10 +44,26 @@ public class ContainerQuery : Component
         this.builder = builder;
     }
 
+    // The size layout last gave this container. Layout runs after render, so the first render
+    // builds with no size (nothing is known yet on first mount) and the frame after layout builds
+    // again with the real one; every resize does the same. Render reads Bounds, which always
+    // equals this once layout has run, so it is never written there.
+    private Size laidOutSize = new(-1f, -1f);
+
     /// <inheritdoc/>
     protected override Node Render()
     {
-        var info = new ContainerInfo { Size = new Size(Bounds.Width, Bounds.Height) };
-        return builder(info);
+        return builder(new ContainerInfo { Size = new Size(Bounds.Width, Bounds.Height) });
+    }
+
+    internal override void OnLayoutBoundsUpdated(Rect current)
+    {
+        if (current.Width == laidOutSize.Width && current.Height == laidOutSize.Height)
+        {
+            return;
+        }
+
+        laidOutSize = new Size(current.Width, current.Height);
+        Invalidate();
     }
 }

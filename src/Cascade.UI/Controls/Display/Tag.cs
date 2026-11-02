@@ -7,6 +7,23 @@ namespace Cascade.UI;
 /// </summary>
 public sealed class Tag : Node
 {
+    // The pill's geometry, shared by layout and paint so the box layout reserves is the pill that is
+    // drawn. They once disagreed - layout guessed the text at 0.75 em a character with 16px padding,
+    // paint measured it with 12px - and a row of tags was spaced by each label's guessing error.
+    internal const float PaddingHorizontal = 12f;
+    internal const float PaddingVertical = 5f;
+    internal const float RemoveGap = 10f;
+    internal const float RemoveIconWidth = 10f;
+    internal const float TextBuffer = 2f;   // keeps the × off the last glyph
+    internal const float FontScale = 0.85f; // of the body text size
+
+    /// <summary>The pill's width for a label whose text measures <paramref name="textWidth"/>.</summary>
+    internal static float PillWidth(float textWidth, bool removable)
+    {
+        float width = PaddingHorizontal + textWidth + TextBuffer + PaddingHorizontal;
+        return removable ? width + RemoveGap + RemoveIconWidth : width;
+    }
+
     /// <summary>
     /// Creates a read-only tag.
     /// </summary>

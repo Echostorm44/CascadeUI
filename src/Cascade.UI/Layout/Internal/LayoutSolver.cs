@@ -1904,23 +1904,22 @@ internal static class LayoutSolver
 
     private static Size MeasureTag(Tag tag, LayoutConstraints constraints)
     {
-        float fontSize = BodyFontSize * 0.85f;
-        float paddingH = 16f;
-        float paddingV = 5f;
-        float xIconWidth = 10f;
-        float xGap = 6f;
+        float fontSize = BodyFontSize * Tag.FontScale;
 
-        // Generous per-char estimate — must never underestimate
-        float textWidth = tag.Label.Length * fontSize * 0.75f;
+        // The same measurement paint uses, so the box is the pill. Without a font (headless layout
+        // with no theme) the estimate errs wide, which only costs spacing.
+        float textWidth = DefaultFontPath != null
+            ? TextLayoutEngine.Layout(tag.Label, new TextLayoutOptions
+            {
+                FontPath = DefaultFontPath,
+                FontSize = fontSize,
+                NoWrap = true,
+            }).AdvanceBox.Width
+            : tag.Label.Length * fontSize * AverageCharWidthRatio;
         float textHeight = fontSize * DefaultLineHeightMultiplier;
 
-        float totalWidth = paddingH + textWidth + paddingH;
-        if (tag.OnRemove != null)
-        {
-            totalWidth = paddingH + textWidth + xGap + xIconWidth + paddingH;
-        }
-
-        float totalHeight = textHeight + paddingV * 2f;
+        float totalWidth = Tag.PillWidth(textWidth, removable: tag.OnRemove != null);
+        float totalHeight = textHeight + Tag.PaddingVertical * 2f;
 
         return new Size(
             constraints.ConstrainWidth(totalWidth),

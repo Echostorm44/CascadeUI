@@ -77,6 +77,35 @@ public class IconRasterizerTests
         await Assert.That(rgba[best + 2]).IsEqualTo((byte)0); // B
     }
 
+    /// <summary>
+    /// Red and white come out the same in linear and sRGB, which is how a tint written in
+    /// ColorValue's linear form passed the test above for months: a gold icon rendered orange and a
+    /// grey one too dark. Mid-range channels are what tell the two apart.
+    /// </summary>
+    [Test]
+    [Arguments("#F3B533", (byte)0xF3, (byte)0xB5, (byte)0x33)]
+    [Arguments("#98989E", (byte)0x98, (byte)0x98, (byte)0x9E)]
+    public async Task Rasterize_TintIsWrittenInSrgb_NotLinear(string hex, byte red, byte green, byte blue)
+    {
+        string[] line = { "M2 12h20" };
+        byte[] rgba = IconRasterizer.Rasterize(line, 24, 24, 48, 4f, new ColorValue(hex), marginPx: 0);
+
+        int solid = -1;
+        for (int i = 0; i < rgba.Length; i += 4)
+        {
+            if (rgba[i + 3] == 255)
+            {
+                solid = i;
+                break;
+            }
+        }
+
+        await Assert.That(solid).IsGreaterThanOrEqualTo(0);
+        await Assert.That(rgba[solid]).IsEqualTo(red);
+        await Assert.That(rgba[solid + 1]).IsEqualTo(green);
+        await Assert.That(rgba[solid + 2]).IsEqualTo(blue);
+    }
+
     [Test]
     public async Task Flatten_AbuttingShorthandDecimals_SplitsIntoTwoNumbers()
     {

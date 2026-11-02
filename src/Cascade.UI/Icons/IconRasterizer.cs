@@ -83,12 +83,10 @@ internal static class IconRasterizer
             return rgba;
         }
 
-        // Un-premultiply the tint to straight RGB; alpha carries the coverage.
+        // The bitmap is straight RGBA8 and treated as sRGB, so the tint goes in sRGB-encoded, not as
+        // ColorValue's internal linear values; alpha carries the coverage.
         float a = color.A;
-        float inv = a > 1e-4f ? 1f / a : 0f;
-        byte cr = ToByte(color.R * inv);
-        byte cg = ToByte(color.G * inv);
-        byte cb = ToByte(color.B * inv);
+        (byte cr, byte cg, byte cb) = color.ToSrgbBytes();
 
         float half = strokeWidthPx * 0.5f;
         // The coverage ramp spans ~1px across the stroke edge (a box-filter approximation).

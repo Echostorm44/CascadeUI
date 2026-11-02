@@ -106,6 +106,7 @@ internal sealed class ComponentHost
 
         // Wire up the Invalidate() callback so the component can trigger re-renders
         component.InvalidateCallback = OnSignalChanged;
+        component.Host = this;
 
         try
         {
@@ -242,6 +243,7 @@ internal sealed class ComponentHost
 
         Reconciler.UnmountAll(childHosts);
 
+        component.Host = null;
         component.Dispose();
     }
 
@@ -264,6 +266,7 @@ internal sealed class ComponentHost
 
         bool isFirstBounds = previous == default;
         component.SetBounds(newBounds);
+        component.OnLayoutBoundsUpdated(newBounds);
 
         if (!isFirstBounds)
         {

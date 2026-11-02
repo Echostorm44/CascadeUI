@@ -512,6 +512,64 @@ internal static class HitTester
         return single != null && TryGetAbsoluteBoundsCore(single, target, contentX, contentY, out bounds);
     }
     /// <summary>
+    /// Calls <paramref name="visit"/> with every component in the tree and its window-logical
+    /// bounds, by the same walk as <see cref="TryGetAbsoluteBounds"/>: one pass for all of them,
+    /// where asking for each in turn would walk the tree once per component.
+    /// </summary>
+    internal static void ForEachComponentBounds(Node node, float originX, float originY, Action<Component, Rect> visit)
+    {
+        if (node.IsLayoutEmpty)
+        {
+            return;
+        }
+
+        var data = node.LayoutData;
+        var b = data.Bounds;
+        float x = originX + b.X;
+        float y = originY + b.Y;
+
+        if (node is Component comp)
+        {
+            visit(comp, new Rect(x, y, b.Width, b.Height));
+            if (comp.RenderedTree is { } rendered)
+            {
+                ForEachComponentBounds(rendered, x, y, visit);
+            }
+            return;
+        }
+
+        float contentX = x + data.Padding.Left;
+        float contentY = y + data.Padding.Top;
+
+        var children = GetChildren(node);
+        if (children != null)
+        {
+            for (int i = 0; i < children.Count; i++)
+            {
+                ForEachComponentBounds(children[i], contentX, contentY, visit);
+            }
+        }
+
+        if (node is ScrollView scrollView && scrollView.Content is { } content)
+        {
+            ForEachComponentBounds(content, contentX, contentY - scrollView.OffsetY, visit);
+            return;
+        }
+
+        if (node is SplitView splitView)
+        {
+            ForEachComponentBounds(splitView.First, contentX, contentY, visit);
+            ForEachComponentBounds(splitView.Second, contentX, contentY, visit);
+            return;
+        }
+
+        if (GetSingleChild(node) is { } single)
+        {
+            ForEachComponentBounds(single, contentX, contentY, visit);
+        }
+    }
+
+    /// <summary>
     /// Finds the innermost ScrollView whose bounds contain the given point.
     /// Used by InputDispatcher to route scroll events to the correct ScrollView.
     /// </summary>

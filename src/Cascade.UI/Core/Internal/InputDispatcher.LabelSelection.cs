@@ -108,7 +108,7 @@ internal sealed partial class InputDispatcher
     }
 
     /// <summary>Ctrl+C with a label selection copies it (when no text field has focus).</summary>
-    private bool TryCopyLabelSelection(NativeKeyEvent evt)
+    private static bool TryCopyLabelSelection(NativeKeyEvent evt)
     {
         if (evt.Key != Key.C || !evt.Modifiers.HasFlag(ModifierKeys.Ctrl)
             || FocusManager.FocusedElement is TextInput or TextArea

@@ -171,10 +171,236 @@ public sealed class ScrollView : Node, IPumpedNode
             }
         }
 
-        if (animating || control.ScrollReported)
+        bool settling = SnapIfDue(animating) | SpringBack();
+
+        if (animating || control.ScrollReported || settling)
         {
             ControlStateAnimator.SignalActiveTransition();
         }
+    }
+
+    // ── Snap and paging ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Once a user scroll has settled, lines it up (.Paging: on a viewport-length boundary; .Snap: on a
+    /// child, by <see cref="SnapAlignment"/> or its own <c>.SnapAlign</c>, skipping <c>.SnapExclude</c>
+    /// ones; Proximity only when close enough). It goes on in the direction it was moving, so a wheel
+    /// notch reaches the next item instead of falling back. Returns whether it is still waiting.
+    /// </summary>
+    private bool SnapIfDue(bool animating)
+    {
+        var control = Control;
+        if ((!IsPagingEnabled && ScrollSnap == ScrollSnap.None) || !control.SnapPending || animating)
+        {
+            return false;
+        }
+        if (System.Diagnostics.Stopwatch.GetElapsedTime(control.LastMoveTimestamp) < ScrollEndDelay)
+        {
+            return true;
+        }
+        control.SnapPending = false;
+
+        bool vertical = ScrollsVertically;
+        float offset = vertical ? control.OffsetY : control.OffsetX;
+        float max = vertical ? control.MaxY : control.MaxX;
+        int direction = vertical ? control.LastDirection.Y : control.LastDirection.X;
+        float? target = IsPagingEnabled ? PageTarget(offset, direction) : SnapTarget(offset, direction, vertical);
+        if (target is not { } to || Math.Abs(Math.Clamp(to, 0f, max) - offset) < 0.5f)
+        {
+            return false;
+        }
+        to = Math.Clamp(to, 0f, max);
+        _ = vertical ? control.ScrollToAsync(control.OffsetX, to) : control.ScrollToAsync(to, control.OffsetY);
+        return false;
+    }
+
+    private float? PageTarget(float offset, int direction)
+    {
+        float page = ScrollsVertically ? Control.ViewportSize.Height : Control.ViewportSize.Width;
+        if (page <= 0f)
+        {
+            return null;
+        }
+        float pages = offset / page;
+        float whole = direction > 0 ? MathF.Ceiling(pages - 0.001f) : direction < 0 ? MathF.Floor(pages + 0.001f) : MathF.Round(pages);
+        return whole * page;
+    }
+
+    private float? SnapTarget(float offset, int direction, bool vertical)
+    {
+        var children = NodeDiffer.GetChildren(Content);
+        if (children.Count == 0)
+        {
+            return null;
+        }
+        var data = Content.LayoutData;
+        float origin = vertical ? data.Bounds.Y + data.Padding.Top : data.Bounds.X + data.Padding.Left;
+        var positions = new List<float>(children.Count);
+        var sizes = new List<float>(children.Count);
+        var alignments = new List<SnapAlignment?>(children.Count);
+        var excluded = new List<bool>(children.Count);
+        foreach (var child in children)
+        {
+            var b = child.LayoutData.Bounds;
+            positions.Add(origin + (vertical ? b.Y : b.X));
+            sizes.Add(vertical ? b.Height : b.Width);
+            alignments.Add(child.LayoutData.ScrollData?.SnapAlignmentOverride);
+            excluded.Add(child.LayoutData.ScrollData?.IsSnapExcluded ?? false);
+        }
+
+        var engine = Control.Snap;
+        engine.Configure(ScrollSnap, SnapAlignment, Physics.ProximityThreshold);
+        engine.SetViewportSize(vertical ? Control.ViewportSize.Height : Control.ViewportSize.Width);
+        engine.ComputeSnapPoints(positions, sizes, alignments, excluded);
+        return engine.FindSnapTarget(offset, direction);
+    }
+
+    // ── Overscroll and pull-to-refresh ─────────────────────────────
+
+    /// <summary>The pull past the top that has to be reached to refresh (.PullToRefresh).</summary>
+    internal bool HasPullToRefresh => PullToRefreshHandler is not null && ScrollsVertically;
+
+    /// <summary>
+    /// A wheel step the view could not take (at its edge, nothing beyond to scroll): pulls to refresh
+    /// at the top when it has .PullToRefresh, else shows the overscroll (.Overscroll): RubberBand
+    /// stretches the content against growing resistance, Glow lights the edge. Clamp and None show
+    /// nothing.
+    /// </summary>
+    internal bool Overscroll(float dx, float dy)
+    {
+        var control = Control;
+        control.OverscrollTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        if (HasPullToRefresh && dy < 0f && control.OffsetY <= 0f)
+        {
+            if (control.IsRefreshing)
+            {
+                return true;
+            }
+            control.Pull = Math.Min(PullToRefreshThreshold * 1.5f, control.Pull + Resisted(control.Pull, -dy));
+            if (control.Pull >= PullToRefreshThreshold && PullToRefreshHandler is { } refresh)
+            {
+                control.RefreshTask = refresh();
+            }
+            return true;
+        }
+
+        switch (OverscrollMode)
+        {
+            case OverscrollMode.RubberBand:
+            {
+                var (sx, sy) = control.Stretch;
+                float max = Physics.RubberBandMaxStretch;
+                sx = Math.Clamp(sx - Math.Sign(dx) * Resisted(Math.Abs(sx), Math.Abs(dx)), -max, max);
+                sy = Math.Clamp(sy - Math.Sign(dy) * Resisted(Math.Abs(sy), Math.Abs(dy)), -max, max);
+                control.Stretch = (ScrollsHorizontally ? sx : 0f, ScrollsVertically ? sy : 0f);
+                return true;
+            }
+            case OverscrollMode.Glow:
+            {
+                var g = control.Glow;
+                control.Glow = (
+                    dy < 0f ? 1f : g.Top, dy > 0f ? 1f : g.Bottom,
+                    dx < 0f ? 1f : g.Left, dx > 0f ? 1f : g.Right);
+                control.GlowTimestamp = control.OverscrollTimestamp;
+                return true;
+            }
+            default:
+                return false;
+        }
+    }
+
+    // The further it is stretched, the less each step adds.
+    private float Resisted(float already, float step) =>
+        step * Physics.RubberBandResistance / (Physics.RubberBandResistance + already * 4f);
+
+    /// <summary>Lets a stretch, pull or glow go once overscrolling stops. Returns whether one is still moving.</summary>
+    private bool SpringBack()
+    {
+        var control = Control;
+        bool idle = System.Diagnostics.Stopwatch.GetElapsedTime(control.OverscrollTimestamp) > TimeSpan.FromMilliseconds(120);
+        bool moving = false;
+
+        if (control.Stretch != default && idle)
+        {
+            var (sx, sy) = control.Stretch;
+            sx = MathF.Abs(sx) < 0.5f ? 0f : sx * 0.75f;
+            sy = MathF.Abs(sy) < 0.5f ? 0f : sy * 0.75f;
+            control.Stretch = (sx, sy);
+            moving |= control.Stretch != default;
+        }
+
+        if (control.IsRefreshing)
+        {
+            // Held open at the indicator while the refresh runs.
+            control.Pull = Math.Max(control.Pull * 0.8f, PullToRefreshIndicatorOffset);
+            moving = true;
+        }
+        else if (control.Pull > 0f && idle)
+        {
+            control.Pull = control.Pull < 0.5f ? 0f : control.Pull * 0.75f;
+            moving |= control.Pull > 0f;
+        }
+
+        if (control.Glow != default)
+        {
+            float fade = 1f - (float)Math.Clamp(System.Diagnostics.Stopwatch.GetElapsedTime(control.GlowTimestamp).TotalSeconds / 0.4, 0.0, 1.0);
+            control.Glow = fade <= 0f ? default : (
+                Math.Min(control.Glow.Top, fade), Math.Min(control.Glow.Bottom, fade),
+                Math.Min(control.Glow.Left, fade), Math.Min(control.Glow.Right, fade));
+            moving |= control.Glow != default;
+        }
+        return moving;
+    }
+
+    // ── Sticky children (.Sticky) ───────────────────────────────────
+
+    /// <summary>
+    /// Works out which <c>.Sticky</c> child of the content is pinned at the edge now (the last one
+    /// scrolled past, pushed up as the next arrives), and stores it on the control for paint and hit
+    /// testing. Called by layout.
+    /// </summary>
+    internal void UpdateSticky()
+    {
+        var control = Control;
+        control.PinnedSticky = null;
+        var children = NodeDiffer.GetChildren(Content);
+        bool vertical = ScrollsVertically;
+        var data = Content.LayoutData;
+        float origin = vertical ? data.Bounds.Y + data.Padding.Top : data.Bounds.X + data.Padding.Left;
+        var items = new List<StickyItem>();
+        for (int i = 0; i < children.Count; i++)
+        {
+            if (children[i].LayoutData.ScrollData is { IsSticky: true } sticky)
+            {
+                var b = children[i].LayoutData.Bounds;
+                // A horizontal view's leading edge is its left: the tracker calls that Top.
+                var edge = sticky.StickyEdge == StickyEdge.Left ? StickyEdge.Top : sticky.StickyEdge;
+                items.Add(new StickyItem(i, origin + (vertical ? b.Y : b.X), vertical ? b.Height : b.Width, edge));
+            }
+        }
+        if (items.Count == 0)
+        {
+            return;
+        }
+
+        var tracker = control.Sticky;
+        tracker.SetStickyItems(items);
+        tracker.SetViewportSize(vertical ? control.ViewportSize.Height : control.ViewportSize.Width);
+        var state = tracker.Update(vertical ? control.OffsetY : control.OffsetX);
+        if (!state.IsActive)
+        {
+            return;
+        }
+        var node = children[state.ItemIndex];
+        var bounds = node.LayoutData.Bounds;
+        float natural = origin + (vertical ? bounds.Y : bounds.X);
+        float delta = state.PinnedPosition + state.PushOffset - natural;
+        if (Math.Abs(delta) < 0.01f)
+        {
+            return; // in its own place anyway
+        }
+        control.PinnedSticky = vertical ? (node, 0f, delta) : (node, delta, 0f);
     }
 
     void IPumpedNode.AdoptFrom(Node previous)

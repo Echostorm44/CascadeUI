@@ -1690,6 +1690,14 @@ internal static class LayoutSolver
         sv.Control.UpdateContentSize(contentSize);
         sv.Control.PagesAcross = sv.ScrollDirection == ScrollDirection.Horizontal;
         sv.AfterLayout(contentSize.Height);
+        sv.UpdateSticky();
+
+        // The pull-to-refresh indicator (a laid-out child) sits above the content, centred.
+        if (sv.PullToRefreshIndicator is { IsLayoutEmpty: false } indicator)
+        {
+            var size = MeasureChild(indicator, new LayoutConstraints(0f, vpWidth, 0f, float.PositiveInfinity));
+            PositionChild(indicator, (vpWidth - size.Width) / 2f, -size.Height);
+        }
 
         // Keep global in sync for backward compatibility (last-laid-out wins)
         InputDispatcher.ScrollViewMaxY = maxScrollY;

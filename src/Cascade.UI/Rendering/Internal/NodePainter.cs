@@ -1234,6 +1234,11 @@ internal sealed partial class NodePainter
         float scrollX = sv.OffsetX;
         float contentWidth = bounds.Width + sv.MaxX;
 
+        // Where the content shows: the scroll position, less a rubber-band stretch and a pull to refresh.
+        var (stretchX, stretchY) = sv.Control.Stretch;
+        float viewX = scrollX - stretchX;
+        float viewY = scrollY - stretchY - sv.Control.Pull;
+
         // If any descendant has active state-transition animations (hover, press,
         // check, toggle, etc.), we cannot composite the cached layer because the
         // animation state advances inside the paint methods and would be frozen at
@@ -1357,17 +1362,24 @@ internal sealed partial class NodePainter
         // they must be painted on top / re-rendered every frame.
         if (sv.LayerHandle.HasValue && !hasActiveAnimations && !hasOpenPopups && !hasContinuousAnimation)
         {
-            using var clip = ctx.PushClip(new Rect(0, 0, bounds.Width, bounds.Height));
-            ctx.DrawLayerTexture(sv.LayerHandle.Value, -scrollX, -scrollY);
+            if (sv.IsFadeEdgesEnabled)
+            {
+                CompositeWithFadedEdges(sv, bounds, viewX, viewY);
+            }
+            else
+            {
+                using var clip = ctx.PushClip(new Rect(0, 0, bounds.Width, bounds.Height));
+                ctx.DrawLayerTexture(sv.LayerHandle.Value, -viewX, -viewY);
+            }
         }
         else
         {
             // Fallback if layer handle is not available (non-Etch backend or error),
             // or if active animations require direct painting.
             using var clip = ctx.PushClip(new Rect(0, 0, bounds.Width, bounds.Height));
-            using var translate = ctx.PushTranslate(-scrollX, -scrollY);
-            absoluteY -= scrollY;
-            absoluteX -= scrollX;
+            using var translate = ctx.PushTranslate(-viewX, -viewY);
+            absoluteY -= viewY;
+            absoluteX -= viewX;
             float prevScrollOffset = activeScrollOffsetY;
             activeScrollOffsetY = scrollY;
 
@@ -1383,11 +1395,131 @@ internal sealed partial class NodePainter
             currentViewportTop = prevViewportTop;
             currentViewportBottom = prevViewportBottom;
             activeScrollOffsetY = prevScrollOffset;
-            absoluteY += scrollY;
-            absoluteX += scrollX;
+            absoluteY += viewY;
+            absoluteX += viewX;
         }
 
+        PaintScrollViewExtras(sv, bounds, viewX, viewY);
         PaintScrollViewScrollbars(sv, bounds, contentWidth, contentHeight);
+    }
+
+    /// <summary>
+    /// What a ScrollView draws over its content: the pinned sticky child (.Sticky), the
+    /// pull-to-refresh indicator, the overscroll glow (.Overscroll(Glow)) and the edge fades
+    /// (.FadeEdges).
+    /// </summary>
+    private void PaintScrollViewExtras(ScrollView sv, Rect bounds, float viewX, float viewY)
+    {
+        var control = sv.Control;
+        using var clip = ctx.PushClip(new Rect(0, 0, bounds.Width, bounds.Height));
+
+        // The pinned sticky child, drawn again at the edge over the content.
+        if (control.PinnedSticky is { } pinned)
+        {
+            var content = sv.Content.LayoutData;
+            float dx = content.Bounds.X + content.Padding.Left - viewX + pinned.DeltaX;
+            float dy = content.Bounds.Y + content.Padding.Top - viewY + pinned.DeltaY;
+            using var shift = ctx.PushTranslate(dx, dy);
+            absoluteX += dx;
+            absoluteY += dy;
+            PaintRecursive(pinned.Node);
+            absoluteX -= dx;
+            absoluteY -= dy;
+        }
+
+        // Pull to refresh: the app's indicator (laid out above the content) or a spinner arc that
+        // fills as the pull nears the threshold and spins while the refresh runs.
+        if (sv.HasPullToRefresh && (control.Pull > 0.5f || control.IsRefreshing))
+        {
+            float pull = control.Pull;
+            if (sv.PullToRefreshIndicator is { IsLayoutEmpty: false } indicator)
+            {
+                using var drop = ctx.PushTranslate(0, pull);
+                absoluteY += pull;
+                PaintRecursive(indicator);
+                absoluteY -= pull;
+            }
+            else
+            {
+                var centre = new Point(bounds.Width / 2f, Math.Min(pull, sv.PullToRefreshIndicatorOffset) / 2f + 4f);
+                float progress = Math.Clamp(pull / sv.PullToRefreshThreshold, 0f, 1f);
+                float start = control.IsRefreshing ? (float)(Stopwatch.GetTimestamp() % Stopwatch.Frequency) / Stopwatch.Frequency * 360f : -90f;
+                float sweep = control.IsRefreshing ? 270f : 330f * progress;
+                var arc = Path.Arc(centre, 9f, Angle.Degrees(start), Angle.Degrees(sweep));
+                ctx.DrawPath(arc, stroke: new Stroke(theme.Colors.Primary.Opacity(Math.Max(0.3f, progress)), 2f, StrokeCap.Round, StrokeJoin.Round));
+                ControlStateAnimator.SignalActiveTransition();
+            }
+        }
+
+        // Overscroll glow: a soft band of the accent at the edge that was pushed.
+        var glow = control.Glow;
+        void GlowBand(float strength, Rect band, Point from, Point to)
+        {
+            if (strength <= 0.01f)
+            {
+                return;
+            }
+            var color = theme.Colors.Primary;
+            PaintBrush(Brush.Linear(Gradient.Linear(from, to,
+                new GradientStop(0f, color.Opacity(0.35f * strength)), new GradientStop(1f, color.Opacity(0f)))), band, 0f);
+        }
+        const float glowDepth = 28f;
+        GlowBand(glow.Top, new Rect(0, 0, bounds.Width, glowDepth), new Point(0, 0), new Point(0, glowDepth));
+        GlowBand(glow.Bottom, new Rect(0, bounds.Height - glowDepth, bounds.Width, glowDepth), new Point(0, bounds.Height), new Point(0, bounds.Height - glowDepth));
+        GlowBand(glow.Left, new Rect(0, 0, glowDepth, bounds.Height), new Point(0, 0), new Point(glowDepth, 0));
+        GlowBand(glow.Right, new Rect(bounds.Width - glowDepth, 0, glowDepth, bounds.Height), new Point(bounds.Width, 0), new Point(bounds.Width - glowDepth, 0));
+
+    }
+
+    /// <summary>
+    /// Composites the content layer with its edges faded out (.FadeEdges) where there is more beyond
+    /// them: the middle drawn whole, each faded edge as thin strips of the same layer at falling
+    /// opacity. (A gradient drawn over the content cannot do it: text is drawn in a pass above shapes.)
+    /// A vertical view fades top and bottom, a horizontal one left and right.
+    /// </summary>
+    private void CompositeWithFadedEdges(ScrollView sv, Rect bounds, float viewX, float viewY)
+    {
+        const float depth = 24f;
+        const int strips = 12;
+        ulong layer = sv.LayerHandle!.Value;
+        bool vertical = sv.ScrollsVertically;
+        bool fadeStart = vertical ? sv.OffsetY > 0.5f : sv.OffsetX > 0.5f;
+        bool fadeEnd = vertical ? sv.OffsetY < sv.MaxY - 0.5f : sv.OffsetX < sv.MaxX - 0.5f;
+        float length = vertical ? bounds.Height : bounds.Width;
+        float start = fadeStart ? depth : 0f;
+        float end = fadeEnd ? length - depth : length;
+
+        Rect Band(float from, float to) => vertical
+            ? new Rect(0, from, bounds.Width, to - from)
+            : new Rect(from, 0, to - from, bounds.Height);
+
+        using (ctx.PushClip(Band(start, end)))
+        {
+            ctx.DrawLayerTexture(layer, -viewX, -viewY);
+        }
+
+        float step = depth / strips;
+        for (int i = 0; i < strips; i++)
+        {
+            // Opacity rises from the very edge inwards, quadratically: text lifts low alpha with its
+            // gamma, so a straight ramp would barely fade it.
+            float ramp = (i + 0.5f) / strips;
+            float opacity = ramp * ramp;
+            if (fadeStart)
+            {
+                using (ctx.PushClip(Band(i * step, (i + 1) * step)))
+                {
+                    ctx.DrawLayerTexture(layer, -viewX, -viewY, opacity);
+                }
+            }
+            if (fadeEnd)
+            {
+                using (ctx.PushClip(Band(length - (i + 1) * step, length - i * step)))
+                {
+                    ctx.DrawLayerTexture(layer, -viewX, -viewY, opacity);
+                }
+            }
+        }
     }
 
     /// <summary>

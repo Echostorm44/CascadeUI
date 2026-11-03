@@ -83,12 +83,44 @@ public sealed class ScrollViewControl
     /// <summary>Whether a persisted position (PersistScroll) has been restored into this control.</summary>
     internal bool PersistRestored { get; set; }
 
+    // ── Snap, overscroll, pull-to-refresh, sticky (Stage B) ──
+
+    /// <summary>A user scroll moved it and it may need snapping (Snap / Paging) once it settles.</summary>
+    internal bool SnapPending { get; set; }
+
+    /// <summary>The direction of the last user movement (-1, 0, 1 per axis), so a snap goes on, not back.</summary>
+    internal (int X, int Y) LastDirection { get; private set; }
+
+    /// <summary>The snap points and the sticky children, worked out by the engines.</summary>
+    internal SnapEngine Snap { get; } = new();
+    internal StickyHeaderTracker Sticky { get; } = new();
+
+    /// <summary>Rubber-band stretch past an edge (pixels; positive past the start).</summary>
+    internal (float X, float Y) Stretch { get; set; }
+
+    /// <summary>Glow at each edge (0..1) and when it was last lit.</summary>
+    internal (float Top, float Bottom, float Left, float Right) Glow { get; set; }
+    internal long GlowTimestamp { get; set; }
+
+    /// <summary>When the last overscroll happened (the stretch and pull spring back once it stops).</summary>
+    internal long OverscrollTimestamp { get; set; }
+
+    /// <summary>How far the content is pulled down for pull-to-refresh, and whether a refresh is running.</summary>
+    internal float Pull { get; set; }
+    internal Task? RefreshTask { get; set; }
+    internal bool IsRefreshing => RefreshTask is { IsCompleted: false };
+
+    /// <summary>The sticky child pinned at the edge this frame, and how far it is moved from its own place (content coordinates).</summary>
+    internal (Node Node, float DeltaX, float DeltaY)? PinnedSticky { get; set; }
+
     /// <summary>Moves to (<paramref name="x"/>, <paramref name="y"/>), clamped; returns whether it moved. Cancels an animated scroll.</summary>
     internal bool MoveTo(float x, float y, bool fromUser = true)
     {
         if (fromUser)
         {
             CancelTween();
+            LastDirection = (Math.Sign(x - OffsetX), Math.Sign(y - OffsetY));
+            SnapPending = true;
         }
         float nx = Math.Clamp(x, 0f, MaxX);
         float ny = Math.Clamp(y, 0f, MaxY);

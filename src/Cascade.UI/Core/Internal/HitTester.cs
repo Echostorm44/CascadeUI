@@ -155,6 +155,19 @@ internal static class HitTester
                 // Content is translated by -scrollY during paint, so add scrollY
                 // to convert viewport coordinates back to content coordinates.
                 float scrollY = scrollView.OffsetY;
+
+                // A sticky child pinned at the edge sits over the content: it is hit first.
+                if (scrollView.Control.PinnedSticky is { } pinned)
+                {
+                    var pinnedHit = HitTestCore(pinned.Node,
+                        localX + scrollView.OffsetX - pinned.DeltaX - content.LayoutData.Bounds.X - content.LayoutData.Padding.Left,
+                        localY + scrollY - pinned.DeltaY - content.LayoutData.Bounds.Y - content.LayoutData.Padding.Top, path);
+                    if (pinnedHit != null)
+                    {
+                        return pinnedHit;
+                    }
+                }
+
                 var hit = HitTestCore(content, localX + scrollView.OffsetX, localY + scrollY, path);
                 if (hit != null)
                 {

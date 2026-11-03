@@ -7005,10 +7005,13 @@ internal sealed partial class InputDispatcher
             }
             if (sv.KeepsWheelAtEdge)
             {
-                return (sv, false);
+                return (sv, sv.Overscroll(DeltaFor(sv).X, DeltaFor(sv).Y));
             }
         }
-        return null;
+
+        // Nothing could move: the innermost shows the overscroll (stretch, glow, pull to refresh).
+        var innermost = chain[^1];
+        return innermost.Overscroll(DeltaFor(innermost).X, DeltaFor(innermost).Y) ? (innermost, true) : null;
     }
 
     /// <summary>

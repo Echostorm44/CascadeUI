@@ -190,7 +190,7 @@ internal static class NodeDiffer
             Stack stack => stack.Children,
             Grid grid => grid.Children,
             Center center => [center.Child],
-            ScrollView scroll => [scroll.Content],
+            ScrollView scroll => scroll.PullToRefreshIndicator is { IsLayoutEmpty: false } indicator ? [scroll.Content, indicator] : [scroll.Content],
             SplitView split => [split.First, split.Second],
             Badge badge => [badge.Child],
             AnimatePresence ap => [ap.Child],

@@ -1228,6 +1228,163 @@ public class ModifierRenderTests
         await Assert.That(prefixedWidth).IsGreaterThan(plainWidth);
     }
 
+    [Test]
+    public async Task MentionInput_KeepsToMaxLength_AndPastes()
+    {
+        string value = "";
+        var input = new MentionInput(new Bindable<string>("", v => value = v)).MaxLength(5);
+        using var app = new RenderHarness(() => input.Width(240));
+        app.Frame();
+        FocusManager.RequestFocus(input);
+
+        foreach (char c in "abcdefg")
+        {
+            app.Press(Key.A, character: c);
+        }
+        await Assert.That(value).IsEqualTo("abcde");
+
+        if (OperatingSystem.IsWindows())
+        {
+            app.Press(Key.A, ModifierKeys.Ctrl);
+            await Clipboard.WriteTextAsync("0123456789");
+            app.Press(Key.V, ModifierKeys.Ctrl);
+            await Assert.That(value).IsEqualTo("01234");
+        }
+    }
+
+    [Test]
+    public async Task Backspace_AsWindowsSendsIt_RemovesOneCharacterOrTag()
+    {
+        // Windows sends the Backspace key, then a '\b' character: one press must act once.
+        static void WindowsBackspace(RenderHarness app)
+        {
+            app.Press(Key.Backspace);
+            app.Press(Key.None, character: '\b');
+        }
+
+        IReadOnlyList<string> tags = ["one", "two", "three"];
+        var tagInput = new TagInput(new Bindable<IReadOnlyList<string>>(["one", "two", "three"], v => tags = v));
+        using (var app = new RenderHarness(() => tagInput.Width(300)))
+        {
+            app.Frame();
+            FocusManager.RequestFocus(tagInput);
+            WindowsBackspace(app);
+        }
+        await Assert.That(string.Join(",", tags)).IsEqualTo("one,two");
+
+        string text = "";
+        var mention = new MentionInput(new Bindable<string>("", v => text = v));
+        using (var app = new RenderHarness(() => mention.Width(240)))
+        {
+            app.Frame();
+            FocusManager.RequestFocus(mention);
+            foreach (char c in "abc")
+            {
+                app.Press(Key.A, character: c);
+            }
+            WindowsBackspace(app);
+        }
+        await Assert.That(text).IsEqualTo("ab");
+    }
+
+    [Test]
+    public async Task EmojiPicker_EveryTabHasEmoji_AndRecentAndSkinToneWork()
+    {
+        var picked = new List<string>();
+        IReadOnlyList<string> recent = ["🎉"];
+        var tone = SkinTone.Default;
+        var picker = new EmojiPicker(picked.Add)
+            .RecentEmoji(new Bindable<IReadOnlyList<string>>(["🎉"], v => recent = v), maxCount: 2)
+            .SkinTone(new Bindable<SkinTone>(SkinTone.Default, v => tone = v));
+
+        // Recent first, then all eight categories; every one has emoji (tabs past the second used to crash).
+        await Assert.That(picker.Tabs.Count).IsEqualTo(9);
+        for (int t = 0; t < picker.Tabs.Count; t++)
+        {
+            picker.SelectedCategoryIndex = t;
+            await Assert.That(picker.CurrentEmoji.Count).IsGreaterThan(0);
+        }
+
+        // Choosing puts it first in the recent list, kept to two.
+        picker.SelectedCategoryIndex = 1;
+        picker.Choose("😀");
+        picker.Choose("😃");
+        await Assert.That(string.Join(",", picked)).IsEqualTo("😀,😃");
+        await Assert.That(recent.Count).IsEqualTo(2);
+
+        // The skin-tone button moves to the next tone; hands then carry it.
+        picker.NextSkinTone();
+        await Assert.That(tone).IsEqualTo(SkinTone.Light);
+        await Assert.That(EmojiPicker.WithTone("👍", SkinTone.Medium)).IsEqualTo("👍\U0001F3FD");
+        await Assert.That(EmojiPicker.WithTone("😀", SkinTone.Medium)).IsEqualTo("😀");
+
+        // .Categories limits the tabs.
+        var food = new EmojiPicker(_ => { }).Categories([EmojiCategory.FoodAndDrink]);
+        await Assert.That(food.Tabs.Count).IsEqualTo(1);
+        await Assert.That(food.CurrentEmoji[0]).IsEqualTo("🍎");
+    }
+
+    [Test]
+    public async Task EmojiPicker_ScrollsTheWheel_ClicksPick_AndDisabledIgnoresInput()
+    {
+        var picked = new List<string>();
+        var picker = new EmojiPicker(picked.Add);
+        using (var app = new RenderHarness(() => picker))
+        {
+            app.Frame();
+            app.Wheel(60, 120, -1f);
+            await Assert.That(picker.ScrollOffset).IsGreaterThan(0f);
+            app.Wheel(60, 120, 5f);
+            app.Click(EmojiPicker.Pad + EmojiPicker.CellSize / 2, EmojiPicker.TabHeight + 4 + EmojiPicker.CellSize / 2);
+            await Assert.That(string.Join(",", picked)).IsEqualTo("😀");
+        }
+
+        var disabled = new EmojiPicker(picked.Add).Disabled();
+        using (var app = new RenderHarness(() => disabled))
+        {
+            app.Frame();
+            app.Click(EmojiPicker.Pad + EmojiPicker.CellSize / 2, EmojiPicker.TabHeight + 4 + EmojiPicker.CellSize / 2);
+        }
+        await Assert.That(picked.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task NotificationBell_DrawsTheAppsEmptyState_AndRows()
+    {
+        static int RedWhenOpen(NotificationBell bell)
+        {
+            using var app = new RenderHarness(() => bell, crossAxisCenter: true);
+            app.Frame();
+            bell.Open();
+            for (int i = 0; i < 20; i++)
+            {
+                app.Frame();
+            }
+            return app.Frame().Count(IsRedPixel);
+        }
+
+        var empty = new NotificationBell(new Bindable<IReadOnlyList<AppNotification>>([], _ => { }))
+            .EmptyState(new Label("All caught up").Color(Red));
+        await Assert.That(RedWhenOpen(empty)).IsGreaterThan(20);
+
+        var rendered = new List<string>();
+        var custom = new NotificationBell(new Bindable<IReadOnlyList<AppNotification>>([new() { Id = "1", Title = "Hi" }], _ => { }))
+            .RenderNotification(n => { rendered.Add(n.Id); return new Label(n.Title).Color(Red); });
+        await Assert.That(RedWhenOpen(custom)).IsGreaterThan(5);
+        await Assert.That(rendered.Distinct().Single()).IsEqualTo("1");
+    }
+
+    [Test]
+    public async Task NotificationBell_Disabled_IgnoresClicks()
+    {
+        var bell = new NotificationBell(new Bindable<IReadOnlyList<AppNotification>>([], _ => { })).Disabled();
+        using var app = new RenderHarness(() => bell);
+        app.Frame();
+        var b = bell.LayoutData.Bounds;
+        app.Click(b.X + b.Width / 2, b.Y + b.Height / 2);
+        await Assert.That(bell.IsOpen).IsFalse();
+    }
+
     // Six buttons recording their index when clicked.
     private static ToolBarItem[] SixButtons(List<int> clicks) =>
         [.. Enumerable.Range(0, 6).Select(i => ToolBarItem.Button(Icons.Star, $"Item {i}", () => clicks.Add(i)))];

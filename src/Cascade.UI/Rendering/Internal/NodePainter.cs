@@ -14055,67 +14055,88 @@ internal sealed partial class NodePainter
 
     private void PaintEmojiPicker(EmojiPicker ep, Rect bounds)
     {
-        const float cellSize = 36f;
-        const float spacing = 2f;
-        const int columns = 8;
-        const float tabHeight = 36f;
-        const float pad = 8f;
+        const float cellSize = EmojiPicker.CellSize;
+        const float spacing = EmojiPicker.Spacing;
+        const int columns = EmojiPicker.Columns;
+        const float tabHeight = EmojiPicker.TabHeight;
+        const float pad = EmojiPicker.Pad;
         float radius = 8f;
         bool reducedMotion = ControlStateAnimator.ReducedMotion;
 
         ep.AbsoluteBounds = new Rect(absoluteX, absoluteY, bounds.Width, bounds.Height);
 
+        // Disabled: the whole picker dimmed (and input ignores it).
+        using var dim = ep.IsDisabled ? ctx.PushOpacity(0.45f) : default;
+
         // Background panel
         ctx.DrawRect(bounds, theme.Colors.Surface, radius: radius);
         ctx.DrawRect(bounds, stroke: new Stroke(theme.Colors.Border.Opacity(0.3f), 1f), radius: radius);
 
+        var tabs = ep.Tabs;
+        int currentTab = ep.CurrentTab;
+        float tabW = ep.TabWidth(bounds.Width);
+
         // Tab indicator spring slide
-        float tabW = (bounds.Width - pad * 2f) / EmojiPicker.CategoryIcons.Length;
-        float indicatorTarget = ep.SelectedCategoryIndex / (float)Math.Max(1, EmojiPicker.CategoryIcons.Length - 1);
-        ControlStateAnimator.ReconcileValue(ep, indicatorTarget, AnimationModel.Spring.Bouncy);
-        float indicatorT = reducedMotion ? indicatorTarget : ControlStateAnimator.GetValueProgress(ep);
-        float indicatorX = bounds.X + pad + indicatorT * (EmojiPicker.CategoryIcons.Length - 1) * tabW;
+        ControlStateAnimator.ReconcileValue(ep, currentTab, AnimationModel.Spring.Bouncy);
+        float indicatorIndex = reducedMotion ? currentTab : ControlStateAnimator.GetValueProgress(ep);
+        float indicatorX = bounds.X + pad + indicatorIndex * tabW;
 
         // Draw sliding indicator with gap below so it doesn't touch the separator
         ctx.DrawRect(new Rect(indicatorX, bounds.Y + tabHeight - 5f, tabW, 2f),
             theme.Colors.Primary, radius: 1f);
 
-        // Category tabs
-        for (int t = 0; t < EmojiPicker.CategoryIcons.Length; t++)
+        // Category tabs (Recent first when there is one)
+        for (int t = 0; t < tabs.Count; t++)
         {
             float tabX = bounds.X + pad + t * tabW;
             float tabY = bounds.Y;
 
-            // Tab hover
             if (ep.HoveredIndex == -(100 + t))
             {
                 ctx.DrawRect(new Rect(tabX + 2f, tabY + 2f, tabW - 4f, tabHeight - 6f),
                     new ColorValue("#FFFFFF").Opacity(0.06f), radius: 4f);
             }
 
-            // Tab icon
-            float iconFontSize = 18f;
-            var tabColor = t == ep.SelectedCategoryIndex ? theme.Colors.Text : theme.Colors.TextMuted;
-            PaintEmojiCentered(EmojiPicker.CategoryIcons[t], tabX, tabY, tabW, tabHeight, iconFontSize, tabColor);
+            var tabColor = t == currentTab ? theme.Colors.Text : theme.Colors.TextMuted;
+            PaintEmojiCentered(EmojiPicker.TabIcon(tabs[t]), tabX, tabY, tabW, tabHeight, 18f, tabColor);
+        }
+
+        // The skin-tone button: a raised hand in the chosen tone; a click moves to the next tone.
+        if (ep.SkinToneBind is { } toneBind)
+        {
+            float toneX = bounds.X + pad + tabs.Count * tabW;
+            if (ep.HoveredIndex == EmojiPicker.ToneButtonHover)
+            {
+                ctx.DrawRect(new Rect(toneX + 2f, bounds.Y + 2f, tabW - 4f, tabHeight - 6f),
+                    new ColorValue("#FFFFFF").Opacity(0.06f), radius: 4f);
+            }
+            PaintEmojiCentered(EmojiPicker.WithTone("✋", toneBind.Value), toneX, bounds.Y, tabW, tabHeight, 18f, theme.Colors.Text);
         }
 
         // Separator below tabs
         ctx.DrawRect(new Rect(bounds.X, bounds.Y + tabHeight, bounds.Width, 1f),
             theme.Colors.Border.Opacity(0.3f));
 
-        // Emoji grid
-        var emojis = EmojiPicker.EmojiData[ep.SelectedCategoryIndex];
-        float gridY = bounds.Y + tabHeight + 4f;
+        // Emoji grid, scrolled, clipped below the tabs
+        var emojis = ep.CurrentEmoji;
+        ep.ScrollOffset = Math.Clamp(ep.ScrollOffset, 0f, ep.MaxScroll(bounds.Height));
+        float gridTop = bounds.Y + tabHeight + 4f;
+        float gridY = gridTop - ep.ScrollOffset;
         float gridX = bounds.X + pad;
+        using var gridClip = ctx.PushClip(new Rect(bounds.X, gridTop, bounds.Width, bounds.Bottom - gridTop - 2f));
 
-        for (int i = 0; i < emojis.Length; i++)
+        for (int i = 0; i < emojis.Count; i++)
         {
             int col = i % columns;
             int row = i / columns;
             float cellX = gridX + col * (cellSize + spacing);
             float cellY = gridY + row * (cellSize + spacing);
 
-            if (cellY + cellSize > bounds.Y + bounds.Height)
+            if (cellY + cellSize < gridTop)
+            {
+                continue;
+            }
+            if (cellY > bounds.Y + bounds.Height)
             {
                 break;
             }
@@ -14203,6 +14224,8 @@ internal sealed partial class NodePainter
 
     private void PaintNotificationBell(NotificationBell nb, Rect bounds)
     {
+        // Disabled: dimmed, and input ignores it.
+        using var dim = nb.IsDisabled ? ctx.PushOpacity(0.45f) : default;
         var notifications = nb.Notifications.Value;
         int unreadCount = 0;
         if (notifications != null)
@@ -14237,7 +14260,7 @@ internal sealed partial class NodePainter
         float bellY = cy - bellH / 2f;
 
         ScopeGuard bellRingScope = default;
-        if (unreadCount > 0 && !bellReducedMotion)
+        if (unreadCount > 0 && !bellReducedMotion && nb.EnableRingAnimation && !nb.IsDisabled)
         {
             double elapsedMs = Stopwatch.GetElapsedTime(0).TotalMilliseconds;
             float ringAngle = 3f * MathF.Sin((float)(elapsedMs * 0.005));
@@ -14393,8 +14416,16 @@ internal sealed partial class NodePainter
         float itemStartY = dropY + headerH;
         if (visibleCount == 0)
         {
-            PaintText("No notifications", new Rect(dropX, itemStartY, dropdownW, 60f), 0f,
-                theme.Colors.TextMuted, fontSize: 13f, alignment: TextAlignment.Center);
+            // The app's empty state (.EmptyState), else a plain line.
+            if (!nb.EmptyStateNode.IsLayoutEmpty)
+            {
+                PaintOptionContent(nb.EmptyStateNode, new Rect(dropX, itemStartY, dropdownW, 60f), 12f);
+            }
+            else
+            {
+                PaintText("No notifications", new Rect(dropX, itemStartY, dropdownW, 60f), 0f,
+                    theme.Colors.TextMuted, fontSize: 13f, alignment: TextAlignment.Center);
+            }
         }
         else
         {
@@ -14423,9 +14454,22 @@ internal sealed partial class NodePainter
                         theme.Colors.Primary, radius: dotR);
                 }
 
-                // Title
                 float textLeft = dropX + 24f;
                 float textWidth = dropdownW - 36f;
+
+                // The app's own row content (.RenderNotification) in place of title, body and time.
+                if (nb.CustomRenderer is { } render)
+                {
+                    PaintOptionContent(render(notif), new Rect(textLeft, rowY, textWidth, itemH), 0f);
+                    if (i < visibleCount - 1)
+                    {
+                        ctx.DrawRect(new Rect(dropX + 12f, rowY + itemH - 1f, dropdownW - 24f, 1f),
+                            theme.Colors.Border.Opacity(0.3f));
+                    }
+                    continue;
+                }
+
+                // Title
                 PaintText(notif.Title, new Rect(textLeft, rowY + 8f, textWidth, 20f), 0f,
                     notif.IsRead ? theme.Colors.TextMuted : theme.Colors.Text,
                     fontSize: 13f, fontWeight: notif.IsRead ? FontWeight.Regular : FontWeight.Bold);

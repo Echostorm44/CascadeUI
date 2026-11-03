@@ -1200,7 +1200,7 @@ internal sealed partial class InputDispatcher
                 RequestRepaint?.Invoke();
             }
         }
-        else if (hitNode is NotificationBell nbHover)
+        else if (hitNode is NotificationBell { IsDisabled: false } nbHover)
         {
             int newIdx = nbHover.AbsoluteBounds.Contains(new Point(evt.X, evt.Y)) ? -2 : -1;
             if (newIdx != nbHover.HoveredIndex)
@@ -1219,7 +1219,7 @@ internal sealed partial class InputDispatcher
         }
 
         // Update hovered cell on EmojiPicker
-        if (hitNode is EmojiPicker epHover)
+        if (hitNode is EmojiPicker { IsDisabled: false } epHover)
         {
             int newIdx = ComputeEmojiPickerHover(epHover, evt.X, evt.Y);
             if (newIdx != epHover.HoveredIndex)
@@ -2916,6 +2916,20 @@ internal sealed partial class InputDispatcher
             }
         }
 
+        // An emoji picker scrolls its grid.
+        if (HitTester.HitTest(rootNode, evt.X, evt.Y) is EmojiPicker { IsDisabled: false } emojiPicker)
+        {
+            var pickerBounds = emojiPicker.AbsoluteBounds;
+            float max = emojiPicker.MaxScroll(pickerBounds.Height);
+            float next = Math.Clamp(emojiPicker.ScrollOffset - evt.DeltaY * 48f, 0f, max);
+            if (Math.Abs(next - emojiPicker.ScrollOffset) > 0.001f)
+            {
+                emojiPicker.ScrollOffset = next;
+                RequestRepaint?.Invoke();
+            }
+            return;
+        }
+
         // A toolbar in OverflowMode.Scroll scrolls its items along its axis.
         if (HitTester.HitTest(rootNode, evt.X, evt.Y) is ToolBar { OverflowSetting: OverflowMode.Scroll } scrollBar)
         {
@@ -4085,11 +4099,11 @@ internal sealed partial class InputDispatcher
         }
 
         // Backspace / Delete: the selection, else one character (Ctrl: everything on that side).
-        // (Windows sends Ctrl+Backspace as character 127.)
-        if (evt.Character is '\b' or (char)127 || evt.Key == Key.Delete)
+        // Plain Backspace arrives as the '\b' character; Ctrl+Backspace only as the key (Windows
+        // drops its character), so each is acted on once.
+        if (evt.Character == '\b' || (ctrl && evt.Key == Key.Backspace) || evt.Key == Key.Delete)
         {
             bool forward = evt.Key == Key.Delete;
-            ctrl |= evt.Character == (char)127;
             if (!hasSelection)
             {
                 int caret = PasswordCaretIndex;
@@ -5149,7 +5163,7 @@ internal sealed partial class InputDispatcher
                 return;
             }
 
-            case NotificationBell nb:
+            case NotificationBell nb when !nb.IsDisabled:
             {
                 if (nb.IsOpen)
                 {
@@ -5165,7 +5179,7 @@ internal sealed partial class InputDispatcher
                 return;
             }
 
-            case EmojiPicker ep:
+            case EmojiPicker ep when !ep.IsDisabled:
             {
                 HandleEmojiPickerClick(ep);
                 RequestRepaint?.Invoke();
@@ -7908,91 +7922,27 @@ internal sealed partial class InputDispatcher
 
     private void HandleEmojiPickerClick(EmojiPicker ep)
     {
-        const float cellSize = 36f;
-        const float spacing = 2f;
-        const int columns = 8;
-        const float tabHeight = 36f;
-        const float pad = 8f;
-
         var abs = ep.AbsoluteBounds;
-        float relX = lastMousePosition.X - abs.X;
-        float relY = lastMousePosition.Y - abs.Y;
-
-        // Click on category tab
-        if (relY < tabHeight)
+        int hit = ep.HitTest(lastMousePosition.X - abs.X, lastMousePosition.Y - abs.Y, abs.Width, abs.Height);
+        if (hit == EmojiPicker.ToneButtonHover)
         {
-            float tabW = (abs.Width - pad * 2f) / EmojiPicker.CategoryIcons.Length;
-            int tabIdx = (int)((relX - pad) / tabW);
-            if (tabIdx >= 0 && tabIdx < EmojiPicker.CategoryIcons.Length)
-            {
-                ep.SelectedCategoryIndex = tabIdx;
-            }
-            return;
+            ep.NextSkinTone();
         }
-
-        // Click on emoji cell
-        float gridY = tabHeight + 4f;
-        float gridX = pad;
-        int col = (int)((relX - gridX) / (cellSize + spacing));
-        int row = (int)((relY - gridY) / (cellSize + spacing));
-
-        if (col >= 0 && col < columns)
+        else if (hit <= -100)
         {
-            int idx = row * columns + col;
-            var emojis = EmojiPicker.EmojiData[ep.SelectedCategoryIndex];
-            if (idx >= 0 && idx < emojis.Length)
-            {
-                ep.OnSelect(emojis[idx]);
-            }
+            ep.SelectedCategoryIndex = -(hit + 100);
+            ep.ScrollOffset = 0f;
+        }
+        else if (hit >= 0)
+        {
+            ep.Choose(ep.CurrentEmoji[hit]);
         }
     }
 
     private static int ComputeEmojiPickerHover(EmojiPicker ep, float mouseX, float mouseY)
     {
-        const float cellSize = 36f;
-        const float spacing = 2f;
-        const int columns = 8;
-        const float tabHeight = 36f;
-        const float pad = 8f;
-
         var abs = ep.AbsoluteBounds;
-        float relX = mouseX - abs.X;
-        float relY = mouseY - abs.Y;
-
-        if (relX < 0 || relX > abs.Width || relY < 0 || relY > abs.Height)
-        {
-            return -1;
-        }
-
-        // Hovering over tab area
-        if (relY < tabHeight)
-        {
-            float tabW = (abs.Width - pad * 2f) / EmojiPicker.CategoryIcons.Length;
-            int tabIdx = (int)((relX - pad) / tabW);
-            if (tabIdx >= 0 && tabIdx < EmojiPicker.CategoryIcons.Length)
-            {
-                return -(100 + tabIdx);
-            }
-            return -1;
-        }
-
-        // Hovering over emoji grid
-        float gridY = tabHeight + 4f;
-        float gridX = pad;
-        int col = (int)((relX - gridX) / (cellSize + spacing));
-        int row = (int)((relY - gridY) / (cellSize + spacing));
-
-        if (col >= 0 && col < columns)
-        {
-            int idx = row * columns + col;
-            var emojis = EmojiPicker.EmojiData[ep.SelectedCategoryIndex];
-            if (idx >= 0 && idx < emojis.Length)
-            {
-                return idx;
-            }
-        }
-
-        return -1;
+        return ep.HitTest(mouseX - abs.X, mouseY - abs.Y, abs.Width, abs.Height);
     }
 
     // ── Select dropdown helpers (continued) ──────────────────────────
@@ -9143,7 +9093,7 @@ internal sealed partial class InputDispatcher
         }
 
         // Backspace — delete char from buffer, or remove last tag if buffer empty
-        if (evt.Character == '\b' || evt.Key == Key.Backspace)
+        if (evt.Character == '\b') // Windows sends the Backspace key, then this character: act once
         {
             if (tagInput.InputBuffer.Length > 0 && tagInput.CaretIndex > 0)
             {
@@ -9255,7 +9205,7 @@ internal sealed partial class InputDispatcher
         }
 
         // Backspace
-        if (evt.Character == '\b' || evt.Key == Key.Backspace)
+        if (evt.Character == '\b') // Windows sends the Backspace key, then this character: act once
         {
             if (MentionInputSelectionAnchor != MentionInputCaretIndex)
             {
@@ -9324,12 +9274,43 @@ internal sealed partial class InputDispatcher
             return true;
         }
 
+        // Ctrl+V / Shift+Insert — paste at the caret (one line), within MaxLength. MentionInput had no paste.
+        if ((ctrl && evt.Key == Key.V) || (evt.Modifiers.HasFlag(ModifierKeys.Shift) && evt.Key == Key.Insert))
+        {
+            var content = Clipboard.GetContentAsync().GetAwaiter().GetResult();
+            string pasted = (content.HasText ? content.GetTextAsync().GetAwaiter().GetResult() ?? "" : "")
+                .Replace("\r\n", " ", StringComparison.Ordinal).Replace('\n', ' ').Replace('\r', ' ');
+            if (MentionInputSelectionAnchor != MentionInputCaretIndex)
+            {
+                DeleteMentionSelection(mi);
+            }
+            if (mi.MaxLengthValue is { } room)
+            {
+                pasted = pasted[..Math.Clamp(room - MentionEditBuffer!.Length, 0, pasted.Length)];
+            }
+            if (pasted.Length > 0)
+            {
+                MentionEditBuffer = MentionEditBuffer!.Insert(MentionInputCaretIndex, pasted);
+                MentionInputCaretIndex += pasted.Length;
+                MentionInputSelectionAnchor = MentionInputCaretIndex;
+                ActiveEditBuffer = MentionEditBuffer;
+                mi.Value.OnChange(MentionEditBuffer);
+            }
+            return true;
+        }
+
         // Printable character input
         if (evt.Character is char ch && ch >= ' ')
         {
             if (MentionInputSelectionAnchor != MentionInputCaretIndex)
             {
                 DeleteMentionSelection(mi);
+            }
+
+            // MaxLength: a full field takes no more characters.
+            if (mi.MaxLengthValue is { } max && MentionEditBuffer.Length >= max)
+            {
+                return true;
             }
 
             MentionEditBuffer = MentionEditBuffer.Insert(MentionInputCaretIndex, ch.ToString());
@@ -9414,6 +9395,13 @@ internal sealed partial class InputDispatcher
         // Replace from trigger char position to current caret with the insert text
         int triggerPos = mi.QueryStartIndex - 1; // position of the trigger char
         int replaceEnd = MentionInputCaretIndex;
+
+        // A mention that would overrun MaxLength isn't cut in half: it isn't inserted.
+        if (mi.MaxLengthValue is { } max && MentionEditBuffer.Length - (replaceEnd - triggerPos) + insertText.Length > max)
+        {
+            mi.ClosePopup();
+            return;
+        }
 
         MentionEditBuffer = MentionEditBuffer[..triggerPos] + insertText + MentionEditBuffer[replaceEnd..];
         MentionInputCaretIndex = triggerPos + insertText.Length;

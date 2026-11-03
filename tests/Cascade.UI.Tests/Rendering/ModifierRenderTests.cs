@@ -656,6 +656,103 @@ public class ModifierRenderTests
         await Assert.That(After("s", Key.Up)).IsEqualTo("s");
     }
 
+    private static readonly SelectOption<string>[] Fruit = [new("a", "Apple"), new("b", "Banana"), new("c", "Cherry")];
+
+    [Test]
+    public async Task ReadOnlySelects_NeverOpen_OrChange()
+    {
+        // A click or Space/Enter/Down would open each one; read-only, none opens and nothing changes.
+        static bool OpensOnInput(Func<Node> build)
+        {
+            var node = build();
+            using var app = new RenderHarness(() => node.Width(200));
+            app.Frame();
+            app.Click(100, 18);
+            if (!IsOpen(node))
+            {
+                FocusManager.RequestFocus(node);
+                foreach (var key in new[] { Key.Space, Key.Enter, Key.Down })
+                {
+                    app.Press(key);
+                }
+            }
+            return IsOpen(node);
+        }
+
+        static bool IsOpen(Node node)
+        {
+            return node switch
+            {
+                ISelectNode s => s.IsOpen,
+                IMultiSelectNode m => m.IsOpen,
+                IComboboxNode c => c.IsOpen,
+                _ => throw new InvalidOperationException(node.GetType().Name),
+            };
+        }
+
+        string single = "a";
+        IReadOnlyList<string> many = ["a"];
+        await Assert.That(OpensOnInput(() => new Select<string>(new Bindable<string>("a", v => single = v), Fruit))).IsTrue();
+        await Assert.That(OpensOnInput(() => new Select<string>(new Bindable<string>("a", v => single = v), Fruit).ReadOnly())).IsFalse();
+        await Assert.That(OpensOnInput(() => new MultiSelect<string>(new Bindable<IReadOnlyList<string>>(["a"], v => many = v), Fruit).ReadOnly())).IsFalse();
+        await Assert.That(OpensOnInput(() => new Combobox<string>(new Bindable<string>("a", v => single = v), Fruit).ReadOnly())).IsFalse();
+
+        // Nor can the value be set through the control.
+        var select = new Select<string>(new Bindable<string>("a", v => single = v), Fruit).ReadOnly();
+        single = "a";
+        ((ISelectNode)select).SelectIndex(2);
+        var multi = new MultiSelect<string>(new Bindable<IReadOnlyList<string>>(["a"], v => many = v), Fruit).ReadOnly();
+        ((IMultiSelectNode)multi).ToggleItem(1);
+        var combo = new Combobox<string>(new Bindable<string>("a", v => single = v), Fruit).ReadOnly();
+        ((IComboboxNode)combo).SelectFilteredIndex(1);
+        await Assert.That(single).IsEqualTo("a");
+        await Assert.That(string.Join(",", many)).IsEqualTo("a");
+    }
+
+    [Test]
+    public async Task Select_TakesFocusFromAClickOrTab_AndSpaceOpensIt()
+    {
+        var select = new Select<string>(new Bindable<string>("a", _ => { }), Fruit);
+        var before = new Button("Before", () => { });
+        using var app = new RenderHarness(() => new Column(children: [before, select.Width(200)]));
+        app.Frame();
+
+        // Tab from the button lands on the select; Space opens it.
+        FocusManager.RequestFocus(before);
+        app.Press(Key.Tab);
+        await Assert.That(FocusManager.FocusedElement).IsSameReferenceAs(select);
+        app.Press(Key.Space, character: ' ');
+        await Assert.That(((ISelectNode)select).IsOpen).IsTrue();
+
+        // A click on it focuses it too.
+        app.Press(Key.Escape);
+        FocusManager.ClearFocus();
+        var b = select.LayoutData.Bounds;
+        app.Click(b.X + 50, b.Y + b.Height / 2);
+        await Assert.That(FocusManager.FocusedElement).IsSameReferenceAs(select);
+    }
+
+    [Test]
+    public async Task SegmentedControlAndRating_AnswerTheArrowKeys()
+    {
+        static T After<T>(Func<Action<T>, Node> build, T start, Key key)
+        {
+            T value = start;
+            var node = build(v => value = v);
+            using var app = new RenderHarness(() => node);
+            app.Frame();
+            FocusManager.RequestFocus(node);
+            app.Press(key);
+            return value;
+        }
+
+        SegmentOption<string>[] views = [new("day", "Day"), new("week", "Week"), new("month", "Month")];
+        await Assert.That(After<string>(set => new SegmentedControl<string>(new Bindable<string>("day", set), views), "day", Key.Right)).IsEqualTo("week");
+        await Assert.That(After<float>(set => new Rating(new Bindable<float>(2f, set)), 2f, Key.Right)).IsEqualTo(3f);
+        await Assert.That(After<float>(set => new Rating(new Bindable<float>(2f, set)).HalfStars(), 2f, Key.Left)).IsEqualTo(1.5f);
+        await Assert.That(After<float>(set => new Rating(new Bindable<float>(2f, set)), 2f, Key.End)).IsEqualTo(5f);
+    }
+
     // Six buttons recording their index when clicked.
     private static ToolBarItem[] SixButtons(List<int> clicks) =>
         [.. Enumerable.Range(0, 6).Select(i => ToolBarItem.Button(Icons.Star, $"Item {i}", () => clicks.Add(i)))];

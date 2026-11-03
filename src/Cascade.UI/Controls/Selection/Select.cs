@@ -173,6 +173,11 @@ public sealed class Select<T> : Node, ISelectNode where T : notnull
 
     void ISelectNode.ToggleOpen()
     {
+        // Read-only: the value shows, focus and copy work, but the list never opens.
+        if (IsReadOnly && !IsOpen)
+        {
+            return;
+        }
         IsOpen = !IsOpen;
         if (IsOpen)
         {
@@ -227,7 +232,7 @@ public sealed class Select<T> : Node, ISelectNode where T : notnull
     void ISelectNode.SelectIndex(int index)
     {
         var flat = GetFlatOptions();
-        if (index < 0 || index >= flat.Count)
+        if (index < 0 || index >= flat.Count || IsReadOnly)
         {
             return;
         }

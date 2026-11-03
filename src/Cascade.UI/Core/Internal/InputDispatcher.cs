@@ -3241,6 +3241,12 @@ internal sealed partial class InputDispatcher
             }
         }
 
+        if (evt.Type == NativeKeyEventType.KeyDown && HandleFocusedChoiceKey(focusedNode, evt))
+        {
+            RequestRepaint?.Invoke();
+            return;
+        }
+
         if (evt.Type == NativeKeyEventType.KeyDown && focusedNode is IToggleGroup { IsControlDisabled: false } focusedGroup
             && evt.Modifiers == ModifierKeys.None && HandleToggleGroupKey(focusedGroup, evt))
         {
@@ -3588,13 +3594,8 @@ internal sealed partial class InputDispatcher
             return false;
         }
 
-        // Known focusable control types (mirrors FindFocusableNode). Anything that can
-        // be click-focused is also tab-focusable, so the two stay consistent.
-        if (node is Button or LinkButton or IconButton
-            or TextInput or TextArea or PasswordInput or PinInput
-            or MentionInput or TagInput or ColorPicker
-            or Checkbox or Toggle or Slider or HotkeyPicker or TabBar
-            || IsNumberInput(node))
+        // Known focusable control types (the same list FindFocusableNode uses).
+        if (IsFocusableControl(node))
         {
             return true;
         }
@@ -3627,6 +3628,12 @@ internal sealed partial class InputDispatcher
             Slider sl => sl.IsDisabled,
             HotkeyPicker hp => hp.IsDisabled,
             TabBar tabBar => tabBar.IsDisabled,
+            ISelectNode select => select.IsNodeDisabled,
+            IMultiSelectNode multi => multi.IsNodeDisabled,
+            IComboboxNode combo => combo.IsNodeDisabled,
+            IToggleGroup group => group.IsControlDisabled,
+            ISegmentedControl segmented => segmented.IsControlDisabled,
+            Rating rating => rating.IsDisabled,
             _ => false
         };
     }
@@ -6523,6 +6530,90 @@ internal sealed partial class InputDispatcher
         tg.SelectIndex(clickedIndex);
     }
 
+    /// <summary>
+    /// Keys for a focused, closed dropdown, segmented control or rating: Space, Enter, Down or
+    /// Alt+Down opens a Select / MultiSelect / Combobox (a typed character opens a Combobox with it
+    /// as the search); arrows move a segmented control's selection; arrows, Home and End set a rating.
+    /// </summary>
+    private bool HandleFocusedChoiceKey(Node? focused, NativeKeyEvent evt)
+    {
+        bool opens = evt.Key is Key.Space or Key.Enter or Key.Down
+            && (evt.Modifiers == ModifierKeys.None || (evt.Key == Key.Down && evt.Modifiers == ModifierKeys.Alt));
+        switch (focused)
+        {
+            case ISelectNode { IsNodeDisabled: false, IsOpen: false } select when opens:
+                select.ToggleOpen();
+                TrackOpenSelect(select);
+                return true;
+
+            case IMultiSelectNode { IsNodeDisabled: false, IsOpen: false } multi when opens:
+                multi.ToggleOpen();
+                openMultiSelect = multi.IsOpen ? multi : null;
+                return true;
+
+            case IComboboxNode { IsNodeDisabled: false, IsOpen: false } combo:
+                if (opens)
+                {
+                    combo.ToggleOpen();
+                }
+                else if (evt.Character is { } typed && typed >= ' ' && evt.Modifiers is ModifierKeys.None or ModifierKeys.Shift)
+                {
+                    combo.ToggleOpen();
+                    if (combo.IsOpen)
+                    {
+                        combo.SearchText = typed.ToString();
+                    }
+                }
+                else
+                {
+                    return false;
+                }
+                openCombobox = combo.IsOpen ? combo : null;
+                return true;
+
+            case ISegmentedControl { IsControlDisabled: false } segmented when evt.Modifiers == ModifierKeys.None:
+            {
+                int delta = evt.Key switch { Key.Left or Key.Up => -1, Key.Right or Key.Down => 1, _ => 0 };
+                if (delta == 0 || segmented.SegmentCount == 0)
+                {
+                    return false;
+                }
+                int next = Math.Clamp(segmented.SelectedIndex < 0 ? 0 : segmented.SelectedIndex + delta, 0, segmented.SegmentCount - 1);
+                if (next != segmented.SelectedIndex)
+                {
+                    segmented.SelectIndex(next);
+                }
+                return true;
+            }
+
+            case Rating { IsDisabled: false, IsReadOnly: false, BoundValue: { } bind } rating when evt.Modifiers == ModifierKeys.None:
+            {
+                float step = rating.HalfStarsEnabled ? 0.5f : 1f;
+                float? target = evt.Key switch
+                {
+                    Key.Right or Key.Up => bind.Value + step,
+                    Key.Left or Key.Down => bind.Value - step,
+                    Key.Home => 0f,
+                    Key.End => rating.Max,
+                    _ => null,
+                };
+                if (target is not { } value)
+                {
+                    return false;
+                }
+                value = Math.Clamp(MathF.Round(value / step) * step, 0f, rating.Max);
+                if (value != bind.Value)
+                {
+                    bind.OnChange(value);
+                }
+                return true;
+            }
+
+            default:
+                return false;
+        }
+    }
+
     /// <summary>Arrow keys move a focused toggle group's selection to the previous or next option.</summary>
     private static bool HandleToggleGroupKey(IToggleGroup tg, NativeKeyEvent evt)
     {
@@ -8212,19 +8303,29 @@ internal sealed partial class InputDispatcher
         }
 
         // Known focusable control types
-        if (node is Button or TextInput or TextArea or PasswordInput or
-            PinInput or MentionInput or TagInput or ColorPicker or
-            Checkbox or Toggle or Slider or
-            LinkButton or IconButton ||
-            node is HotkeyPicker { IsDisabled: false } ||
-            node is TabBar { IsDisabled: false } ||
-            IsNumberInput(node))
+        if (IsFocusableControl(node)
+            && node is not HotkeyPicker { IsDisabled: true } and not TabBar { IsDisabled: true })
         {
             return node;
         }
 
         return null;
     }
+
+    /// <summary>
+    /// The control types that take keyboard focus, by a click or by Tab: everything here answers
+    /// the keyboard once focused. Shared by <see cref="FindFocusableNode"/> and <see cref="IsTabStop"/>
+    /// so the two cannot drift apart (they had: a Select, ToggleGroup or Rating could never be focused).
+    /// </summary>
+    private static bool IsFocusableControl(Node node) =>
+        node is Button or LinkButton or IconButton
+            or TextInput or TextArea or PasswordInput or PinInput
+            or MentionInput or TagInput or ColorPicker
+            or Checkbox or Toggle or Slider or HotkeyPicker or TabBar
+            or ISelectNode or IMultiSelectNode or IComboboxNode
+            or IToggleGroup or ISegmentedControl
+            or Rating { BoundValue: not null }
+        || IsNumberInput(node);
 
     /// <summary>
     /// Computes and applies a new slider value based on the current drag X position.

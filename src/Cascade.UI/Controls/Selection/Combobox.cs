@@ -176,6 +176,11 @@ public sealed class Combobox<T> : Node, IComboboxNode where T : notnull
 
     void IComboboxNode.ToggleOpen()
     {
+        // Read-only: the value shows, but neither the list nor typing changes it.
+        if (IsReadOnly && !IsOpen)
+        {
+            return;
+        }
         IsOpen = !IsOpen;
         if (IsOpen)
         {
@@ -268,7 +273,7 @@ public sealed class Combobox<T> : Node, IComboboxNode where T : notnull
     void IComboboxNode.SelectFilteredIndex(int index)
     {
         var filtered = GetFilteredOptions();
-        if (index < 0 || index >= filtered.Count)
+        if (index < 0 || index >= filtered.Count || IsReadOnly)
         {
             return;
         }
@@ -284,7 +289,7 @@ public sealed class Combobox<T> : Node, IComboboxNode where T : notnull
         // For string-typed comboboxes, commit the typed text directly.
         // For other types, try to find a matching option.
         string text = SearchTextValue;
-        if (string.IsNullOrEmpty(text))
+        if (string.IsNullOrEmpty(text) || IsReadOnly)
         {
             IsOpen = false;
             SearchTextValue = "";

@@ -202,7 +202,7 @@ public sealed class MultiSelect<T> : Node, IMultiSelectNode where T : notnull
 
     void IMultiSelectNode.ToggleItem(int index)
     {
-        if (index < 0 || index >= Options.Count)
+        if (index < 0 || index >= Options.Count || IsReadOnly)
         {
             return;
         }
@@ -238,6 +238,11 @@ public sealed class MultiSelect<T> : Node, IMultiSelectNode where T : notnull
 
     void IMultiSelectNode.ToggleOpen()
     {
+        // Read-only: the chosen values show, but the list never opens.
+        if (IsReadOnly && !IsOpen)
+        {
+            return;
+        }
         IsOpen = !IsOpen;
         if (IsOpen)
         {

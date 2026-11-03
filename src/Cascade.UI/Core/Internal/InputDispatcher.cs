@@ -8060,6 +8060,24 @@ internal sealed partial class InputDispatcher
             return;
         }
 
+        // A searchable list: characters build the search (Space too, once it has begun), Backspace trims it.
+        if (openSelect.IsSearchable && !evt.Modifiers.HasFlag(ModifierKeys.Ctrl))
+        {
+            if (evt.Character is { } typed && typed > ' ' && typed != (char)127
+                || evt.Character == ' ' && openSelect.SearchText.Length > 0)
+            {
+                openSelect.SearchText += evt.Character!.Value;
+                RequestRepaint?.Invoke();
+                return;
+            }
+            if (evt.Key == Key.Backspace && openSelect.SearchText.Length > 0)
+            {
+                openSelect.SearchText = openSelect.SearchText[..^1];
+                RequestRepaint?.Invoke();
+                return;
+            }
+        }
+
         switch (evt.Key)
         {
             case Key.Down:

@@ -33,6 +33,21 @@ internal interface ISelectNode
     /// <summary>Closes the dropdown without selecting.</summary>
     void Close();
 
+    /// <summary>Whether typing while open searches the options (<c>.Searchable</c>).</summary>
+    bool IsSearchable { get; }
+
+    /// <summary>The search typed while open (searchable only).</summary>
+    string SearchText { get; set; }
+
+    /// <summary>A line shown in the open list instead of options ("Loading…", "No matches"), or null.</summary>
+    string? DropdownStatus { get; }
+
+    /// <summary>The app's content for option <paramref name="index"/> (<c>.RenderOption</c>), or null.</summary>
+    Node? RenderOption(int index);
+
+    /// <summary>The app's content for the selected value in the closed field (<c>.RenderSelected</c>), or null.</summary>
+    Node? RenderSelected();
+
     /// <summary>
     /// Dropdown bounds in absolute coordinates, set by the painter after rendering
     /// so the input dispatcher can perform hit testing on the dropdown area.
@@ -57,7 +72,7 @@ internal interface ISelectNode
 /// </summary>
 /// <typeparam name="T">The type of the selectable value.</typeparam>
 #pragma warning disable CA1716 // Type name Select matches a reserved keyword — intentional API name per spec
-public sealed class Select<T> : Node, ISelectNode, IValidatable where T : notnull
+public sealed class Select<T> : Node, ISelectNode, IValidatable, IPumpedNode where T : notnull
 #pragma warning restore CA1716
 {
     /// <summary>
@@ -187,6 +202,7 @@ public sealed class Select<T> : Node, ISelectNode, IValidatable where T : notnul
             return;
         }
         IsOpen = !IsOpen;
+        searchText = "";
         if (IsOpen)
         {
             HighlightedIndex = -1;
@@ -199,9 +215,10 @@ public sealed class Select<T> : Node, ISelectNode, IValidatable where T : notnul
         IsOpen = false;
         HighlightedIndex = -1;
         ScrollOffsetValue = 0;
+        searchText = "";
     }
 
-    int ISelectNode.OptionCount => GetFlatOptions().Count;
+    int ISelectNode.OptionCount => GetVisibleOptions().Count;
 
     int ISelectNode.SelectedIndex
     {
@@ -213,7 +230,7 @@ public sealed class Select<T> : Node, ISelectNode, IValidatable where T : notnul
                 return -1;
             }
 
-            var flat = GetFlatOptions();
+            var flat = GetVisibleOptions();
             for (int i = 0; i < flat.Count; i++)
             {
                 if (EqualityComparer<T>.Default.Equals(flat[i].Value, val))
@@ -228,7 +245,7 @@ public sealed class Select<T> : Node, ISelectNode, IValidatable where T : notnul
 
     string ISelectNode.GetOptionLabel(int index)
     {
-        var flat = GetFlatOptions();
+        var flat = GetVisibleOptions();
         if (index < 0 || index >= flat.Count)
         {
             return string.Empty;
@@ -239,15 +256,106 @@ public sealed class Select<T> : Node, ISelectNode, IValidatable where T : notnul
 
     void ISelectNode.SelectIndex(int index)
     {
-        var flat = GetFlatOptions();
+        var flat = GetVisibleOptions();
         if (index < 0 || index >= flat.Count || IsReadOnly)
         {
             return;
         }
 
+        chosen = (flat[index].Value, flat[index].Label.Resolve());
         Value.OnChange(flat[index].Value);
         IsOpen = false;
         HighlightedIndex = -1;
+        searchText = "";
+    }
+
+    // ── Search (.Searchable), async search, custom rendering ──
+
+    private string searchText = "";
+    private OptionLoader<SelectOption<T>> loader = new();
+    private (T Value, string Label)? chosen;
+    private static readonly TimeSpan SearchDelay = TimeSpan.FromMilliseconds(250);
+
+    bool ISelectNode.IsSearchable => IsSearchable;
+
+    string ISelectNode.SearchText
+    {
+        get => searchText;
+        set
+        {
+            searchText = value;
+            HighlightedIndex = value.Length > 0 ? 0 : -1; // Enter picks the best match
+            ScrollOffsetValue = 0;
+        }
+    }
+
+    /// <summary>
+    /// The options on show: all of them, or those matching the search: an async search's results,
+    /// else the options whose label contains the text.
+    /// </summary>
+    private IReadOnlyList<SelectOption<T>> GetVisibleOptions()
+    {
+        if (!IsSearchable || !IsOpen || searchText.Length == 0)
+        {
+            return GetFlatOptions();
+        }
+        if (AsyncSearchSource is not null)
+        {
+            return loader.Results;
+        }
+        var matches = new List<SelectOption<T>>();
+        foreach (var option in GetFlatOptions())
+        {
+            if (option.Label.Resolve().Contains(searchText, StringComparison.OrdinalIgnoreCase))
+            {
+                matches.Add(option);
+            }
+        }
+        return matches;
+    }
+
+    string? ISelectNode.DropdownStatus
+    {
+        get
+        {
+            if (!IsOpen || !IsSearchable || searchText.Length == 0 || GetVisibleOptions().Count > 0)
+            {
+                return null;
+            }
+            if (AsyncSearchSource is not null && (loader.IsLoading || loader.ResultsQuery != searchText))
+            {
+                return "Loading…";
+            }
+            return loader.Error ?? "No matches";
+        }
+    }
+
+    Node? ISelectNode.RenderOption(int index)
+    {
+        var visible = GetVisibleOptions();
+        return OptionRenderer is { } render && index >= 0 && index < visible.Count ? render(visible[index].Value) : null;
+    }
+
+    Node? ISelectNode.RenderSelected() =>
+        SelectedRenderer is { } render && Value.Value is { } value ? render(value) : null;
+
+    void IPumpedNode.Pump()
+    {
+        if (AsyncSearchSource is { } source && IsOpen && searchText.Length > 0)
+        {
+            loader.Want(searchText, SearchDelay);
+            loader.Pump(source);
+        }
+    }
+
+    void IPumpedNode.AdoptFrom(Node previous)
+    {
+        if (previous is Select<T> old)
+        {
+            searchText = old.searchText;
+            loader = old.loader;
+            chosen = old.chosen;
+        }
     }
 
     private IReadOnlyList<SelectOption<T>> GetFlatOptions()
@@ -310,7 +418,8 @@ public sealed class Select<T> : Node, ISelectNode, IValidatable where T : notnul
                 }
             }
 
-            return val.ToString();
+            // A value picked from an async search's results keeps the label it was picked by.
+            return chosen is { } picked && EqualityComparer<T>.Default.Equals(picked.Value, val) ? picked.Label : val.ToString();
         }
     }
 

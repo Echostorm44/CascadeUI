@@ -792,7 +792,11 @@ public class ModifierRenderTests
 
         node.SelectFilteredIndex(0);
         await Assert.That(chosen).IsEqualTo("b");
-        await Assert.That(node.DisplayText).IsEqualTo("Banana");
+
+        // The app re-renders with the new value: the field shows the label it was picked by.
+        var rerendered = new Combobox<string>(new Bindable<string>(chosen, _ => { })).Options(Search);
+        ((IPumpedNode)rerendered).AdoptFrom(combo);
+        await Assert.That(((IComboboxNode)rerendered).DisplayText).IsEqualTo("Banana");
     }
 
     [Test]
@@ -811,6 +815,90 @@ public class ModifierRenderTests
         }
 
         await Assert.That(rendered.Distinct().Order().ToList()).IsEquivalentTo(["a", "b", "c"]);
+    }
+
+    [Test]
+    public async Task SearchableSelect_FiltersAsYouType_AndEnterPicksTheFirstMatch()
+    {
+        string chosen = "a";
+        var select = new Select<string>(new Bindable<string>("a", v => chosen = v), Fruit).Searchable();
+        ISelectNode node = select;
+        using var app = new RenderHarness(() => select.Width(200));
+        app.Frame();
+        FocusManager.RequestFocus(select);
+        app.Press(Key.Enter);
+        await Assert.That(node.IsOpen).IsTrue();
+
+        foreach (char c in "er")
+        {
+            app.Press(Key.A, character: c);
+        }
+        // "er" matches Cherry only.
+        await Assert.That(node.OptionCount).IsEqualTo(1);
+        await Assert.That(node.GetOptionLabel(0)).IsEqualTo("Cherry");
+
+        app.Press(Key.Backspace);
+        app.Press(Key.Backspace);
+        await Assert.That(node.OptionCount).IsEqualTo(3);
+
+        app.Press(Key.B, character: 'b');
+        app.Press(Key.Enter);
+        await Assert.That(chosen).IsEqualTo("b");
+    }
+
+    [Test]
+    public async Task SearchableSelect_WithAnAsyncSource_ShowsItsResults()
+    {
+        var queries = new List<string>();
+        Task<IEnumerable<SelectOption<string>>> Search(string query)
+        {
+            queries.Add(query);
+            return Task.FromResult<IEnumerable<SelectOption<string>>>([new($"id-{query}", $"Found {query}")]);
+        }
+
+        string chosen = "";
+        var select = new Select<string>(new Bindable<string>("", v => chosen = v), Array.Empty<SelectOption<string>>()).Searchable(Search);
+        ISelectNode node = select;
+        using var app = new RenderHarness(() => select.Width(200));
+        app.Frame();
+        node.ToggleOpen();
+        node.SearchText = "xy";
+        app.Frame();
+        await Assert.That(node.DropdownStatus).IsEqualTo("Loading…");
+
+        await Task.Delay(300);
+        app.Frame();
+        app.Frame();
+        await Assert.That(string.Join(",", queries)).IsEqualTo("xy");
+        await Assert.That(node.GetOptionLabel(0)).IsEqualTo("Found xy");
+
+        node.SelectIndex(0);
+        await Assert.That(chosen).IsEqualTo("id-xy");
+
+        // The app re-renders with the new value: the closed field shows the label it was picked by.
+        var rerendered = new Select<string>(new Bindable<string>(chosen, _ => { }), Array.Empty<SelectOption<string>>()).Searchable(Search);
+        ((IPumpedNode)rerendered).AdoptFrom(select);
+        await Assert.That(((ISelectNode)rerendered).SelectedDisplayText).IsEqualTo("Found xy");
+    }
+
+    [Test]
+    public async Task SelectRenderers_DrawTheAppsContent()
+    {
+        var options = new List<string>();
+        var selected = new List<string>();
+        var select = new Select<string>(new Bindable<string>("b", _ => { }), Fruit)
+            .RenderOption(v => { options.Add(v); return new Label(v); })
+            .RenderSelected(v => { selected.Add(v); return new Label(v.ToUpperInvariant()); });
+        using var app = new RenderHarness(() => select.Width(200));
+        app.Frame();
+        await Assert.That(selected.Distinct().ToList()).IsEquivalentTo(["b"]);
+
+        ((ISelectNode)select).ToggleOpen();
+        for (int i = 0; i < 20; i++)
+        {
+            app.Frame();
+        }
+        await Assert.That(options.Distinct().Order().ToList()).IsEquivalentTo(["a", "b", "c"]);
     }
 
     // Six buttons recording their index when clicked.

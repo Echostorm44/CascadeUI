@@ -7255,7 +7255,26 @@ internal sealed partial class NodePainter
         var selectAnimState = GetDropdownAnimState(node);
         bool reducedMotionSelect = ControlStateAnimator.ReducedMotion;
 
-        if (!string.IsNullOrEmpty(displayText))
+        if (select.IsOpen && select.IsSearchable)
+        {
+            // Searching: the field shows what is typed (or a hint) with a caret.
+            string search = select.SearchText;
+            if (search.Length > 0)
+            {
+                PaintText(search, textBounds, t.PaddingH, t.TextColor.Opacity(opacity), overflow: TextOverflow.Ellipsis);
+            }
+            else
+            {
+                PaintText("Search…", textBounds, t.PaddingH, t.PlaceholderColor.Opacity(opacity), overflow: TextOverflow.Ellipsis);
+            }
+            float caretX = textBounds.X + t.PaddingH + (search.Length > 0 ? ctx.MeasureTextAdvance(search, theme.Typography.Scale.Body.Size).Width : 0f);
+            DrawCaret(new Rect(MathF.Min(caretX, textBounds.Right - 2f), textBounds.Y + 6f, theme.Caret.Width, Math.Max(0f, textBounds.Height - 12f)), theme.Caret.Color);
+        }
+        else if (select.RenderSelected() is { } selectedContent)
+        {
+            PaintOptionContent(selectedContent, textBounds, t.PaddingH);
+        }
+        else if (!string.IsNullOrEmpty(displayText))
         {
             // Detect value change for crossfade
             if (displayText != selectAnimState.CurrentDisplayText)
@@ -7320,7 +7339,7 @@ internal sealed partial class NodePainter
 
         // Dropdown panel — deferred to overlay pass so it paints on top of
         // all sibling nodes, not behind them in the Column's paint order.
-        if ((select.IsOpen || openT > 0.001f) && !select.IsNodeDisabled && select.OptionCount > 0)
+        if ((select.IsOpen || openT > 0.001f) && !select.IsNodeDisabled && (select.OptionCount > 0 || select.DropdownStatus is not null))
         {
             // Capture absolute position of the trigger for the deferred paint
             float absX = absoluteX;
@@ -7411,7 +7430,8 @@ internal sealed partial class NodePainter
     {
         var t = theme.Select;
         var node = (Node)select;
-        int optionCount = select.OptionCount;
+        string? status = select.DropdownStatus;
+        int optionCount = status is null ? select.OptionCount : 1;
         float itemHeight = t.ItemHeight;
 
         // Open animation progress
@@ -7558,10 +7578,21 @@ internal sealed partial class NodePainter
                 PaintCheckMark(checkBounds, theme.Colors.PrimaryText.Opacity(itemOpacity));
             }
 
-            // Option label text
+            // Option label text (or the app's content, or the search's status)
             float textPadding = t.ItemPaddingH + 20f;
             var textColor = (i == selectedIndex ? theme.Colors.PrimaryText : t.TextColor).Opacity(itemOpacity);
-            PaintText(select.GetOptionLabel(i), staggeredBounds, textPadding, textColor);
+            if (status is not null)
+            {
+                PaintText(status, staggeredBounds, textPadding, theme.Colors.TextMuted.Opacity(itemOpacity));
+            }
+            else if (select.RenderOption(i) is { } optionContent)
+            {
+                PaintOptionContent(optionContent, staggeredBounds, textPadding);
+            }
+            else
+            {
+                PaintText(select.GetOptionLabel(i), staggeredBounds, textPadding, textColor);
+            }
 
             itemY += itemHeight;
         }

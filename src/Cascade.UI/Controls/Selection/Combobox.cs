@@ -237,7 +237,7 @@ public sealed class Combobox<T> : Node, IComboboxNode, IValidatable, IPumpedNode
                 }
             }
 
-            return chosenLabel ?? val.ToString();
+            return chosen is { } picked && EqualityComparer<T>.Default.Equals(picked.Value, val) ? picked.Label : val.ToString();
         }
     }
 
@@ -246,7 +246,7 @@ public sealed class Combobox<T> : Node, IComboboxNode, IValidatable, IPumpedNode
     private OptionLoader<SelectOption<T>> loader = new();
 
     // The label of the value chosen from async results, which may not be in the next query's results.
-    private string? chosenLabel;
+    private (T Value, string Label)? chosen;
 
     private static readonly TimeSpan DefaultSearchDelay = TimeSpan.FromMilliseconds(250);
 
@@ -268,7 +268,7 @@ public sealed class Combobox<T> : Node, IComboboxNode, IValidatable, IPumpedNode
         if (previous is Combobox<T> old)
         {
             loader = old.loader;
-            chosenLabel = old.chosenLabel;
+            chosen = old.chosen;
             searchAtOpen = old.searchAtOpen;
         }
     }
@@ -349,7 +349,7 @@ public sealed class Combobox<T> : Node, IComboboxNode, IValidatable, IPumpedNode
             return;
         }
 
-        chosenLabel = filtered[index].Label.Resolve();
+        chosen = (filtered[index].Value, filtered[index].Label.Resolve());
         Value.OnChange(filtered[index].Value);
         IsOpen = false;
         SearchTextValue = "";
@@ -376,7 +376,7 @@ public sealed class Combobox<T> : Node, IComboboxNode, IValidatable, IPumpedNode
             {
                 if (string.Equals(opt.Label.Resolve(), text, StringComparison.OrdinalIgnoreCase))
                 {
-                    chosenLabel = opt.Label.Resolve();
+                    chosen = (opt.Value, opt.Label.Resolve());
                     Value.OnChange(opt.Value);
                     IsOpen = false;
                     SearchTextValue = "";

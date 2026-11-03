@@ -283,7 +283,7 @@ internal static class Win32FilePicker
             }
 
             void* item = null;
-            if (((delegate* unmanaged[Stdcall]<void*, void**, int>)vtable[GetResultSlot])(dialog, &item) < 0 || item == null)
+            if (((delegate* unmanaged[Stdcall]<void*, void**, int>)vtable[GetResultSlot])(dialog, &item) < 0)
             {
                 return null;
             }
@@ -292,7 +292,7 @@ internal static class Win32FilePicker
             {
                 var itemVtable = *(void***)item;
                 char* path = null;
-                if (((delegate* unmanaged[Stdcall]<void*, uint, char**, int>)itemVtable[GetDisplayNameSlot])(item, SigdnFileSysPath, &path) < 0 || path == null)
+                if (((delegate* unmanaged[Stdcall]<void*, uint, char**, int>)itemVtable[GetDisplayNameSlot])(item, SigdnFileSysPath, &path) < 0)
                 {
                     return null;
                 }

@@ -38,6 +38,8 @@ internal sealed class Win32Window : IDisposable
     private nint cursorSizeWE;
     private nint cursorSizeNS;
     private nint cursorIBeam;
+    private nint cursorHand;
+    private nint cursorCross;
 
     // Frameless (App.Window.Chrome = WindowChrome.None): WM_NCCALCSIZE gives the whole window to the
     // client area. The frame styles stay, so DWM keeps the shadow, rounded corners and Snap; a
@@ -290,7 +292,7 @@ internal sealed class Win32Window : IDisposable
 
     /// <summary>
     /// Sets the cursor override kind. 0 = default arrow, 1 = horizontal resize, 2 = vertical resize,
-    /// 3 = text I-beam.
+    /// 3 = text I-beam, 4 = hand (links), 5 = crosshair (picking a colour from the screen).
     /// </summary>
     internal void SetCursorOverride(int kind)
     {
@@ -305,6 +307,8 @@ internal sealed class Win32Window : IDisposable
             1 => cursorSizeWE != 0 ? cursorSizeWE : (cursorSizeWE = Win32.LoadCursorW(0, Win32.IDC_SIZEWE)),
             2 => cursorSizeNS != 0 ? cursorSizeNS : (cursorSizeNS = Win32.LoadCursorW(0, Win32.IDC_SIZENS)),
             3 => cursorIBeam != 0 ? cursorIBeam : (cursorIBeam = Win32.LoadCursorW(0, Win32.IDC_IBEAM)),
+            4 => cursorHand != 0 ? cursorHand : (cursorHand = Win32.LoadCursorW(0, Win32.IDC_HAND)),
+            5 => cursorCross != 0 ? cursorCross : (cursorCross = Win32.LoadCursorW(0, Win32.IDC_CROSS)),
             _ => cursorArrow != 0 ? cursorArrow : (cursorArrow = Win32.LoadCursorW(0, Win32.IDC_ARROW))
         };
         Win32.SetCursor(cursor);
@@ -587,6 +591,26 @@ internal sealed class Win32Window : IDisposable
 
         Win32.ReleaseCapture();
         Win32.SendMessageW(handle, Win32.WM_NCLBUTTONDOWN, (nuint)Win32.HTCAPTION, 0);
+    }
+
+    /// <summary>
+    /// Takes (or gives back) the mouse: while taken, presses anywhere on the screen come to this
+    /// window (the colour picker's eye dropper picking outside it).
+    /// </summary>
+    internal void SetPointerCapture(bool capture)
+    {
+        if (handle == 0)
+        {
+            return;
+        }
+        if (capture)
+        {
+            _ = Win32.SetCapture(handle);
+        }
+        else
+        {
+            Win32.ReleaseCapture();
+        }
     }
 
     /// <summary>Removes (or restores) the caption and borders; see <see cref="frameless"/>.</summary>

@@ -7,7 +7,8 @@ namespace Cascade.UI.Tests.Rendering;
 /// wgpu reports the same way) does not end the app's rendering: the frame that finds the loss
 /// and every frame after it render on the CPU and reach the window through GDI.
 /// </summary>
-[NotInParallel(nameof(DeviceLossTests))]
+// Shares the screen spot of TestWindow with every other test that shows one and reads it back.
+[NotInParallel(nameof(TestWindow))]
 public class DeviceLossTests
 {
     private const int Size = 128;

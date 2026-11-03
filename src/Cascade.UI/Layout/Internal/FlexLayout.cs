@@ -194,6 +194,27 @@ internal static class FlexLayout
             }
         }
 
+        // A Row asked to stretch whose height is unbounded (in scrolling content): the row is as
+        // tall as its tallest child and the others are measured again to fill it, as flexbox's
+        // align-items: stretch does. (Without this nothing stretched: a quote bar or a divider beside
+        // text had no height.) Columns are left as they were: Stretch is their default, and
+        // widening every child of an unbounded column to the widest would change a great many layouts.
+        if (isHorizontal && crossAxisAlignment == CrossAxisAlignment.Stretch
+            && float.IsPositiveInfinity(maxCross) && maxChildCross > 0f)
+        {
+            for (int i = 0; i < childCount; i++)
+            {
+                if (isEmpty[i] || childAllocCrossSizes[i] >= maxChildCross - 0.01f)
+                {
+                    continue;
+                }
+                float main = childAllocMainSizes[i];
+                var stretched = LayoutSolver.MeasureChild(children[i], new LayoutConstraints(main, main, maxChildCross, maxChildCross));
+                childAllocMainSizes[i] = stretched.Width;
+                childAllocCrossSizes[i] = stretched.Height;
+            }
+        }
+
         // ── Phase 4: Compute own size ───────────────────────────────
 
         float totalMain = 0;

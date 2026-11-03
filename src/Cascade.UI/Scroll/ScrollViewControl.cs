@@ -181,6 +181,9 @@ public sealed class ScrollViewControl
         defaultModel = model;
     }
 
+    /// <summary>An auto-scroll mode the content asked for in the last layout (Markdown.AutoScroll).</summary>
+    internal AutoScrollMode ContentAutoScroll { get; set; }
+
     internal void UpdateViewportSize(Size size)
     {
         viewportSize = size;

@@ -431,7 +431,9 @@ public sealed class ScrollView : Node, IPumpedNode
         }
 
         bool grew = control.LastContentHeight >= 0f && contentHeight > control.LastContentHeight + 0.5f;
-        if (grew && (AutoScrollMode == AutoScrollMode.Always || (AutoScrollMode == AutoScrollMode.WhenAtBottom && control.WasAtBottom)))
+        // The view's own mode, or one its content asks for (Markdown.AutoScroll).
+        var mode = AutoScrollMode != AutoScrollMode.None ? AutoScrollMode : control.ContentAutoScroll;
+        if (grew && (mode == AutoScrollMode.Always || (mode == AutoScrollMode.WhenAtBottom && control.WasAtBottom)))
         {
             control.OffsetY = control.MaxY;
         }
@@ -442,6 +444,9 @@ public sealed class ScrollView : Node, IPumpedNode
         control.LastContentHeight = contentHeight;
         control.WasAtBottom = control.OffsetY >= control.MaxY - 1f;
     }
+
+    /// <summary>No taller than the content: the view only scrolls when the content is taller than its maximum height.</summary>
+    internal bool FitContentHeight { get; set; }
 
     /// <summary>Maximum vertical scroll offset (contentHeight − viewportHeight).</summary>
     internal float MaxY { get => Control.MaxY; set => Control.MaxY = value; }

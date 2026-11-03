@@ -114,6 +114,15 @@ internal sealed partial class InputDispatcher
     }
 
     /// <summary>The window-logical bounds of a node in the current tree.</summary>
+    /// <summary>
+    /// Where a table is now, from layout. Its painter-stamped AbsoluteBounds lag a frame: a
+    /// right-click arriving after a layout that moved the table (a label above it wrapping when a
+    /// click changed the selection) but before the next paint hit the wrong row, or none, and no
+    /// menu opened. The stamped bounds are only the fallback for a table not in the tree.
+    /// </summary>
+    private Rect TableBounds(ITabularDataNode table) =>
+        table is Node node && TryGetAbsoluteBounds(node, out var live) ? live : table.AbsoluteBounds;
+
     internal bool TryGetAbsoluteBounds(Node node, out Rect bounds)
     {
         bounds = default;
@@ -196,7 +205,7 @@ internal sealed partial class InputDispatcher
     /// </summary>
     internal bool OpenTabularContextMenu(ITabularDataNode table, int row, Point? pointer)
     {
-        var tableBounds = table.AbsoluteBounds;
+        var tableBounds = TableBounds(table);
         if (!table.HasRowContextMenu || row < 0 || row >= table.RowCount
             || tableBounds.Width <= 0f || tableBounds.Height <= 0f)
         {
@@ -249,7 +258,7 @@ internal sealed partial class InputDispatcher
             return false;
         }
 
-        var bounds = table.AbsoluteBounds;
+        var bounds = TableBounds(table);
         if (evt.X < bounds.X || evt.X >= bounds.Right)
         {
             return false;

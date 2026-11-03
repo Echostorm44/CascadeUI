@@ -426,6 +426,7 @@ public static class App
         // Wire cursor change callback so InputDispatcher can request resize cursors
         orchestrator.Input.RequestCursorChange = kind => window.SetCursorOverride(kind);
         orchestrator.Input.BeginWindowDrag = window.BeginDrag;
+        orchestrator.Input.RequestPointerCapture = window.SetPointerCapture;
 
         // Screen readers: answer WM_GETOBJECT with the window's UI Automation tree. Nothing is
         // built until assistive technology first asks; see UiaProvider.

@@ -982,7 +982,11 @@ internal sealed partial class NodePainter
                 break;
 
             case Markdown md:
-                PaintMarkdown(md, bounds);
+                PaintRecursive(md.Tree);
+                break;
+
+            case MarkdownText mdText:
+                PaintMarkdownText(mdText, bounds);
                 break;
 
             case CommandPalette:
@@ -4502,460 +4506,32 @@ internal sealed partial class NodePainter
 
     // ── Markdown ──────────────────────────────────────────────────────
 
-    private void PaintMarkdown(Markdown md, Rect bounds)
+    /// <summary>
+    /// Markdown's styled text: each laid-out fragment in its span's font and colour, code spans on
+    /// a tinted pill, links in the accent colour and underlined, strikethrough struck.
+    /// </summary>
+    private void PaintMarkdownText(MarkdownText text, Rect bounds)
     {
-        md.AbsoluteBounds = new Rect(absoluteX, absoluteY, bounds.Width, bounds.Height);
-
-        var blocks = md.GetParsedBlocks();
-        if (blocks.Count == 0)
-        {
-            return;
-        }
-
-        md.CodeBlockCopyButtons.Clear();
-
         var colors = theme.Colors;
-        var typo = theme.Typography.Scale;
-        float bodySize = typo.Body.Size;
-        float x = bounds.X;
-        float y = bounds.Y;
-        float maxWidth = bounds.Width;
-        const float blockSpacing = 8f;
-        const float codeBlockPadding = 12f;
-        const float listIndent = 24f;
-        const float blockQuotePadding = 16f;
-        const float blockQuoteBorderWidth = 3f;
-
-        foreach (var block in blocks)
+        var baseColor = text.BaseColor ?? (text.Muted ? colors.TextMuted : colors.Text);
+        foreach (var fragment in text.Fragments)
         {
-            if (y > bounds.Y && block.Type != MarkdownBlockType.HorizontalRule)
+            var span = text.Spans[fragment.Span];
+            float x = bounds.X + fragment.X;
+            float y = bounds.Y + fragment.Y;
+            if (span.Style.HasFlag(MarkdownSpanStyle.Code) && !text.Monospace)
             {
-                y += blockSpacing;
+                string ink = fragment.Text.TrimEnd();
+                float width = ink.Length == fragment.Text.Length ? fragment.Width : MarkdownText.Advance(ink, fragment.FontPath, fragment.FontSize);
+                ctx.DrawRect(new Rect(x - 3f, y, width + 6f, fragment.Height), colors.Text.Opacity(0.08f), radius: 4f);
             }
-
-            switch (block.Type)
-            {
-                case MarkdownBlockType.Heading:
-                {
-                    float fontSize = block.HeadingLevel switch
-                    {
-                        1 => typo.H1.Size,
-                        2 => typo.H2.Size,
-                        3 => typo.H3.Size,
-                        _ => bodySize + 1f,
-                    };
-                    FontWeight weight = block.HeadingLevel <= 3 ? FontWeight.Bold : FontWeight.SemiBold;
-                    string? fontPath = ctx.DefaultFontPath != null
-                        ? ctx.ResolveFontPath(ctx.DefaultFontPath, weight) : null;
-                    float headingHeight = EstimateBlockTextHeight(block.Text, fontSize, maxWidth);
-                    ctx.DrawText(block.Text, MathF.Round(x), MathF.Round(y), fontSize, colors.Text,
-                        fontPath: fontPath, maxWidth: maxWidth);
-                    y += headingHeight + 4f;
-                    break;
-                }
-
-                case MarkdownBlockType.Paragraph:
-                {
-                    float paraHeight = EstimateBlockTextHeight(block.Text, bodySize, maxWidth);
-                    ctx.DrawText(block.Text, MathF.Round(x), MathF.Round(y), bodySize, colors.Text,
-                        maxWidth: maxWidth);
-                    y += paraHeight;
-                    break;
-                }
-
-                case MarkdownBlockType.CodeBlock:
-                {
-                    float codeSize = bodySize - 1f;
-                    float codeLineHeight = codeSize * 1.5f;
-                    int lineCount = 1;
-                    foreach (char c in block.Text)
-                    {
-                        if (c == '\n')
-                        {
-                            lineCount++;
-                        }
-                    }
-
-                    float codeContentHeight = lineCount * codeLineHeight;
-                    bool showLangLabel = md.CodeBlockShowLanguageLabel && block.Language != null;
-                    float labelHeight = showLangLabel ? 20f : 0f;
-                    float totalCodeHeight = codeContentHeight + codeBlockPadding * 2 + labelHeight;
-                    float codeTextMaxWidth = maxWidth - codeBlockPadding * 2;
-
-                    var codeRect = new Rect(x, y, maxWidth, totalCodeHeight);
-                    var codeBg = new ColorValue("#1e1e1e");
-                    ctx.DrawRect(codeRect, codeBg, radius: 6f);
-
-                    float codeY = y + codeBlockPadding;
-
-                    if (showLangLabel)
-                    {
-                        var captionSize = typo.Caption.Size;
-                        ctx.DrawText(block.Language!, x + codeBlockPadding, codeY,
-                            captionSize, new ColorValue("#8b949e"),
-                            maxWidth: codeTextMaxWidth);
-                        codeY += labelHeight;
-                    }
-
-                    bool useHighlight = md.CodeBlockSyntaxHighlight &&
-                        (block.Language is "csharp" or "cs" or "C#" or "c#");
-
-                    string[] codeLines = block.Text.Split('\n');
-                    foreach (string codeLine in codeLines)
-                    {
-                        if (useHighlight)
-                        {
-                            float lineX = x + codeBlockPadding;
-                            var tokens = TokenizeCSharpLine(codeLine);
-                            foreach (var (tokenText, tokenColor) in tokens)
-                            {
-                                if (string.IsNullOrEmpty(tokenText))
-                                {
-                                    continue;
-                                }
-                                float tokenWidth = ctx.MeasureTextAdvance(tokenText, codeSize).Width;
-                                if (lineX + tokenWidth > x + maxWidth - codeBlockPadding)
-                                {
-                                    break;
-                                }
-                                ctx.DrawText(tokenText, lineX, codeY, codeSize, tokenColor);
-                                lineX += tokenWidth;
-                            }
-                        }
-                        else
-                        {
-                            ctx.DrawText(codeLine, x + codeBlockPadding, codeY, codeSize,
-                                new ColorValue("#c9d1d9"),
-                                maxWidth: codeTextMaxWidth);
-                        }
-                        codeY += codeLineHeight;
-                    }
-
-                    if (md.CodeBlockShowCopyButton)
-                    {
-                        float btnSize = 24f;
-                        float btnX = x + maxWidth - codeBlockPadding - btnSize;
-                        float btnY = y + 8f;
-                        var btnRect = new Rect(btnX, btnY, btnSize, btnSize);
-                        int btnIndex = md.CodeBlockCopyButtons.Count;
-
-                        // Determine hover directly from mouse position during paint
-                        var mousePos = InputDispatcher.CurrentMousePosition;
-                        var mdAbs = md.AbsoluteBounds;
-                        bool isHovered = mdAbs.Contains(mousePos) && btnRect.Contains(
-                            new Point(mousePos.X - mdAbs.X, mousePos.Y - mdAbs.Y));
-                        if (isHovered)
-                        {
-                            md.HoveredCopyButtonIndex = btnIndex;
-                        }
-
-                        // Hover background
-                        if (isHovered)
-                        {
-                            ctx.DrawRect(btnRect, new ColorValue("#30363d"), radius: 4f);
-                        }
-                        else
-                        {
-                            ctx.DrawRect(btnRect, new ColorValue("#1e1e1e"), radius: 4f);
-                        }
-
-                        // Draw copy icon (two overlapping squares)
-                        var iconColor = isHovered ? new ColorValue("#c9d1d9") : new ColorValue("#8b949e");
-                        float strokeW = 1.25f;
-                        var iconStroke = new Stroke(iconColor, strokeW, StrokeCap.Round, StrokeJoin.Round);
-
-                        // Back square (offset up-left)
-                        var backRect = new Rect(btnX + 7f, btnY + 4f, 10f, 10f);
-                        ctx.DrawRect(backRect, stroke: iconStroke, radius: 1.5f);
-
-                        // Front square (offset down-right), drawn on top
-                        var frontRect = new Rect(btnX + 4f, btnY + 7f, 10f, 10f);
-                        ctx.DrawRect(frontRect, fill: isHovered ? new ColorValue("#30363d") : new ColorValue("#1e1e1e"), stroke: iconStroke, radius: 1.5f);
-
-                        md.CodeBlockCopyButtons.Add((btnRect, block.Text));
-                    }
-
-                    y += totalCodeHeight;
-                    break;
-                }
-
-                case MarkdownBlockType.BulletList:
-                {
-                    if (block.Items != null)
-                    {
-                        foreach (string item in block.Items)
-                        {
-                            float itemHeight = EstimateBlockTextHeight(item, bodySize, maxWidth - listIndent);
-                            float bulletY = y + bodySize * 0.35f;
-
-                            ctx.DrawCircle(new Point(x + 8f, bulletY), 3f, colors.Text.Opacity(0.6f));
-                            ctx.DrawText(item, MathF.Round(x + listIndent), MathF.Round(y), bodySize, colors.Text,
-                                maxWidth: maxWidth - listIndent);
-                            y += itemHeight;
-                        }
-                    }
-                    break;
-                }
-
-                case MarkdownBlockType.OrderedList:
-                {
-                    if (block.Items != null)
-                    {
-                        for (int i = 0; i < block.Items.Count; i++)
-                        {
-                            string item = block.Items[i];
-                            float itemHeight = EstimateBlockTextHeight(item, bodySize, maxWidth - listIndent);
-
-                            string num = $"{i + 1}.";
-                            ctx.DrawText(num, x + 4f, y, bodySize, colors.Text.Opacity(0.7f));
-                            ctx.DrawText(item, MathF.Round(x + listIndent), MathF.Round(y), bodySize, colors.Text,
-                                maxWidth: maxWidth - listIndent);
-                            y += itemHeight;
-                        }
-                    }
-                    break;
-                }
-
-                case MarkdownBlockType.BlockQuote:
-                {
-                    float quoteWidth = maxWidth - blockQuotePadding - blockQuoteBorderWidth;
-                    float quoteHeight = EstimateBlockTextHeight(block.Text, bodySize, quoteWidth) + 8f;
-
-                    var borderRect = new Rect(x, y, blockQuoteBorderWidth, quoteHeight);
-                    ctx.DrawRect(borderRect, colors.Primary.Opacity(0.5f), radius: 1.5f);
-
-                    float quoteX = x + blockQuoteBorderWidth + blockQuotePadding;
-                    ctx.DrawText(block.Text, MathF.Round(quoteX), MathF.Round(y + 4f), bodySize,
-                        colors.Text.Opacity(0.7f), maxWidth: quoteWidth);
-                    y += quoteHeight;
-                    break;
-                }
-
-                case MarkdownBlockType.HorizontalRule:
-                {
-                    y += 8f;
-                    float ruleY = y + 0.5f;
-                    ctx.DrawRect(new Rect(x, ruleY, maxWidth, 1f), colors.Text.Opacity(0.15f));
-                    y += 9f;
-                    break;
-                }
-            }
+            var color = span.Color ?? (span.Link is not null ? colors.Primary : baseColor);
+            var decoration = span.Style.HasFlag(MarkdownSpanStyle.Strike) ? TextDecoration.Strikethrough
+                : span.Link is not null || span.Style.HasFlag(MarkdownSpanStyle.Underline) ? TextDecoration.Underline
+                : TextDecoration.None;
+            ctx.DrawText(fragment.Text, MathF.Round(x), MathF.Round(y), fragment.FontSize, color,
+                fontPath: fragment.FontPath, noWrap: true, decoration: decoration);
         }
-    }
-
-    private static List<(string Text, ColorValue Color)> TokenizeCSharpLine(string line)
-    {
-        var result = new List<(string, ColorValue)>();
-        if (string.IsNullOrEmpty(line))
-        {
-            result.Add((line ?? string.Empty, new ColorValue("#c9d1d9")));
-            return result;
-        }
-
-        string[] csharpKeywords =
-        [
-            "abstract", "as", "base", "bool", "break", "byte", "case", "catch",
-            "char", "checked", "class", "const", "continue", "decimal", "default",
-            "delegate", "do", "double", "else", "enum", "event", "explicit",
-            "extern", "false", "finally", "fixed", "float", "for", "foreach",
-            "goto", "if", "implicit", "in", "int", "interface", "internal",
-            "is", "lock", "long", "namespace", "new", "null", "object", "operator",
-            "out", "override", "params", "private", "protected", "public",
-            "readonly", "ref", "return", "sbyte", "sealed", "short", "sizeof",
-            "stackalloc", "static", "string", "struct", "switch", "this", "throw",
-            "true", "try", "typeof", "uint", "ulong", "unchecked", "unsafe",
-            "ushort", "using", "virtual", "void", "volatile", "while", "var",
-            "async", "await", "get", "set", "init", "record", "required",
-            "when", "yield", "add", "remove", "value", "nameof", "not", "and", "or"
-        ];
-
-        var keywordSet = new HashSet<string>(csharpKeywords, StringComparer.Ordinal);
-        int i = 0;
-
-        while (i < line.Length)
-        {
-            char c = line[i];
-
-            // Single-line comment
-            if (c == '/' && i + 1 < line.Length && line[i + 1] == '/')
-            {
-                result.Add((line[i..], new ColorValue("#8b949e")));
-                break;
-            }
-
-            // String literal
-            if (c == '"')
-            {
-                int start = i;
-                i++;
-                while (i < line.Length)
-                {
-                    if (line[i] == '"' && (i == start + 1 || line[i - 1] != '\\'))
-                    {
-                        i++;
-                        break;
-                    }
-                    i++;
-                }
-                int end = i;
-                while (i < line.Length && IsCSharpDefaultChar(line[i]))
-                {
-                    i++;
-                }
-                result.Add((line[start..i], new ColorValue("#a5d6ff")));
-                continue;
-            }
-
-            // Verbatim or interpolated string start
-            if (c == '@' || c == '$')
-            {
-                int start = i;
-                i++;
-                if (i < line.Length && line[i] == '"')
-                {
-                    i++;
-                    while (i < line.Length)
-                    {
-                        if (line[i] == '"' && (i + 1 >= line.Length || line[i + 1] != '"'))
-                        {
-                            i++;
-                            break;
-                        }
-                        if (line[i] == '"' && i + 1 < line.Length && line[i + 1] == '"')
-                        {
-                            i += 2;
-                            continue;
-                        }
-                        i++;
-                    }
-                    int end = i;
-                    while (i < line.Length && IsCSharpDefaultChar(line[i]))
-                    {
-                        i++;
-                    }
-                    result.Add((line[start..i], new ColorValue("#a5d6ff")));
-                    continue;
-                }
-                else
-                {
-                    i = start + 1;
-                    int end = i;
-                    while (i < line.Length && IsCSharpDefaultChar(line[i]))
-                    {
-                        i++;
-                    }
-                    result.Add((line[start..i], new ColorValue("#c9d1d9")));
-                    continue;
-                }
-            }
-
-            // Number
-            if (char.IsDigit(c) || (c == '.' && i + 1 < line.Length && char.IsDigit(line[i + 1])))
-            {
-                int start = i;
-                i++;
-                while (i < line.Length && (char.IsDigit(line[i]) || line[i] == '.' || line[i] == 'f' || line[i] == 'F' || line[i] == 'd' || line[i] == 'D' || line[i] == 'm' || line[i] == 'M' || line[i] == 'l' || line[i] == 'L' || line[i] == 'u' || line[i] == 'U' || line[i] == 'x' || line[i] == 'X' || line[i] == '_'))
-                {
-                    i++;
-                }
-                int end = i;
-                while (i < line.Length && IsCSharpDefaultChar(line[i]))
-                {
-                    i++;
-                }
-                result.Add((line[start..i], new ColorValue("#79c0ff")));
-                continue;
-            }
-
-            // Identifier or keyword
-            if (char.IsLetter(c) || c == '_')
-            {
-                int start = i;
-                i++;
-                while (i < line.Length && (char.IsLetterOrDigit(line[i]) || line[i] == '_'))
-                {
-                    i++;
-                }
-                int end = i;
-                while (i < line.Length && IsCSharpDefaultChar(line[i]))
-                {
-                    i++;
-                }
-                string word = line[start..end];
-                ColorValue color;
-                if (keywordSet.Contains(word))
-                {
-                    color = new ColorValue("#ff7b72");
-                }
-                else if (char.IsUpper(word[0]))
-                {
-                    color = new ColorValue("#ffa657");
-                }
-                else
-                {
-                    color = new ColorValue("#c9d1d9");
-                }
-                result.Add((line[start..i], color));
-                continue;
-            }
-
-            // Whitespace and punctuation - group consecutive default chars
-            int defaultStart = i;
-            i++;
-            while (i < line.Length && IsCSharpDefaultChar(line[i]))
-            {
-                i++;
-            }
-            result.Add((line[defaultStart..i], new ColorValue("#c9d1d9")));
-        }
-
-        return result;
-    }
-
-    private static bool IsCSharpDefaultChar(char c)
-    {
-        if (c == '/' || c == '"' || c == '@' || c == '$')
-        {
-            return false;
-        }
-        if (char.IsDigit(c) || char.IsLetter(c) || c == '_')
-        {
-            return false;
-        }
-        return true;
-    }
-
-    private float EstimateBlockTextHeight(string text, float fontSize, float maxWidth)
-    {
-        float lineHeight = fontSize * 1.4f;
-        if (string.IsNullOrEmpty(text))
-        {
-            return lineHeight;
-        }
-
-        if (ctx.DefaultFontPath != null)
-        {
-            var options = new TextLayoutOptions
-            {
-                FontPath = ctx.DefaultFontPath,
-                FontSize = fontSize,
-                MaxWidth = maxWidth,
-            };
-            var result = TextLayoutEngine.Layout(text, options);
-            return result.BoundingBox.Height;
-        }
-
-        var measured = ctx.MeasureText(text, fontSize);
-        if (measured.Width > 0)
-        {
-            int lineCount = maxWidth > 0 ? (int)Math.Ceiling(measured.Width / maxWidth) : 1;
-            return Math.Max(lineCount, 1) * lineHeight;
-        }
-
-        float estimatedWidth = text.Length * fontSize * 0.55f;
-        int lines = maxWidth > 0 && estimatedWidth > maxWidth
-            ? (int)Math.Ceiling(estimatedWidth / maxWidth) : 1;
-        return lines * lineHeight;
     }
 
     private void PaintCommandPaletteOverlay()
@@ -12386,200 +11962,324 @@ internal sealed partial class NodePainter
 
     // ── ColorPicker ───────────────────────────────────────────────────
 
+    // The colour surfaces are small textures drawn scaled (smooth, and one draw each, where the
+    // square used to be thousands of 2px rectangles a frame). The ones that follow the hue are
+    // remade only when it changes.
+    private static ImageSource? hueStrip;
+    private static (float Hue, ImageSource Image)? sbSquare;
+    private static (float Hue, ImageSource Image)? sbTriangle;
+    private static (int Ratio, ImageSource Image)? hueRing;
+
+    private static byte SrgbByte(float v) => (byte)MathF.Round(Math.Clamp(v, 0f, 1f) * 255f);
+
+    private static ImageSource HueStrip()
+    {
+        if (hueStrip is { } strip)
+        {
+            return strip;
+        }
+        const int w = 360;
+        var px = new byte[w * 4];
+        for (int x = 0; x < w; x++)
+        {
+            var (r, g, b) = ColorMath.HsbToRgb(x + 0.5f, 1f, 1f);
+            px[x * 4] = SrgbByte(r);
+            px[x * 4 + 1] = SrgbByte(g);
+            px[x * 4 + 2] = SrgbByte(b);
+            px[x * 4 + 3] = 255;
+        }
+        return hueStrip = ImageSource.FromPixels(px, w, 1);
+    }
+
+    private static ImageSource SaturationBrightnessSquare(float hue)
+    {
+        float key = MathF.Round(hue * 2f) / 2f;
+        if (sbSquare is { } cached && cached.Hue == key)
+        {
+            return cached.Image;
+        }
+        const int n = 64;
+        var px = new byte[n * n * 4];
+        for (int y = 0; y < n; y++)
+        {
+            for (int x = 0; x < n; x++)
+            {
+                var (r, g, b) = ColorMath.HsbToRgb(key, x / (n - 1f), 1f - y / (n - 1f));
+                int i = (y * n + x) * 4;
+                px[i] = SrgbByte(r);
+                px[i + 1] = SrgbByte(g);
+                px[i + 2] = SrgbByte(b);
+                px[i + 3] = 255;
+            }
+        }
+        cached = (key, ImageSource.FromPixels(px, n, n));
+        sbSquare?.Image.Dispose();
+        sbSquare = cached;
+        return cached.Image;
+    }
+
+    // The hue ring, red at the top going clockwise; inner radius as a fraction of the outer.
+    private static ImageSource HueRing(float innerFraction)
+    {
+        int ratio = (int)MathF.Round(innerFraction * 100f);
+        if (hueRing is { } cached && cached.Ratio == ratio)
+        {
+            return cached.Image;
+        }
+        const int n = 256;
+        float outer = n / 2f, inner = outer * ratio / 100f;
+        var px = new byte[n * n * 4];
+        for (int y = 0; y < n; y++)
+        {
+            for (int x = 0; x < n; x++)
+            {
+                float dx = x + 0.5f - outer, dy = y + 0.5f - outer;
+                float d = MathF.Sqrt(dx * dx + dy * dy);
+                float coverage = Math.Clamp(outer - d, 0f, 1f) * Math.Clamp(d - inner, 0f, 1f);
+                if (coverage <= 0f)
+                {
+                    continue;
+                }
+                float angle = MathF.Atan2(dx, -dy) * 180f / MathF.PI;
+                var (r, g, b) = ColorMath.HsbToRgb(angle < 0f ? angle + 360f : angle, 1f, 1f);
+                int i = (y * n + x) * 4;
+                px[i] = SrgbByte(r);
+                px[i + 1] = SrgbByte(g);
+                px[i + 2] = SrgbByte(b);
+                px[i + 3] = SrgbByte(coverage);
+            }
+        }
+        cached = (ratio, ImageSource.FromPixels(px, n, n));
+        hueRing?.Image.Dispose();
+        hueRing = cached;
+        return cached.Image;
+    }
+
+    // The saturation/brightness triangle for a hue, drawn over the square that bounds its circle.
+    private static ImageSource SaturationBrightnessTriangle(float hue)
+    {
+        float key = MathF.Round(hue * 2f) / 2f;
+        if (sbTriangle is { } cached && cached.Hue == key)
+        {
+            return cached.Image;
+        }
+        const int n = 160;
+        float r = n / 2f;
+        var hueCorner = new Point(r, 0f);
+        var white = new Point(r - r * 0.8660254f, r * 1.5f);
+        var black = new Point(r + r * 0.8660254f, r * 1.5f);
+        float det = (white.Y - black.Y) * (hueCorner.X - black.X) + (black.X - white.X) * (hueCorner.Y - black.Y);
+        var px = new byte[n * n * 4];
+        for (int y = 0; y < n; y++)
+        {
+            for (int x = 0; x < n; x++)
+            {
+                float fx = x + 0.5f, fy = y + 0.5f;
+                float wh = ((white.Y - black.Y) * (fx - black.X) + (black.X - white.X) * (fy - black.Y)) / det;
+                float ww = ((black.Y - hueCorner.Y) * (fx - black.X) + (hueCorner.X - black.X) * (fy - black.Y)) / det;
+                float wb = 1f - wh - ww;
+                // Edge anti-aliasing: about a pixel of fade past each side.
+                float edge = MathF.Min(wh, MathF.Min(ww, wb)) * n * 0.75f;
+                float coverage = Math.Clamp(edge + 0.5f, 0f, 1f);
+                if (coverage <= 0f)
+                {
+                    continue;
+                }
+                float cwh = Math.Clamp(wh, 0f, 1f), cww = Math.Clamp(ww, 0f, 1f);
+                float brightness = Math.Clamp(cwh + cww, 0f, 1f);
+                float saturation = brightness <= 0f ? 0f : Math.Clamp(cwh / brightness, 0f, 1f);
+                var (cr, cg, cb) = ColorMath.HsbToRgb(key, saturation, brightness);
+                int i = (y * n + x) * 4;
+                px[i] = SrgbByte(cr);
+                px[i + 1] = SrgbByte(cg);
+                px[i + 2] = SrgbByte(cb);
+                px[i + 3] = SrgbByte(coverage);
+            }
+        }
+        cached = (key, ImageSource.FromPixels(px, n, n));
+        sbTriangle?.Image.Dispose();
+        sbTriangle = cached;
+        return cached.Image;
+    }
+
+    private void PaintChecker(Rect rect, float radius)
+    {
+        using var clip = ctx.PushClip(rect);
+        ctx.DrawRect(rect, ColorValue.FromRgba(1f, 1f, 1f), radius: radius);
+        const float cell = 5f;
+        var dark = ColorValue.FromRgba(0.8f, 0.8f, 0.8f);
+        for (float y = rect.Y; y < rect.Bottom; y += cell)
+        {
+            for (float x = rect.X + ((int)((y - rect.Y) / cell) % 2 == 0 ? 0f : cell); x < rect.Right; x += cell * 2f)
+            {
+                ctx.DrawRect(new Rect(x, y, MathF.Min(cell, rect.Right - x), MathF.Min(cell, rect.Bottom - y)), dark);
+            }
+        }
+    }
+
+    private void PaintPickerThumb(Point at, ColorValue fill)
+    {
+        ctx.DrawCircle(at, 7f, fill: fill, stroke: new Stroke(ColorValue.FromRgba(1f, 1f, 1f), 2f));
+        ctx.DrawCircle(at, 9f, stroke: new Stroke(ColorValue.FromRgba(0f, 0f, 0f, 0.3f), 1f));
+    }
+
     private void PaintColorPicker(ColorPicker cp, Rect bounds)
     {
-        cp.AbsoluteBounds = new Rect(absoluteX, absoluteY, bounds.Width, bounds.Height);
-        var currentColor = cp.Value.Value;
-        var t = theme.TextInput;
+        cp.Sync();
+        var g = ColorPickerGeometry.Arrange(cp, bounds.Width);
+        var colors = theme.Colors;
+        float radius = theme.TextInput.Radius;
+        using var opacity = cp.IsDisabled ? ctx.PushOpacity(0.5f) : default;
+        using var shift = ctx.PushTranslate(bounds.X, bounds.Y);
 
-        // Initialize HSB from the current color on first paint
-        if (!cp.HsbInitialized)
+        ctx.DrawRect(new Rect(0, 0, bounds.Width, bounds.Height), colors.Surface, radius: radius);
+        ctx.DrawRect(new Rect(0, 0, bounds.Width, bounds.Height), stroke: new Stroke(colors.Border, 1f), radius: radius);
+
+        var current = cp.Current;
+        var opaque = ColorMath.FromHsb(cp.Hue, cp.Saturation, cp.Brightness, 1f);
+        var hueColor = ColorMath.FromHsb(cp.Hue, 1f, 1f, 1f);
+        float small = theme.Typography.Scale.Caption.Size;
+
+        // Mode tabs
+        for (int i = 0; i < g.Tabs.Count; i++)
         {
-            var (h, s, b) = ColorToHsb(currentColor);
-            cp.Hue = h;
-            cp.Saturation = s;
-            cp.Brightness = b;
-            cp.HsbInitialized = true;
+            var tab = g.Tabs[i];
+            bool selected = i == cp.ModeIndex;
+            ctx.DrawRect(tab, selected ? colors.Primary : colors.SurfaceAlt, radius: 5f);
+            string label = cp.Modes[i] switch
+            {
+                ColorPickerMode.Wheel => "Wheel",
+                ColorPickerMode.Sliders => "Sliders",
+                _ => "Square",
+            };
+            var size = ctx.MeasureText(label, small);
+            ctx.DrawText(label, MathF.Round(tab.X + (tab.Width - size.Width) / 2f), MathF.Round(tab.Y + (tab.Height - size.Height) / 2f),
+                small, selected ? colors.TextOnPrimary : colors.Text);
         }
 
-        // Outer container background
-        ctx.DrawRect(bounds, theme.Colors.Surface, radius: t.Radius);
-        ctx.DrawRect(bounds, stroke: new Stroke(theme.Colors.Border, 1f), radius: t.Radius);
-
-        const float pad = 8f;
-        float innerX = bounds.X + pad;
-        float innerY = bounds.Y + pad;
-        float innerW = bounds.Width - pad * 2;
-        const float canvasHeight = 130f;
-        const float hueBarH = 14f;
-
-        // ── Saturation/Brightness canvas ──────────────────────────────
-        var canvasBounds = new Rect(innerX, innerY, innerW, canvasHeight);
-
-        // Paint a 2D grid of solid HSB colors — each cell is a single opaque color.
-        // This avoids alpha compositing artifacts that cause visible banding.
-        const float cellSize = 2f;
-        int cols = (int)MathF.Ceiling(innerW / cellSize);
-        int rows = (int)MathF.Ceiling(canvasHeight / cellSize);
-        float currentHue = cp.Hue;
-
-        for (int row = 0; row < rows; row++)
+        switch (cp.Mode)
         {
-            float brightness = 1f - (row + 0.5f) / rows;
-            float cy = innerY + row * cellSize;
-            float ch = (row == rows - 1) ? (canvasBounds.Bottom - cy) : cellSize;
-
-            for (int col = 0; col < cols; col++)
+            case ColorPickerMode.Wheel:
             {
-                float saturation = (col + 0.5f) / cols;
-                float cx = innerX + col * cellSize;
-                float cw = (col == cols - 1) ? (canvasBounds.Right - cx) : cellSize;
-
-                // HSB to sRGB inline
-                float c = brightness * saturation;
-                float hp = currentHue / 60f;
-                float x = c * (1f - MathF.Abs(hp % 2f - 1f));
-                float m = brightness - c;
-                float cr, cg, cb;
-                if (hp < 1f) { cr = c + m; cg = x + m; cb = m; }
-                else if (hp < 2f) { cr = x + m; cg = c + m; cb = m; }
-                else if (hp < 3f) { cr = m; cg = c + m; cb = x + m; }
-                else if (hp < 4f) { cr = m; cg = x + m; cb = c + m; }
-                else if (hp < 5f) { cr = x + m; cg = m; cb = c + m; }
-                else { cr = c + m; cg = m; cb = x + m; }
-
-                ctx.DrawRect(new Rect(cx, cy, cw, ch), ColorValue.FromRgba(cr, cg, cb, 1f));
+                float ring = g.WheelOuter * 2f;
+                ctx.DrawImage(HueRing(g.WheelInner / g.WheelOuter), new Rect(g.WheelCenter.X - g.WheelOuter, g.WheelCenter.Y - g.WheelOuter, ring, ring));
+                float tr = g.WheelInner - 6f;
+                ctx.DrawImage(SaturationBrightnessTriangle(cp.Hue), new Rect(g.WheelCenter.X - tr, g.WheelCenter.Y - tr, tr * 2f, tr * 2f));
+                float angle = cp.Hue * MathF.PI / 180f;
+                float mid = (g.WheelOuter + g.WheelInner) / 2f;
+                PaintPickerThumb(new Point(g.WheelCenter.X + MathF.Sin(angle) * mid, g.WheelCenter.Y - MathF.Cos(angle) * mid), hueColor);
+                PaintPickerThumb(g.TrianglePoint(cp.Saturation, cp.Brightness), opaque);
+                break;
+            }
+            case ColorPickerMode.Sliders:
+            {
+                var (r, gg, b) = ColorMath.HsbToRgb(cp.Hue, cp.Saturation, cp.Brightness);
+                float[] channels = [r, gg, b];
+                string[] names = ["R", "G", "B"];
+                for (int i = 0; i < g.Channels.Count; i++)
+                {
+                    var bar = g.Channels[i];
+                    float[] low = [.. channels], high = [.. channels];
+                    low[i] = 0f;
+                    high[i] = 1f;
+                    ctx.DrawText(names[i], MathF.Round(ColorPickerGeometry.Pad), MathF.Round(bar.Y + (bar.Height - small * 1.3f) / 2f), small, colors.TextMuted);
+                    PaintBrush(Brush.Linear(Gradient.Linear(new Point(bar.X, 0), new Point(bar.Right, 0),
+                        new GradientStop(0f, ColorValue.FromRgba(low[0], low[1], low[2])),
+                        new GradientStop(1f, ColorValue.FromRgba(high[0], high[1], high[2])))), bar, bar.Height / 2f);
+                    PaintPickerThumb(new Point(bar.X + channels[i] * bar.Width, bar.Y + bar.Height / 2f), opaque);
+                    string value = ((int)MathF.Round(channels[i] * 255f)).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    var vs = ctx.MeasureText(value, small);
+                    ctx.DrawText(value, MathF.Round(bounds.Width - ColorPickerGeometry.Pad - vs.Width), MathF.Round(bar.Y + (bar.Height - vs.Height) / 2f), small, colors.Text);
+                }
+                break;
+            }
+            default:
+            {
+                ctx.DrawImage(SaturationBrightnessSquare(cp.Hue), g.Canvas);
+                ctx.DrawRect(g.Canvas, stroke: new Stroke(colors.Border.Opacity(0.3f), 1f), radius: 2f);
+                PaintPickerThumb(new Point(g.Canvas.X + cp.Saturation * g.Canvas.Width, g.Canvas.Y + (1f - cp.Brightness) * g.Canvas.Height), opaque);
+                ctx.DrawImage(HueStrip(), g.HueBar);
+                ctx.DrawRect(g.HueBar, stroke: new Stroke(colors.Border.Opacity(0.2f), 1f), radius: 2f);
+                PaintPickerThumb(new Point(g.HueBar.X + cp.Hue / 360f * g.HueBar.Width, g.HueBar.Y + g.HueBar.Height / 2f), hueColor);
+                break;
             }
         }
 
-        // Canvas border
-        ctx.DrawRect(canvasBounds, stroke: new Stroke(theme.Colors.Border.Opacity(0.3f), 1f),
-            radius: t.Radius);
-
-        // SB indicator circle
-        float indicatorX = innerX + cp.Saturation * innerW;
-        float indicatorY = innerY + (1f - cp.Brightness) * canvasHeight;
-        ctx.DrawCircle(new Point(indicatorX, indicatorY), 7f,
-            fill: currentColor,
-            stroke: new Stroke(ColorValue.FromRgba(1f, 1f, 1f, 1f), 2f));
-        ctx.DrawCircle(new Point(indicatorX, indicatorY), 9f,
-            stroke: new Stroke(ColorValue.FromRgba(0f, 0f, 0f, 0.3f), 1f));
-
-        // ── Hue bar below the canvas ──────────────────────────────────
-        float hueBarY = innerY + canvasHeight + 8f;
-        var hueBarBounds = new Rect(innerX, hueBarY, innerW, hueBarH);
-        PaintHueBar(hueBarBounds, hueBarH / 2f);
-
-        // Hue indicator circle
-        float hueFrac = cp.Hue / 360f;
-        float hueIndX = innerX + hueFrac * innerW;
-        float hueIndCY = hueBarY + hueBarH / 2f;
-        ctx.DrawCircle(new Point(hueIndX, hueIndCY), 7f,
-            fill: HueToColor(cp.Hue),
-            stroke: new Stroke(ColorValue.FromRgba(1f, 1f, 1f, 1f), 2f));
-        ctx.DrawCircle(new Point(hueIndX, hueIndCY), 9f,
-            stroke: new Stroke(ColorValue.FromRgba(0f, 0f, 0f, 0.3f), 1f));
-
-        // ── Hex label below hue bar ───────────────────────────────────
-        float labelY = hueBarY + hueBarH + 10f;
-        string hexStr = currentColor.ToHex();
-        float labelFontSize = 13f;
-        var labelSize = ctx.MeasureText(hexStr, labelFontSize);
-        float labelX = innerX + (innerW - labelSize.Width) / 2f;
-        ctx.DrawText(hexStr, MathF.Round(labelX), MathF.Round(labelY),
-            labelFontSize, theme.Colors.Text);
-    }
-
-    private static (float h, float s, float b) ColorToHsb(ColorValue color)
-    {
-        if (color.A <= 0f)
+        if (g.Opacity.Width > 0f)
         {
-            return (0f, 0f, 0f);
+            PaintChecker(g.Opacity, g.Opacity.Height / 2f);
+            PaintBrush(Brush.Linear(Gradient.Linear(new Point(g.Opacity.X, 0), new Point(g.Opacity.Right, 0),
+                new GradientStop(0f, opaque.Opacity(0f)), new GradientStop(1f, opaque))), g.Opacity, 0f);
+            ctx.DrawRect(g.Opacity, stroke: new Stroke(colors.Border.Opacity(0.3f), 1f), radius: 2f);
+            PaintPickerThumb(new Point(g.Opacity.X + cp.Alpha * g.Opacity.Width, g.Opacity.Y + g.Opacity.Height / 2f), current);
         }
 
-        // Unpremultiply and convert linear → sRGB
-        float invA = 1f / color.A;
-        float sR = PainterLinearToSrgb(color.R * invA);
-        float sG = PainterLinearToSrgb(color.G * invA);
-        float sB = PainterLinearToSrgb(color.B * invA);
-
-        float max = MathF.Max(sR, MathF.Max(sG, sB));
-        float min = MathF.Min(sR, MathF.Min(sG, sB));
-        float delta = max - min;
-
-        float h = 0f;
-        float s = max > 0f ? delta / max : 0f;
-        float b = max;
-
-        if (delta > 0.001f)
+        // Value row
+        PaintChecker(g.Preview, 4f);
+        ctx.DrawRect(g.Preview, current, radius: 4f);
+        ctx.DrawRect(g.Preview, stroke: new Stroke(colors.Border, 1f), radius: 4f);
+        if (g.Format.Width > 0f)
         {
-            if (max == sR)
+            ctx.DrawRect(g.Format, colors.SurfaceAlt, radius: 5f);
+            string name = cp.Format.ToString().ToUpperInvariant();
+            var ns = ctx.MeasureText(name, small);
+            ctx.DrawText(name, MathF.Round(g.Format.X + (g.Format.Width - ns.Width) / 2f), MathF.Round(g.Format.Y + (g.Format.Height - ns.Height) / 2f), small, colors.Text);
+        }
+        bool focused = ReferenceEquals(FocusManager.FocusedElement, cp);
+        bool editing = cp.EditText is not null;
+        bool invalid = editing && ColorMath.Parse(cp.EditText!, cp.EditText!.TrimStart().StartsWith('#') ? ColorFormat.Hex : cp.Format) is null;
+        ctx.DrawRect(g.Value, colors.Background, radius: 5f);
+        ctx.DrawRect(g.Value, stroke: new Stroke(invalid ? colors.Danger : editing || focused ? colors.Focus : colors.Border, editing || focused ? 1.5f : 1f), radius: 5f);
+        string text = cp.ValueText;
+        float textSize = theme.Typography.Scale.Body.Size - 1f;
+        // A long value (OKLCH, rgba with alpha) shrinks to fit the box rather than being cut off.
+        float room = g.Value.Width - 18f;
+        float natural = ctx.MeasureTextAdvance(text, textSize).Width;
+        if (natural > room && natural > 0f)
+        {
+            textSize = Math.Max(9f, textSize * room / natural);
+        }
+        var ts = ctx.MeasureText(text, textSize);
+        using (ctx.PushClip(g.Value))
+        {
+            ctx.DrawText(text, MathF.Round(g.Value.X + 8f), MathF.Round(g.Value.Y + (g.Value.Height - ts.Height) / 2f), textSize, colors.Text);
+            if (editing)
             {
-                h = 60f * (((sG - sB) / delta) % 6f);
-            }
-            else if (max == sG)
-            {
-                h = 60f * (((sB - sR) / delta) + 2f);
-            }
-            else
-            {
-                h = 60f * (((sR - sG) / delta) + 4f);
-            }
-
-            if (h < 0f)
-            {
-                h += 360f;
+                float caretX = g.Value.X + 8f + ctx.MeasureTextAdvance(text, textSize).Width + 1f;
+                ctx.DrawRect(new Rect(caretX, g.Value.Y + 6f, 1.5f, g.Value.Height - 12f), colors.Text);
             }
         }
-
-        return (h, s, b);
-    }
-
-    private static float PainterLinearToSrgb(float linear)
-    {
-        linear = MathF.Max(0f, MathF.Min(1f, linear));
-        if (linear <= 0.0031308f)
+        if (g.EyeDropper.Width > 0f)
         {
-            return linear * 12.92f;
+            ctx.DrawRect(g.EyeDropper, cp.IsPickingFromScreen ? colors.Primary : colors.SurfaceAlt, radius: 5f);
+            PaintIconBitmap(Icons.Pipette, g.EyeDropper.X + g.EyeDropper.Width / 2f, g.EyeDropper.Y + g.EyeDropper.Height / 2f, 16f, 1f,
+                cp.IsPickingFromScreen ? colors.TextOnPrimary : colors.Text, 1.75f);
         }
 
-        return 1.055f * MathF.Pow(linear, 1.0f / 2.4f) - 0.055f;
-    }
-
-    private void PaintHueBar(Rect bounds, float radius)
-    {
-        // Draw a hue spectrum bar using 24 segments for smooth appearance
-        const int segments = 24;
-        float segW = bounds.Width / segments;
-
-        for (int i = 0; i < segments; i++)
+        // Swatches
+        string currentHex = current.ToHex();
+        void Swatch(Rect rect, ColorValue color)
         {
-            var midColor = HueToColor(360f * (i + 0.5f) / segments);
-            float sx = bounds.X + i * segW;
-            float sw = (i == segments - 1) ? (bounds.Right - sx) : segW;
-            ctx.DrawRect(new Rect(sx, bounds.Y, sw, bounds.Height), midColor);
+            PaintChecker(rect, 4f);
+            ctx.DrawRect(rect, color, radius: 4f);
+            bool chosen = color.ToHex() == currentHex;
+            ctx.DrawRect(rect, stroke: new Stroke(chosen ? colors.Focus : colors.Border, chosen ? 2f : 1f), radius: 4f);
         }
-
-        // Round corners via border overlay
-        ctx.DrawRect(bounds, stroke: new Stroke(theme.Colors.Border.Opacity(0.2f), 1f), radius: radius);
-    }
-
-    private static ColorValue HueToColor(float hue)
-    {
-        // Convert hue (0-360) to RGB with full saturation and brightness
-        float h = hue / 60f;
-        float c = 1f;
-        float x = 1f - MathF.Abs(h % 2f - 1f);
-
-        float r, g, b;
-        if (h < 1f) { r = c; g = x; b = 0f; }
-        else if (h < 2f) { r = x; g = c; b = 0f; }
-        else if (h < 3f) { r = 0f; g = c; b = x; }
-        else if (h < 4f) { r = 0f; g = x; b = c; }
-        else if (h < 5f) { r = x; g = 0f; b = c; }
-        else { r = c; g = 0f; b = x; }
-
-        return ColorValue.FromRgba(r, g, b, 1f);
+        var saved = cp.SavedSwatches?.Value ?? [];
+        for (int i = 0; i < g.Saved.Count && i < saved.Count; i++)
+        {
+            Swatch(g.Saved[i], saved[i]);
+        }
+        if (g.AddSwatch.Width > 0f)
+        {
+            ctx.DrawRect(g.AddSwatch, stroke: new Stroke(colors.Border, 1f), radius: 4f);
+            PaintIconBitmap(Icons.Plus, g.AddSwatch.X + g.AddSwatch.Width / 2f, g.AddSwatch.Y + g.AddSwatch.Height / 2f, 12f, 1f, colors.TextMuted, 1.75f);
+        }
+        var recent = cp.RecentShown;
+        for (int i = 0; i < g.Recent.Count && i < recent.Count; i++)
+        {
+            Swatch(g.Recent[i], recent[i]);
+        }
     }
 
     // ── PinInput ──────────────────────────────────────────────────────

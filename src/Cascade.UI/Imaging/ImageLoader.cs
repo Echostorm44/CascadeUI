@@ -59,6 +59,9 @@ internal static class ImageLoader
     private static readonly ConcurrentDictionary<string, byte> InFlight = new(StringComparer.Ordinal);
     private static readonly Lazy<HttpClient> Http = new(() => new HttpClient { Timeout = TimeSpan.FromSeconds(30) });
 
+    /// <summary>The HTTP client for downloads (images, Markdown sources).</summary>
+    internal static HttpClient SharedHttp => Http.Value;
+
     /// <summary>
     /// The picture for <paramref name="sourceKey"/> decoded with <paramref name="options"/>, or null while
     /// it loads (or when it failed). <paramref name="start"/> false only looks (a lazy image off screen).

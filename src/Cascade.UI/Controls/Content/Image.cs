@@ -29,9 +29,9 @@ public sealed class Image : Node, IPumpedNode
     }
 
     /// <summary>
-    /// Creates an image from a URL. NOT IMPLEMENTED: there is no async URL
-    /// loader yet, so this renders nothing. Download the bytes yourself and use
-    /// the byte-array or <see cref="ImageSource"/> constructor instead.
+    /// Creates an image from a URL, downloaded and decoded in the background (lazily by
+    /// default: when it comes near the view). Show something meanwhile with
+    /// <see cref="Placeholder"/>, and on failure with <see cref="OnError"/>.
     /// </summary>
     /// <param name="url">The image URL.</param>
     /// <param name="placeholder">Placeholder required for disambiguation.</param>

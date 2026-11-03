@@ -158,6 +158,8 @@ internal static partial class Win32
     internal const int IDC_ARROW = 32512;
     internal const int IDC_SIZEWE = 32644;
     internal const int IDC_IBEAM = 32513;
+    internal const int IDC_HAND = 32649;
+    internal const int IDC_CROSS = 32515;
     internal const int IDC_SIZENS = 32645;
 
     // ── SetWindowPos Flags ───────────────────────────────────────────
@@ -645,6 +647,12 @@ internal static partial class Win32
 
     [LibraryImport("user32", EntryPoint = "ReleaseDC")]
     internal static partial int ReleaseDC(nint hWnd, nint hDC);
+
+    [LibraryImport("gdi32", EntryPoint = "GetPixel")]
+    internal static partial uint GetPixel(nint hdc, int x, int y);
+
+    [LibraryImport("user32", EntryPoint = "SetCapture")]
+    internal static partial nint SetCapture(nint hWnd);
 
     [LibraryImport("user32", EntryPoint = "PrintWindow")]
     [return: MarshalAs(UnmanagedType.Bool)]

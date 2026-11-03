@@ -1,17 +1,18 @@
 namespace Cascade.UI;
 
 /// <summary>
-/// Renders Markdown source text as a native Cascade node tree. Text is laid
-/// out by HarfBuzz. Code blocks use tree-sitter for syntax highlighting.
-/// Images use the <see cref="Image"/> control. The output is fully themed,
-/// accessible, selectable, and indistinguishable from hand-authored layout.
+/// Renders Markdown as a native Cascade node tree: headings, paragraphs with bold, italic,
+/// strikethrough, code and links, images (the <see cref="Image"/> control), fenced and indented
+/// code with syntax colouring, nested and task lists, block quotes, tables and rules. Inline HTML
+/// is shown as typed unless <see cref="AllowHtml"/> enables a safe subset.
 /// </summary>
-public sealed class Markdown : Node
+public sealed class Markdown : Node, IPumpedNode
 {
     /// <summary>
-    /// Creates a Markdown renderer from source text.
+    /// Creates a Markdown renderer from source text, or from a file when
+    /// <paramref name="source"/> is the path of one that exists.
     /// </summary>
-    /// <param name="source">Markdown source string.</param>
+    /// <param name="source">Markdown source string, or a file path.</param>
     public Markdown(string source)
     {
         if (System.IO.File.Exists(source))
@@ -41,7 +42,7 @@ public sealed class Markdown : Node
     }
 
     /// <summary>
-    /// Creates a Markdown renderer that loads from a URL asynchronously.
+    /// Creates a Markdown renderer that loads from a URL in the background.
     /// </summary>
     /// <param name="url">URL to fetch the Markdown content from.</param>
     /// <param name="fromUrl">Disambiguator (unused).</param>
@@ -84,41 +85,331 @@ public sealed class Markdown : Node
     internal MarkdownAutoScrollMode AutoScrollMode { get; set; } = MarkdownAutoScrollMode.Never;
     internal bool HtmlAllowed { get; set; }
 
-    // ── Copy button tracking for code blocks (set during paint) ──────
+    // ── Built state ───────────────────────────────────────────────────
 
-    internal List<(Rect Bounds, string CodeText)> CodeBlockCopyButtons { get; set; } = [];
-    internal int HoveredCopyButtonIndex { get; set; } = -1;
-    internal Rect AbsoluteBounds { get; set; }
+    private string? builtSource;
+    private CascadeTheme? builtTheme;
+    private Node? tree;
+    private List<MarkdownBlock> blocks = [];
+    private List<Node> blockNodes = [];
+    private readonly List<(MarkdownHeading Heading, Node Node)> headings = [];
+    private readonly HashSet<string> visibleHeadings = new(StringComparer.Ordinal);
+    private Task<string>? loading;
+    private string? loaded;
 
-    // ── Parsed block tree (lazily built) ─────────────────────────────
+    /// <summary>The ScrollView this was last laid out in (set by layout), for anchors, auto-scroll and heading visibility.</summary>
+    internal ScrollView? EnclosingScrollView { get; set; }
 
-    internal List<MarkdownBlock>? ParsedBlocks { get; set; }
+    /// <summary>How many times the tree was built from scratch (streaming appends rebuild only the tail).</summary>
+    internal int FullBuilds { get; private set; }
 
-    /// <summary>
-    /// Gets the resolved source text from whichever source was provided.
-    /// File and URL sources are not yet supported at runtime; returns null.
-    /// </summary>
-    internal string? ResolvedSource => BindableSource?.Value ?? Source;
+    /// <summary>The source text in use: the bindable's, the given text, or a loaded file or URL.</summary>
+    internal string? ResolvedSource => BindableSource?.Value ?? Source ?? loaded;
 
-    /// <summary>
-    /// Ensures the parsed blocks are available. Call this from layout/paint.
-    /// </summary>
+    /// <summary>The headings of the built document, in order, with their anchor ids.</summary>
+    internal IReadOnlyList<(MarkdownHeading Heading, Node Node)> Headings
+    {
+        get
+        {
+            _ = Tree;
+            return headings;
+        }
+    }
+
+    /// <summary>The node tree the document is drawn as (built on first use, rebuilt when the source changes).</summary>
+    internal Node Tree
+    {
+        get
+        {
+            string source = ResolvedSource ?? string.Empty;
+            if (tree is null || !string.Equals(source, builtSource, StringComparison.Ordinal) || !ReferenceEquals(builtTheme, ThemeSwitcher.Current))
+            {
+                Build(source);
+            }
+            return tree!;
+        }
+    }
+
+    /// <summary>The parsed blocks (built with the tree).</summary>
     internal List<MarkdownBlock> GetParsedBlocks()
     {
-        if (ParsedBlocks != null)
+        _ = Tree;
+        return blocks;
+    }
+
+    private void Build(string source)
+    {
+        var theme = ThemeSwitcher.Current;
+
+        // Streaming: when the text only grew, the blocks before the last stay as built and only
+        // the tail is parsed again (the last block may still be growing).
+        if (StreamingEnabled && tree is not null && builtSource is { Length: > 0 } previous
+            && ReferenceEquals(builtTheme, theme) && blocks.Count > 0
+            && source.StartsWith(previous, StringComparison.Ordinal))
         {
-            return ParsedBlocks;
+            int keep = blocks.Count - 1;
+            int tailStart = blocks[keep].Start;
+            var tail = MarkdownBlockParser.Parse(source[tailStart..], tailStart);
+            headings.RemoveAll(h => !blockNodes.Take(keep).Any(n => ContainsNode(n, h.Node)));
+            var builder = new MarkdownBuilder(this, theme, headings);
+            blocks = [.. blocks.Take(keep), .. tail];
+            blockNodes = [.. blockNodes.Take(keep), .. tail.Select(b => builder.Block(b))];
+        }
+        else
+        {
+            FullBuilds++;
+            headings.Clear();
+            blocks = MarkdownBlockParser.Parse(source, 0);
+            var builder = new MarkdownBuilder(this, theme, headings);
+            blockNodes = [.. blocks.Select(b => builder.Block(b))];
         }
 
-        string? source = ResolvedSource;
-        if (string.IsNullOrEmpty(source))
+        tree = new Column(spacing: 12f, children: [.. blockNodes]);
+        builtSource = source;
+        builtTheme = theme;
+    }
+
+    private static bool ContainsNode(Node root, Node target)
+    {
+        if (ReferenceEquals(root, target))
         {
-            ParsedBlocks = [];
-            return ParsedBlocks;
+            return true;
+        }
+        var children = NodeDiffer.GetChildren(root);
+        for (int i = 0; i < children.Count; i++)
+        {
+            if (ContainsNode(children[i], target))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void IPumpedNode.Pump()
+    {
+        // A file or URL source loads in the background; the text is taken when it arrives.
+        if (loaded is null && loading is null && (SourcePath is not null || SourceUrl is not null))
+        {
+            var ui = SynchronizationContext.Current;
+            loading = SourcePath is { } path ? LoadFileAsync(path, ui) : LoadUrlAsync(SourceUrl!, ui);
+        }
+        if (loading is { IsCompleted: true } done)
+        {
+            loaded = done.IsCompletedSuccessfully ? done.Result : $"*Could not load {SourcePath ?? SourceUrl}.*";
+            loading = null;
         }
 
-        ParsedBlocks = MarkdownBlockParser.Parse(source);
-        return ParsedBlocks;
+        NoteVisibleHeadings();
+    }
+
+    void IPumpedNode.AdoptFrom(Node previous)
+    {
+        if (previous is not Markdown old || ReferenceEquals(old, this))
+        {
+            return;
+        }
+
+        // The same document re-rendered keeps its tree (and the state of the controls in it).
+        if (old.SourcePath == SourcePath && old.SourceUrl == SourceUrl)
+        {
+            loading = old.loading;
+            loaded = old.loaded;
+        }
+        if (old.tree is not null && SameOptions(old))
+        {
+            tree = old.tree;
+            builtSource = old.builtSource;
+            builtTheme = old.builtTheme;
+            blocks = old.blocks;
+            blockNodes = old.blockNodes;
+            headings.AddRange(old.headings);
+            FullBuilds = old.FullBuilds;
+            foreach (var (_, node) in headings)
+            {
+                RetargetOwner(node);
+            }
+            RetargetOwner(tree);
+        }
+        visibleHeadings.UnionWith(old.visibleHeadings);
+    }
+
+    // The built text nodes hand their link clicks to whichever Markdown now owns them.
+    private void RetargetOwner(Node node)
+    {
+        if (node is MarkdownText text)
+        {
+            text.Owner = this;
+        }
+        var children = NodeDiffer.GetChildren(node);
+        for (int i = 0; i < children.Count; i++)
+        {
+            RetargetOwner(children[i]);
+        }
+    }
+
+    private bool SameOptions(Markdown other) =>
+        other.CodeBlockSyntaxHighlight == CodeBlockSyntaxHighlight && other.CodeBlockShowLanguageLabel == CodeBlockShowLanguageLabel
+        && other.CodeBlockShowCopyButton == CodeBlockShowCopyButton && other.CodeBlockCopyButtonLabel == CodeBlockCopyButtonLabel
+        && other.CodeBlockLineNumbers == CodeBlockLineNumbers && other.CodeBlockMaxHeight == CodeBlockMaxHeight
+        && other.CodeBlockWrapLines == CodeBlockWrapLines && other.ImagesLazyLoad == ImagesLazyLoad
+        && other.ImagesMaxWidth == ImagesMaxWidth && other.ImagesBorderRadius == ImagesBorderRadius
+        && other.ImagesBaseUrl == ImagesBaseUrl && other.HtmlAllowed == HtmlAllowed && other.StreamingEnabled == StreamingEnabled;
+
+    private static async Task<string> LoadFileAsync(string path, SynchronizationContext? ui)
+    {
+        try
+        {
+            return await System.IO.File.ReadAllTextAsync(path).ConfigureAwait(false);
+        }
+        finally
+        {
+            Wake(ui);
+        }
+    }
+
+    private static async Task<string> LoadUrlAsync(string url, SynchronizationContext? ui)
+    {
+        try
+        {
+            return await Imaging.ImageLoader.SharedHttp.GetStringAsync(new Uri(url)).ConfigureAwait(false);
+        }
+        finally
+        {
+            Wake(ui);
+        }
+    }
+
+    // Frame scheduling is UI-thread affine: a load finishing elsewhere asks for the frame from there.
+    private static void Wake(SynchronizationContext? ui)
+    {
+        if (ui is not null)
+        {
+            ui.Post(static _ => SharedScheduler.Instance.RequestFrame(), null);
+        }
+        else
+        {
+            SharedScheduler.Instance.RequestFrame();
+        }
+    }
+
+    // ── Headings, anchors and links ─────────────────────────────────
+
+    private void NoteVisibleHeadings()
+    {
+        if (HeadingVisibleHandler is null || tree is null || headings.Count == 0)
+        {
+            return;
+        }
+
+        float top, bottom;
+        if (EnclosingScrollView is { } sv)
+        {
+            if (!HitTester.TryGetAbsoluteBounds(sv.Content, this, out var self))
+            {
+                return;
+            }
+            top = sv.OffsetY - self.Y;
+            bottom = top + sv.Control.ViewportSize.Height;
+        }
+        else
+        {
+            if (LayoutData.Bounds.Height <= 0f)
+            {
+                return;
+            }
+            top = 0f;
+            bottom = float.PositiveInfinity;
+        }
+
+        foreach (var (heading, node) in headings)
+        {
+            if (!HitTester.TryGetAbsoluteBounds(tree, node, out var b) || b.Height <= 0f)
+            {
+                continue;
+            }
+            bool visible = b.Bottom > top && b.Y < bottom;
+            if (visible && visibleHeadings.Add(heading.AnchorId))
+            {
+                HeadingVisibleHandler(heading);
+            }
+            else if (!visible)
+            {
+                visibleHeadings.Remove(heading.AnchorId);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Scrolls the enclosing <see cref="ScrollView"/> so the heading with <paramref name="anchorId"/>
+    /// is at the top. Returns false when there is no such heading or no ScrollView around this.
+    /// </summary>
+    public bool ScrollToHeading(string anchorId)
+    {
+        ArgumentNullException.ThrowIfNull(anchorId);
+        string id = anchorId.TrimStart('#');
+        if (EnclosingScrollView is not { } sv || tree is null)
+        {
+            return false;
+        }
+        foreach (var (heading, node) in headings)
+        {
+            if (string.Equals(heading.AnchorId, id, StringComparison.OrdinalIgnoreCase)
+                && HitTester.TryGetAbsoluteBounds(sv.Content, node, out var b))
+            {
+                var content = sv.Content.LayoutData;
+                _ = sv.Control.ScrollToAsync(sv.OffsetX, b.Y - content.Bounds.Y - content.Padding.Top);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>A link in the document was clicked.</summary>
+    internal void ActivateLink(string link)
+    {
+        if (link.StartsWith('#') && HeadingAnchorsEnabled && ScrollToHeading(link))
+        {
+            return;
+        }
+        if (LinkClickHandler is { } handler)
+        {
+            handler(link);
+            return;
+        }
+        if (link.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            || link.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+            || link.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase))
+        {
+            App.OpenUrl(link);
+        }
+    }
+
+    /// <summary>Where an image source points: absolute, against the base URL, or beside a file source.</summary>
+    internal string ResolveImageSource(string src)
+    {
+        if (Uri.TryCreate(src, UriKind.Absolute, out var absolute) && absolute.Scheme is "http" or "https" or "file")
+        {
+            return absolute.IsFile ? absolute.LocalPath : src;
+        }
+        if (ImagesBaseUrl is { } baseUrl)
+        {
+            if (Uri.TryCreate(baseUrl.EndsWith('/') ? baseUrl : baseUrl + "/", UriKind.Absolute, out var root)
+                && Uri.TryCreate(root, src, out var combined))
+            {
+                return combined.IsFile ? combined.LocalPath : combined.ToString();
+            }
+            return System.IO.Path.Combine(baseUrl, src);
+        }
+        if (SourcePath is { } path && System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(path)) is { } dir)
+        {
+            return System.IO.Path.Combine(dir, src);
+        }
+        if (SourceUrl is { } url && Uri.TryCreate(new Uri(url), src, out var beside))
+        {
+            return beside.ToString();
+        }
+        return src;
     }
 
     // ── Code blocks ───────────────────────────────────────────────────
@@ -145,7 +436,10 @@ public sealed class Markdown : Node
 
     // ── Link handling ─────────────────────────────────────────────────
 
-    /// <summary>Callback for intercepting link clicks.</summary>
+    /// <summary>
+    /// Callback for link clicks. Without one, web and mail links open in the system browser or
+    /// mail app; with <see cref="HeadingAnchors"/>, links to <c>#heading</c> scroll to it first.
+    /// </summary>
     public Markdown OnLinkClick(Action<string> handler)
     {
         LinkClickHandler = handler;
@@ -163,7 +457,7 @@ public sealed class Markdown : Node
         return this;
     }
 
-    /// <summary>Sets the base URL for resolving relative image paths.</summary>
+    /// <summary>Sets the base URL (or folder) for resolving relative image paths.</summary>
     public Markdown BaseUrl(string baseUrl)
     {
         ImagesBaseUrl = baseUrl;
@@ -172,7 +466,10 @@ public sealed class Markdown : Node
 
     // ── Heading anchors ───────────────────────────────────────────────
 
-    /// <summary>Adds anchor IDs to headings for scroll targeting.</summary>
+    /// <summary>
+    /// Gives headings anchor ids (GitHub style: lower case, dashes, numbered when repeated), so
+    /// links to <c>#anchor</c> scroll to them and <see cref="ScrollToHeading"/> can find them.
+    /// </summary>
     public Markdown HeadingAnchors(bool enabled)
     {
         HeadingAnchorsEnabled = enabled;
@@ -190,7 +487,7 @@ public sealed class Markdown : Node
 
     /// <summary>
     /// Optimizes rendering for content that is appended to frequently
-    /// (e.g., AI-generated token-by-token output).
+    /// (e.g., AI-generated token-by-token output): only the last block is parsed and built again.
     /// </summary>
     public Markdown StreamingMode(bool enabled)
     {
@@ -198,7 +495,7 @@ public sealed class Markdown : Node
         return this;
     }
 
-    /// <summary>Controls auto-scrolling behavior for streaming content.</summary>
+    /// <summary>Keeps the enclosing ScrollView at the bottom as the content grows.</summary>
     public Markdown AutoScroll(MarkdownAutoScrollMode mode)
     {
         AutoScrollMode = mode;
@@ -207,7 +504,11 @@ public sealed class Markdown : Node
 
     // ── Security ──────────────────────────────────────────────────────
 
-    /// <summary>Enables or disables HTML passthrough (default: disabled).</summary>
+    /// <summary>
+    /// Enables a safe subset of inline HTML (default: disabled, tags show as typed): line breaks,
+    /// bold, italic, underline, strikethrough, code, kbd, links and images. Scripts, styles and
+    /// other tags are never run or applied.
+    /// </summary>
     public Markdown AllowHtml(bool enabled)
     {
         HtmlAllowed = enabled;
@@ -265,7 +566,8 @@ public enum MarkdownAutoScrollMode
 public static class MarkdownParser
 {
     /// <summary>
-    /// Extracts headings from a Markdown document for table-of-contents generation.
+    /// Extracts headings from a Markdown document for table-of-contents generation (not lines
+    /// inside code blocks). Anchor ids repeat GitHub's: a second "Intro" is "intro-1".
     /// </summary>
     /// <param name="source">Markdown source text.</param>
     /// <returns>Ordered list of headings discovered in the document.</returns>
@@ -274,45 +576,42 @@ public static class MarkdownParser
         ArgumentNullException.ThrowIfNull(source);
 
         var headings = new List<MarkdownHeading>();
-        var lines = source.Split('\n');
-        foreach (var rawLine in lines)
+        var used = new Dictionary<string, int>(StringComparer.Ordinal);
+        void Collect(IEnumerable<MarkdownBlock> blocks)
         {
-            var line = rawLine.Trim();
-            if (line.Length == 0)
+            foreach (var block in blocks)
             {
-                continue;
+                if (block.Type == MarkdownBlockType.Heading)
+                {
+                    string title = MarkdownInlineParser.StripMarkers(block.Text).Trim();
+                    if (title.Length > 0)
+                    {
+                        headings.Add(new MarkdownHeading(title, block.HeadingLevel, UniqueAnchor(title, used)));
+                    }
+                }
+                if (block.Children is { } children)
+                {
+                    Collect(children);
+                }
             }
-
-            int level = 0;
-            while (level < line.Length && line[level] == '#')
-            {
-                level++;
-            }
-
-            if (level == 0 || level > 6)
-            {
-                continue;
-            }
-
-            if (line.Length <= level || line[level] != ' ')
-            {
-                continue;
-            }
-
-            string title = line[(level + 1)..].Trim();
-            if (title.Length == 0)
-            {
-                continue;
-            }
-
-            string anchor = GenerateAnchorId(title);
-            headings.Add(new MarkdownHeading(title, level, anchor));
         }
-
+        Collect(MarkdownBlockParser.Parse(source, 0));
         return headings;
     }
 
-    private static string GenerateAnchorId(string title)
+    internal static string UniqueAnchor(string title, Dictionary<string, int> used)
+    {
+        string anchor = GenerateAnchorId(title);
+        if (used.TryGetValue(anchor, out int count))
+        {
+            used[anchor] = count + 1;
+            return $"{anchor}-{count}";
+        }
+        used[anchor] = 1;
+        return anchor;
+    }
+
+    internal static string GenerateAnchorId(string title)
     {
         var builder = new System.Text.StringBuilder(title.Length);
         bool lastWasDash = false;
@@ -350,325 +649,509 @@ internal enum MarkdownBlockType
     OrderedList,
     BlockQuote,
     HorizontalRule,
+    Table,
 }
 
-/// <summary>A single parsed block from a Markdown document.</summary>
+/// <summary>Column alignment in a Markdown table.</summary>
+internal enum MarkdownTableAlign
+{
+    Default,
+    Left,
+    Center,
+    Right,
+}
+
+/// <summary>A list item: its blocks, and its check state when it is a task (- [ ] / - [x]).</summary>
+internal sealed class MarkdownListItem
+{
+    public List<MarkdownBlock> Blocks { get; init; } = [];
+    public bool? Task { get; init; }
+}
+
+/// <summary>A single parsed block from a Markdown document. <see cref="Text"/> keeps its inline Markdown.</summary>
 internal sealed class MarkdownBlock
 {
     public MarkdownBlockType Type { get; init; }
     public int HeadingLevel { get; init; }
     public string Text { get; init; } = string.Empty;
     public string? Language { get; init; }
-    public List<string>? Items { get; init; }
+
+    /// <summary>The offset of the block's first line in the whole source.</summary>
+    public int Start { get; init; }
+
+    /// <summary>List items (lists).</summary>
+    public List<MarkdownListItem>? ListItems { get; init; }
+
+    /// <summary>The number the first item of an ordered list shows.</summary>
+    public int StartNumber { get; init; } = 1;
+
+    /// <summary>Nested blocks (block quotes).</summary>
+    public List<MarkdownBlock>? Children { get; init; }
+
+    /// <summary>Table rows (the first is the header) and column alignments.</summary>
+    public List<string[]>? Rows { get; init; }
+    public MarkdownTableAlign[]? Alignments { get; init; }
+
+    /// <summary>The list item texts (the first paragraph of each), for simple inspection.</summary>
+    public List<string>? Items => ListItems?.Select(i => i.Blocks.FirstOrDefault()?.Text ?? string.Empty).ToList();
 }
 
 /// <summary>
-/// Simple Markdown parser that converts source text into a list of blocks.
-/// Handles headings, paragraphs, code blocks, lists, blockquotes, and horizontal rules.
-/// Inline formatting markers (bold, italic, code) are stripped for plain text rendering.
+/// Splits Markdown source into blocks (CommonMark's block structure, plus GitHub tables, task
+/// lists and strikethrough): ATX and setext headings, fenced (``` and ~~~) and indented code,
+/// block quotes holding any blocks, bullet and ordered lists nesting by indentation, rules,
+/// tables and paragraphs. An unclosed fence runs to the end (text still streaming in).
 /// </summary>
 internal static class MarkdownBlockParser
 {
-    internal static List<MarkdownBlock> Parse(string source)
+    internal static List<MarkdownBlock> Parse(string source, int baseOffset)
+    {
+        var lines = new List<string>();
+        var starts = new List<int>();
+        int pos = 0;
+        while (pos <= source.Length)
+        {
+            int nl = source.IndexOf('\n', pos);
+            int end = nl < 0 ? source.Length : nl;
+            lines.Add(source[pos..end].TrimEnd('\r').Replace("\t", "    ", StringComparison.Ordinal));
+            starts.Add(baseOffset + pos);
+            if (nl < 0)
+            {
+                break;
+            }
+            pos = nl + 1;
+        }
+        return ParseLines(lines, starts);
+    }
+
+    private static List<MarkdownBlock> ParseLines(List<string> lines, List<int> starts)
     {
         var blocks = new List<MarkdownBlock>();
-        var lines = source.Split('\n');
         int i = 0;
-
-        while (i < lines.Length)
+        while (i < lines.Count)
         {
-            string line = lines[i].TrimEnd('\r');
-            string trimmed = line.TrimStart();
-
-            // Blank line — skip
+            string line = lines[i];
             if (string.IsNullOrWhiteSpace(line))
             {
                 i++;
                 continue;
             }
 
-            // Horizontal rule: --- or *** or ___ (3+ of same char)
-            if (IsHorizontalRule(trimmed))
+            int indent = Indent(line);
+            string trimmed = line.TrimStart();
+            int start = starts[i];
+
+            // Indented code: four spaces (not continuing a paragraph, which is handled there).
+            if (indent >= 4)
             {
-                blocks.Add(new MarkdownBlock { Type = MarkdownBlockType.HorizontalRule });
-                i++;
+                var code = new List<string>();
+                while (i < lines.Count && (Indent(lines[i]) >= 4 || string.IsNullOrWhiteSpace(lines[i])))
+                {
+                    code.Add(lines[i].Length >= 4 ? lines[i][4..] : string.Empty);
+                    i++;
+                }
+                while (code.Count > 0 && string.IsNullOrWhiteSpace(code[^1]))
+                {
+                    code.RemoveAt(code.Count - 1);
+                }
+                blocks.Add(new MarkdownBlock { Type = MarkdownBlockType.CodeBlock, Text = string.Join('\n', code), Start = start });
                 continue;
             }
 
-            // Heading: # through ######
-            if (trimmed.Length > 0 && trimmed[0] == '#')
+            if (IsFence(trimmed, out char fenceChar, out int fenceLength))
             {
-                int level = 0;
-                while (level < trimmed.Length && trimmed[level] == '#')
-                {
-                    level++;
-                }
-
-                if (level <= 6 && level < trimmed.Length && trimmed[level] == ' ')
-                {
-                    string headingText = StripInlineFormatting(trimmed[(level + 1)..].Trim());
-                    blocks.Add(new MarkdownBlock
-                    {
-                        Type = MarkdownBlockType.Heading,
-                        HeadingLevel = level,
-                        Text = headingText,
-                    });
-                    i++;
-                    continue;
-                }
-            }
-
-            // Fenced code block: ```
-            if (trimmed.StartsWith("```", StringComparison.Ordinal))
-            {
-                string lang = trimmed.Length > 3 ? trimmed[3..].Trim() : string.Empty;
-                var codeLines = new System.Text.StringBuilder();
+                string info = trimmed[fenceLength..].Trim();
+                var code = new List<string>();
                 i++;
-                while (i < lines.Length)
+                while (i < lines.Count)
                 {
-                    string codeLine = lines[i].TrimEnd('\r');
-                    if (codeLine.TrimStart().StartsWith("```", StringComparison.Ordinal))
+                    string t = lines[i].TrimStart();
+                    if (IsFence(t, out char closeChar, out int closeLength) && closeChar == fenceChar && closeLength >= fenceLength && t[closeLength..].Trim().Length == 0)
                     {
                         i++;
                         break;
                     }
-
-                    if (codeLines.Length > 0)
-                    {
-                        codeLines.Append('\n');
-                    }
-
-                    codeLines.Append(codeLine);
+                    code.Add(lines[i].Length >= indent && Indent(lines[i]) >= indent ? lines[i][indent..] : lines[i].TrimStart());
                     i++;
                 }
-
+                string language = info.Split(' ', 2)[0];
                 blocks.Add(new MarkdownBlock
                 {
                     Type = MarkdownBlockType.CodeBlock,
-                    Text = codeLines.ToString(),
-                    Language = lang.Length > 0 ? lang : null,
+                    Text = string.Join('\n', code),
+                    Language = language.Length > 0 ? language : null,
+                    Start = start,
                 });
                 continue;
             }
 
-            // Blockquote: > text
-            if (trimmed.StartsWith("> ", StringComparison.Ordinal))
+            if (IsRule(trimmed))
             {
-                var quoteLines = new System.Text.StringBuilder();
-                while (i < lines.Length)
-                {
-                    string ql = lines[i].TrimEnd('\r').TrimStart();
-                    if (!ql.StartsWith("> ", StringComparison.Ordinal) && !ql.StartsWith('>'))
-                    {
-                        break;
-                    }
-
-                    if (quoteLines.Length > 0)
-                    {
-                        quoteLines.Append(' ');
-                    }
-
-                    string quoteText = ql.StartsWith("> ", StringComparison.Ordinal)
-                        ? ql[2..] : ql[1..];
-                    quoteLines.Append(quoteText);
-                    i++;
-                }
-
-                blocks.Add(new MarkdownBlock
-                {
-                    Type = MarkdownBlockType.BlockQuote,
-                    Text = StripInlineFormatting(quoteLines.ToString().Trim()),
-                });
+                blocks.Add(new MarkdownBlock { Type = MarkdownBlockType.HorizontalRule, Start = start });
+                i++;
                 continue;
             }
 
-            // Bullet list: - item or * item
-            if ((trimmed.StartsWith("- ", StringComparison.Ordinal) ||
-                 trimmed.StartsWith("* ", StringComparison.Ordinal)) && !IsHorizontalRule(trimmed))
+            if (AtxHeading(trimmed, out int level, out string headingText))
             {
-                var items = new List<string>();
-                while (i < lines.Length)
+                blocks.Add(new MarkdownBlock { Type = MarkdownBlockType.Heading, HeadingLevel = level, Text = headingText, Start = start });
+                i++;
+                continue;
+            }
+
+            if (trimmed.StartsWith('>'))
+            {
+                var inner = new List<string>();
+                var innerStarts = new List<int>();
+                while (i < lines.Count && !string.IsNullOrWhiteSpace(lines[i]))
                 {
-                    string ll = lines[i].TrimEnd('\r').TrimStart();
-                    if (ll.StartsWith("- ", StringComparison.Ordinal) ||
-                        ll.StartsWith("* ", StringComparison.Ordinal))
+                    string t = lines[i].TrimStart();
+                    if (t.StartsWith('>'))
                     {
-                        items.Add(StripInlineFormatting(ll[2..].Trim()));
-                        i++;
+                        inner.Add(t.Length > 1 && t[1] == ' ' ? t[2..] : t[1..]);
+                    }
+                    else if (inner.Count > 0 && !StartsBlock(t))
+                    {
+                        inner.Add(t); // lazy continuation of the quoted paragraph
                     }
                     else
                     {
                         break;
                     }
+                    innerStarts.Add(starts[i]);
+                    i++;
                 }
-
-                blocks.Add(new MarkdownBlock
-                {
-                    Type = MarkdownBlockType.BulletList,
-                    Items = items,
-                });
+                blocks.Add(new MarkdownBlock { Type = MarkdownBlockType.BlockQuote, Children = ParseLines(inner, innerStarts), Start = start });
                 continue;
             }
 
-            // Ordered list: 1. item
-            if (char.IsDigit(trimmed[0]) && trimmed.Contains(". ", StringComparison.Ordinal))
+            if (ListMarker(line, out bool ordered, out int number, out int contentColumn, out char delimiter))
             {
-                int dotIdx = trimmed.IndexOf(". ", StringComparison.Ordinal);
-                if (dotIdx > 0 && dotIdx <= 3 && int.TryParse(trimmed[..dotIdx], out _))
-                {
-                    var items = new List<string>();
-                    while (i < lines.Length)
-                    {
-                        string ll = lines[i].TrimEnd('\r').TrimStart();
-                        int di = ll.IndexOf(". ", StringComparison.Ordinal);
-                        if (di > 0 && di <= 3 && char.IsDigit(ll[0]) && int.TryParse(ll[..di], out _))
-                        {
-                            items.Add(StripInlineFormatting(ll[(di + 2)..].Trim()));
-                            i++;
-                        }
-                        else
-                        {
-                            break;
-                        }
-                    }
-
-                    blocks.Add(new MarkdownBlock
-                    {
-                        Type = MarkdownBlockType.OrderedList,
-                        Items = items,
-                    });
-                    continue;
-                }
+                blocks.Add(ParseList(lines, starts, ref i, ordered, number, delimiter, indent));
+                continue;
             }
 
-            // Paragraph: collect consecutive non-blank lines
+            if (i + 1 < lines.Count && trimmed.Contains('|', StringComparison.Ordinal) && TableSeparator(lines[i + 1], out var alignments))
             {
-                var paraLines = new System.Text.StringBuilder();
-                while (i < lines.Length)
+                var rows = new List<string[]> { Cells(trimmed, alignments.Length) };
+                i += 2;
+                while (i < lines.Count && !string.IsNullOrWhiteSpace(lines[i]) && lines[i].Contains('|', StringComparison.Ordinal))
                 {
-                    string pl = lines[i].TrimEnd('\r');
-                    if (string.IsNullOrWhiteSpace(pl) || pl.TrimStart().StartsWith('#')
-                        || pl.TrimStart().StartsWith("```", StringComparison.Ordinal)
-                        || pl.TrimStart().StartsWith("> ", StringComparison.Ordinal)
-                        || IsHorizontalRule(pl.TrimStart()))
+                    rows.Add(Cells(lines[i].Trim(), alignments.Length));
+                    i++;
+                }
+                blocks.Add(new MarkdownBlock { Type = MarkdownBlockType.Table, Rows = rows, Alignments = alignments, Start = start });
+                continue;
+            }
+
+            // Paragraph, which a setext underline (=== or ---) turns into a heading.
+            var para = new List<string>();
+            int setext = 0;
+            while (i < lines.Count && !string.IsNullOrWhiteSpace(lines[i]))
+            {
+                string t = lines[i].TrimStart();
+                if (para.Count > 0)
+                {
+                    if (t.Length > 0 && t.All(c => c == '=') )
+                    {
+                        setext = 1;
+                        i++;
+                        break;
+                    }
+                    if (t.Length > 0 && t.All(c => c == '-'))
+                    {
+                        setext = 2;
+                        i++;
+                        break;
+                    }
+                    if (StartsBlock(t) || (ListMarker(lines[i], out bool o, out int n, out _, out _) && (!o || n == 1)))
                     {
                         break;
                     }
-
-                    if (paraLines.Length > 0)
-                    {
-                        paraLines.Append(' ');
-                    }
-
-                    paraLines.Append(pl.Trim());
-                    i++;
                 }
-
-                blocks.Add(new MarkdownBlock
-                {
-                    Type = MarkdownBlockType.Paragraph,
-                    Text = StripInlineFormatting(paraLines.ToString()),
-                });
+                para.Add(lines[i].Trim() + (lines[i].EndsWith("  ", StringComparison.Ordinal) ? "  " : string.Empty));
+                i++;
             }
+            string text = string.Join('\n', para).TrimEnd();
+            blocks.Add(setext > 0
+                ? new MarkdownBlock { Type = MarkdownBlockType.Heading, HeadingLevel = setext, Text = text, Start = start }
+                : new MarkdownBlock { Type = MarkdownBlockType.Paragraph, Text = text, Start = start });
         }
-
         return blocks;
     }
 
-    /// <summary>
-    /// Strips inline Markdown formatting markers: **bold**, *italic*, `code`, [text](url).
-    /// Returns plain text suitable for rendering.
-    /// </summary>
-    private static string StripInlineFormatting(string text)
+    private static MarkdownBlock ParseList(List<string> lines, List<int> starts, ref int i, bool ordered, int firstNumber, char delimiter, int listIndent)
     {
-        var sb = new System.Text.StringBuilder(text.Length);
-        int i = 0;
-
-        while (i < text.Length)
+        var items = new List<MarkdownListItem>();
+        int start = starts[i];
+        while (i < lines.Count)
         {
-            // Bold: **text** or __text__
-            if (i + 1 < text.Length && ((text[i] == '*' && text[i + 1] == '*') ||
-                                         (text[i] == '_' && text[i + 1] == '_')))
+            if (!ListMarker(lines[i], out bool o, out _, out int contentColumn, out char d) || o != ordered || d != delimiter
+                || Indent(lines[i]) > listIndent + 3 || Indent(lines[i]) < listIndent)
             {
-                char marker = text[i];
-                int end = text.IndexOf(new string(marker, 2), i + 2, StringComparison.Ordinal);
-                if (end >= 0)
-                {
-                    sb.Append(text, i + 2, end - (i + 2));
-                    i = end + 2;
-                    continue;
-                }
+                break;
             }
 
-            // Italic: *text* or _text_ (single marker)
-            if ((text[i] == '*' || text[i] == '_') && i + 1 < text.Length && text[i + 1] != text[i])
-            {
-                char marker = text[i];
-                int end = text.IndexOf(marker, i + 1);
-                if (end >= 0)
-                {
-                    sb.Append(text, i + 1, end - (i + 1));
-                    i = end + 1;
-                    continue;
-                }
-            }
-
-            // Inline code: `text`
-            if (text[i] == '`')
-            {
-                int end = text.IndexOf('`', i + 1);
-                if (end >= 0)
-                {
-                    sb.Append(text, i + 1, end - (i + 1));
-                    i = end + 1;
-                    continue;
-                }
-            }
-
-            // Link: [text](url)
-            if (text[i] == '[')
-            {
-                int closeBracket = text.IndexOf(']', i + 1);
-                if (closeBracket >= 0 && closeBracket + 1 < text.Length && text[closeBracket + 1] == '(')
-                {
-                    int closeParen = text.IndexOf(')', closeBracket + 2);
-                    if (closeParen >= 0)
-                    {
-                        sb.Append(text, i + 1, closeBracket - (i + 1));
-                        i = closeParen + 1;
-                        continue;
-                    }
-                }
-            }
-
-            sb.Append(text[i]);
+            // The item's lines: its first (after the marker), then those indented to its content
+            // (or blank, or a lazy paragraph continuation), with that indentation removed.
+            var inner = new List<string> { lines[i].Length > contentColumn ? lines[i][contentColumn..] : string.Empty };
+            var innerStarts = new List<int> { starts[i] };
             i++;
-        }
+            bool lastBlank = false;
+            while (i < lines.Count)
+            {
+                string l = lines[i];
+                if (string.IsNullOrWhiteSpace(l))
+                {
+                    inner.Add(string.Empty);
+                    innerStarts.Add(starts[i]);
+                    lastBlank = true;
+                    i++;
+                    continue;
+                }
+                if (Indent(l) >= contentColumn)
+                {
+                    inner.Add(l[contentColumn..]);
+                }
+                else if (!lastBlank && !StartsBlock(l.TrimStart()) && !ListMarker(l, out _, out _, out _, out _))
+                {
+                    inner.Add(l.TrimStart());
+                }
+                else
+                {
+                    break;
+                }
+                innerStarts.Add(starts[i]);
+                lastBlank = false;
+                i++;
+            }
 
-        return sb.ToString();
+            bool? task = null;
+            string first = inner[0];
+            if (first.Length >= 3 && first[0] == '[' && first[2] == ']' && first[1] is ' ' or 'x' or 'X' && (first.Length == 3 || first[3] == ' '))
+            {
+                task = first[1] != ' ';
+                inner[0] = first.Length > 4 ? first[4..] : string.Empty;
+            }
+            items.Add(new MarkdownListItem { Blocks = ParseLines(inner, innerStarts), Task = task });
+
+            // A blank line followed by something that is not another item ends the list.
+            if (i < lines.Count && lastBlank && !ListMarker(lines[i], out _, out _, out _, out _))
+            {
+                break;
+            }
+        }
+        return new MarkdownBlock
+        {
+            Type = ordered ? MarkdownBlockType.OrderedList : MarkdownBlockType.BulletList,
+            ListItems = items,
+            StartNumber = firstNumber,
+            Start = start,
+        };
     }
 
-    private static bool IsHorizontalRule(string line)
+    private static int Indent(string line)
     {
-        if (line.Length < 3)
+        int n = 0;
+        while (n < line.Length && line[n] == ' ')
+        {
+            n++;
+        }
+        return n;
+    }
+
+    // Starts a block that interrupts a paragraph.
+    private static bool StartsBlock(string trimmed) =>
+        trimmed.StartsWith('>') || IsFence(trimmed, out _, out _) || IsRule(trimmed) || AtxHeading(trimmed, out _, out _);
+
+    private static bool IsFence(string trimmed, out char fence, out int length)
+    {
+        fence = trimmed.Length > 0 ? trimmed[0] : '\0';
+        length = 0;
+        if (fence is not ('`' or '~'))
         {
             return false;
         }
+        while (length < trimmed.Length && trimmed[length] == fence)
+        {
+            length++;
+        }
+        return length >= 3 && (fence == '~' || !trimmed[length..].Contains('`', StringComparison.Ordinal));
+    }
 
-        char first = line[0];
-        if (first != '-' && first != '*' && first != '_')
+    private static bool IsRule(string trimmed)
+    {
+        if (trimmed.Length < 3 || trimmed[0] is not ('-' or '*' or '_'))
         {
             return false;
         }
-
-        foreach (char c in line)
+        char first = trimmed[0];
+        int count = 0;
+        foreach (char c in trimmed)
         {
-            if (c != first && c != ' ')
+            if (c == first)
+            {
+                count++;
+            }
+            else if (c != ' ')
             {
                 return false;
             }
         }
+        return count >= 3;
+    }
 
-        return line.Count(c => c == first) >= 3;
+    private static bool AtxHeading(string trimmed, out int level, out string text)
+    {
+        level = 0;
+        text = string.Empty;
+        while (level < trimmed.Length && trimmed[level] == '#')
+        {
+            level++;
+        }
+        if (level is 0 or > 6 || (level < trimmed.Length && trimmed[level] != ' '))
+        {
+            return false;
+        }
+        text = trimmed[level..].Trim();
+        // A closing run of #s is not part of the text.
+        int close = text.Length;
+        while (close > 0 && text[close - 1] == '#')
+        {
+            close--;
+        }
+        if (close < text.Length && (close == 0 || text[close - 1] == ' '))
+        {
+            text = text[..close].TrimEnd();
+        }
+        return true;
+    }
+
+    private static bool ListMarker(string line, out bool ordered, out int number, out int contentColumn, out char delimiter)
+    {
+        ordered = false;
+        number = 1;
+        contentColumn = 0;
+        delimiter = '\0';
+        int indent = Indent(line);
+        if (indent >= line.Length)
+        {
+            return false;
+        }
+        int p = indent;
+        char c = line[p];
+        if (c is '-' or '*' or '+')
+        {
+            if (IsRule(line.TrimStart()))
+            {
+                return false;
+            }
+            delimiter = c;
+            p++;
+        }
+        else if (char.IsDigit(c))
+        {
+            int digits = 0;
+            while (p < line.Length && char.IsDigit(line[p]) && digits < 9)
+            {
+                p++;
+                digits++;
+            }
+            if (p >= line.Length || line[p] is not ('.' or ')'))
+            {
+                return false;
+            }
+            number = int.Parse(line.AsSpan(indent, digits), System.Globalization.CultureInfo.InvariantCulture);
+            delimiter = line[p];
+            ordered = true;
+            p++;
+        }
+        else
+        {
+            return false;
+        }
+        if (p < line.Length && line[p] != ' ')
+        {
+            return false;
+        }
+        int spaces = 0;
+        while (p + spaces < line.Length && line[p + spaces] == ' ' && spaces < 4)
+        {
+            spaces++;
+        }
+        contentColumn = p + Math.Max(1, spaces);
+        return true;
+    }
+
+    private static bool TableSeparator(string line, out MarkdownTableAlign[] alignments)
+    {
+        alignments = [];
+        string t = line.Trim();
+        if (!t.Contains('-', StringComparison.Ordinal) || t.Any(c => c is not ('|' or '-' or ':' or ' ')))
+        {
+            return false;
+        }
+        var cells = Split(t);
+        if (cells.Count == 0 || cells.Any(c => c.Trim().Trim(':').Length == 0 || c.Trim().Trim(':').Any(ch => ch != '-')))
+        {
+            return false;
+        }
+        alignments = [.. cells.Select(c =>
+        {
+            string s = c.Trim();
+            bool left = s.StartsWith(':'), right = s.EndsWith(':');
+            return left && right ? MarkdownTableAlign.Center : right ? MarkdownTableAlign.Right : left ? MarkdownTableAlign.Left : MarkdownTableAlign.Default;
+        })];
+        return true;
+    }
+
+    private static string[] Cells(string line, int count)
+    {
+        var cells = Split(line).Select(c => c.Trim().Replace("\\|", "|", StringComparison.Ordinal)).ToList();
+        while (cells.Count < count)
+        {
+            cells.Add(string.Empty);
+        }
+        return [.. cells.Take(count)];
+    }
+
+    // Splits a table row on unescaped pipes outside code spans, without the outer pipes.
+    private static List<string> Split(string row)
+    {
+        string t = row.Trim();
+        if (t.StartsWith('|'))
+        {
+            t = t[1..];
+        }
+        if (t.EndsWith('|') && !t.EndsWith("\\|", StringComparison.Ordinal))
+        {
+            t = t[..^1];
+        }
+        var cells = new List<string>();
+        var current = new System.Text.StringBuilder();
+        bool inCode = false;
+        for (int i = 0; i < t.Length; i++)
+        {
+            char c = t[i];
+            if (c == '\\' && i + 1 < t.Length && t[i + 1] == '|')
+            {
+                current.Append("\\|");
+                i++;
+                continue;
+            }
+            if (c == '`')
+            {
+                inCode = !inCode;
+            }
+            if (c == '|' && !inCode)
+            {
+                cells.Add(current.ToString());
+                current.Clear();
+                continue;
+            }
+            current.Append(c);
+        }
+        cells.Add(current.ToString());
+        return cells;
     }
 }

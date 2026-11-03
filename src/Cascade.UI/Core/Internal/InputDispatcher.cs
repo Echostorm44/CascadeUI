@@ -507,6 +507,12 @@ internal sealed partial class InputDispatcher
     /// </summary>
     internal Action? BeginWindowDrag { get; set; }
 
+    /// <summary>Takes (true) or gives back the mouse, so presses outside the window come here (the eye dropper).</summary>
+    internal Action<bool>? RequestPointerCapture { get; set; }
+
+    // A colour picker whose eye dropper is waiting for a press.
+    private ColorPicker? activeEyeDropper;
+
     private int currentCursorKind;
 
     /// <summary>
@@ -1209,34 +1215,6 @@ internal sealed partial class InputDispatcher
             }
         }
 
-        // Update copy button hover on Markdown
-        if (hitNode is Markdown mdHover)
-        {
-            var mdAbs = mdHover.AbsoluteBounds;
-            var localPt = new Point(evt.X - mdAbs.X, evt.Y - mdAbs.Y);
-            int newIdx = -1;
-            for (int i = 0; i < mdHover.CodeBlockCopyButtons.Count; i++)
-            {
-                if (mdHover.CodeBlockCopyButtons[i].Bounds.Contains(localPt))
-                {
-                    newIdx = i;
-                    break;
-                }
-            }
-            if (newIdx != mdHover.HoveredCopyButtonIndex)
-            {
-                mdHover.HoveredCopyButtonIndex = newIdx;
-                RequestRepaint?.Invoke();
-            }
-        }
-        else if (hoveredNode is Markdown mdOld)
-        {
-            if (mdOld.HoveredCopyButtonIndex != -1)
-            {
-                mdOld.HoveredCopyButtonIndex = -1;
-                RequestRepaint?.Invoke();
-            }
-        }
 
         // Update hovered item on NotificationBell dropdown
         if (openNotificationBell != null && openNotificationBell.IsOpen)
@@ -1483,7 +1461,7 @@ internal sealed partial class InputDispatcher
         }
         else if (isMouseDown && pressedNode is ColorPicker cpDrag && !cpDrag.IsDisabled)
         {
-            UpdateColorPickerFromDrag(cpDrag, evt.X, evt.Y);
+            DragColorPicker(cpDrag, evt.X, evt.Y);
             if (rootNode != null)
             {
                 MarkScrollViewLayersDirty(rootNode, cpDrag);
@@ -1540,6 +1518,14 @@ internal sealed partial class InputDispatcher
         lastMouseModifiers = evt.Modifiers;
         mouseDownX = evt.X;
         mouseDownY = evt.Y;
+
+        // The eye dropper is waiting: this press takes the colour under the pointer, wherever it is.
+        if (activeEyeDropper is { } dropper && evt.Button == NativeMouseButton.Left)
+        {
+            FinishEyeDropper(dropper, take: true);
+            isMouseDown = false;
+            return;
+        }
 
         // A press in a selectable label selects text there (and is not a tap on its container);
         // a press anywhere else drops the selection.
@@ -2210,6 +2196,11 @@ internal sealed partial class InputDispatcher
             RequestRepaint?.Invoke();
         }
 
+        if (hitNode is ColorPicker { IsDisabled: false } pickerPress && evt.Button == NativeMouseButton.Left)
+        {
+            PressColorPicker(pickerPress, evt.X, evt.Y);
+        }
+
         // Record slider drag start state
         if (hitNode is Slider sl)
         {
@@ -2526,6 +2517,14 @@ internal sealed partial class InputDispatcher
 
     private void HandleMouseUp(Node? hitNode, NativeMouseEvent evt)
     {
+        // The end of a drag across a picker's colour surface makes that colour a recent one.
+        if (pressedNode is ColorPicker { DragPart: not ColorPickerPart.None } pickerUp)
+        {
+            pickerUp.DragPart = ColorPickerPart.None;
+            pickerUp.NoteRecent();
+            RequestRepaint?.Invoke();
+        }
+
         if (TryEndLabelSelection())
         {
             return;
@@ -3218,6 +3217,22 @@ internal sealed partial class InputDispatcher
             RequestRepaint?.Invoke();
             return;
         }
+        if (activeEyeDropper is { } dropping && evt.Key == Key.Escape)
+        {
+            FinishEyeDropper(dropping, take: false);
+            return;
+        }
+        if (evt.Type == NativeKeyEventType.KeyDown && FocusManager.FocusedElement is ColorPicker { IsDisabled: false } focusedPicker
+            && HandleColorPickerKey(focusedPicker, evt))
+        {
+            if (rootNode is not null)
+            {
+                MarkScrollViewLayersDirty(rootNode, focusedPicker);
+            }
+            RequestRepaint?.Invoke();
+            return;
+        }
+
         // Select dropdown keyboard navigation (intercepts before normal key handling)
         if (openSelect != null)
         {
@@ -5174,9 +5189,8 @@ internal sealed partial class InputDispatcher
                 HandleBannerDismissClick(banner);
                 return;
 
-            case ColorPicker cp when !cp.IsDisabled:
-                HandleColorPickerClick(cp);
-                return;
+            case ColorPicker:
+                return; // handled on the press (PressColorPicker)
 
             case PinInput pin when !pin.IsDisabled && !pin.IsReadOnly:
                 HandlePinInputClick(pin);
@@ -5309,23 +5323,10 @@ internal sealed partial class InputDispatcher
 
             // Calendar is handled in HandleMouseDown (viewport→document coord conversion needed)
 
-            case Markdown md:
-            {
-                var mdAbs = md.AbsoluteBounds;
-                var clickPt = new Point(
-                    lastMousePosition.X - mdAbs.X,
-                    lastMousePosition.Y - mdAbs.Y);
-                foreach (var (btnBounds, codeText) in md.CodeBlockCopyButtons)
-                {
-                    if (btnBounds.Contains(clickPt))
-                    {
-                        _ = Clipboard.WriteTextAsync(codeText);
-                        RequestRepaint?.Invoke();
-                        return;
-                    }
-                }
+            case MarkdownText mdText when MarkdownLinkAt(mdText, lastMousePosition.X, lastMousePosition.Y) is { } link:
+                mdText.Owner?.ActivateLink(link);
+                RequestRepaint?.Invoke();
                 return;
-            }
 
             case ITabularDataNode tdn:
                 HandleTabularDataClick(tdn);
@@ -5355,7 +5356,7 @@ internal sealed partial class InputDispatcher
             or Accordion or MenuBar or StatusBar
             or ProgressBar or ProgressRing or Gauge or Spinner
             or NotificationBell or CommandPalette or KeyHandler
-            or ScrollView or Markdown;
+            or ScrollView or MarkdownText;
     }
 
     /// <summary>
@@ -6414,7 +6415,11 @@ internal sealed partial class InputDispatcher
     {
         int desiredCursor = 0;
 
-        if (columnResizeTdn != null)
+        if (activeEyeDropper is not null)
+        {
+            desiredCursor = 5;
+        }
+        else if (columnResizeTdn != null)
         {
             desiredCursor = 1;
         }
@@ -6425,6 +6430,10 @@ internal sealed partial class InputDispatcher
         else if (hitNode is SplitView sv)
         {
             desiredCursor = sv.Orientation == SplitOrientation.Horizontal ? 1 : 2;
+        }
+        else if (hitNode is MarkdownText { HasLinks: true } linkText && MarkdownLinkAt(linkText, x, y) is not null)
+        {
+            desiredCursor = 4;
         }
         else if (labelSelectionActive || hitNode is TextInput { IsDisabled: false } or TextArea { IsDisabled: false }
             || (rootNode is not null && FindSelectableLabelAt(x, y) is not null))
@@ -6437,6 +6446,17 @@ internal sealed partial class InputDispatcher
             currentCursorKind = desiredCursor;
             RequestCursorChange?.Invoke(desiredCursor);
         }
+    }
+
+    /// <summary>The Markdown link under a window point, from the text node's laid-out position.</summary>
+    private string? MarkdownLinkAt(MarkdownText text, float x, float y)
+    {
+        if (rootNode is null || !HitTester.TryGetAbsoluteBounds(rootNode, text, out var bounds))
+        {
+            return null;
+        }
+        var padding = text.LayoutData.Padding;
+        return text.LinkAt(new Point(x - bounds.X - padding.Left, y - bounds.Y - padding.Top));
     }
 
     /// <summary>
@@ -7622,66 +7642,216 @@ internal sealed partial class InputDispatcher
 
     // ── ColorPicker helpers ───────────────────────────────────────────
 
-    private void HandleColorPickerClick(ColorPicker cp)
+    // The picker's arrangement and the point in its coordinates, from where layout put it.
+    private ColorPickerGeometry? ColorPickerAt(ColorPicker cp, float x, float y, out Point local)
     {
-        UpdateColorPickerFromDrag(cp, lastMousePosition.X, lastMousePosition.Y);
+        local = default;
+        if (rootNode is null || !HitTester.TryGetAbsoluteBounds(rootNode, cp, out var bounds))
+        {
+            return null;
+        }
+        local = new Point(x - bounds.X, y - bounds.Y);
+        return ColorPickerGeometry.Arrange(cp, bounds.Width);
+    }
+
+    private void PressColorPicker(ColorPicker cp, float x, float y)
+    {
+        if (ColorPickerAt(cp, x, y, out var p) is not { } g)
+        {
+            return;
+        }
+        cp.Sync();
+        var (part, index) = g.HitTest(p);
+
+        // A press elsewhere in the picker applies what was typed (or drops it if it is not a colour).
+        if (part != ColorPickerPart.Value && cp.EditText is not null && !cp.CommitEdit())
+        {
+            cp.EditText = null;
+        }
+
+        switch (part)
+        {
+            case ColorPickerPart.ModeTab:
+                cp.ModeIndex = index;
+                break;
+            case ColorPickerPart.Canvas or ColorPickerPart.HueBar or ColorPickerPart.Ring or ColorPickerPart.Triangle
+                or ColorPickerPart.Channel or ColorPickerPart.Opacity:
+                cp.DragPart = part;
+                cp.DragIndex = index;
+                ApplyColorPickerPoint(cp, g, p);
+                break;
+            case ColorPickerPart.Format:
+                cp.FormatIndex = (cp.FormatIndex + 1) % cp.Formats.Count;
+                cp.EditText = null;
+                break;
+            case ColorPickerPart.Value:
+                cp.EditText ??= cp.ValueText;
+                cp.EditSelectAll = true;
+                break;
+            case ColorPickerPart.EyeDropper:
+                BeginEyeDropper(cp);
+                break;
+            case ColorPickerPart.Swatch when cp.SavedSwatches?.Value is { } saved && index < saved.Count:
+                cp.SetColor(saved[index]);
+                cp.NoteRecent();
+                break;
+            case ColorPickerPart.AddSwatch:
+                cp.AddSwatch();
+                break;
+            case ColorPickerPart.Recent when cp.RecentShown is { } recent && index < recent.Count:
+                cp.SetColor(recent[index]);
+                break;
+        }
+        if (rootNode is not null)
+        {
+            MarkScrollViewLayersDirty(rootNode, cp);
+        }
         RequestRepaint?.Invoke();
     }
 
-    private static void UpdateColorPickerFromDrag(ColorPicker cp, float mouseX, float mouseY)
+    private void DragColorPicker(ColorPicker cp, float x, float y)
     {
-        var abs = cp.AbsoluteBounds;
-        if (abs.Width <= 0 || abs.Height <= 0)
+        if (cp.DragPart != ColorPickerPart.None && ColorPickerAt(cp, x, y, out var p) is { } g)
         {
-            return;
-        }
-
-        // Layout must match PaintColorPicker: pad=8, canvasHeight=130, gap=8, hueBarH=14
-        const float pad = 8f;
-        float innerX = abs.X + pad;
-        float innerY = abs.Y + pad;
-        float innerW = abs.Width - pad * 2;
-        const float canvasHeight = 130f;
-        const float hueBarH = 14f;
-        float hueBarY = innerY + canvasHeight + 8f;
-        const float tolerance = 6f;
-
-        // Check if click is in the SB canvas region
-        if (mouseY >= innerY - tolerance && mouseY <= innerY + canvasHeight + tolerance &&
-            mouseX >= innerX && mouseX <= innerX + innerW)
-        {
-            cp.Saturation = Math.Clamp((mouseX - innerX) / innerW, 0f, 1f);
-            cp.Brightness = 1f - Math.Clamp((mouseY - innerY) / canvasHeight, 0f, 1f);
-            cp.Value.OnChange(HsbToColor(cp.Hue, cp.Saturation, cp.Brightness));
-            return;
-        }
-
-        // Check if click is in the hue bar region
-        if (mouseY >= hueBarY - tolerance && mouseY <= hueBarY + hueBarH + tolerance &&
-            mouseX >= innerX && mouseX <= innerX + innerW)
-        {
-            float frac = Math.Clamp((mouseX - innerX) / innerW, 0f, 1f);
-            cp.Hue = frac * 360f;
-            cp.Value.OnChange(HsbToColor(cp.Hue, cp.Saturation, cp.Brightness));
+            ApplyColorPickerPoint(cp, g, p);
         }
     }
 
-    private static ColorValue HsbToColor(float hue, float saturation, float brightness)
+    // Sets the colour from a point on the part being dragged.
+    private static void ApplyColorPickerPoint(ColorPicker cp, ColorPickerGeometry g, Point p)
     {
-        float c = brightness * saturation;
-        float hp = hue / 60f;
-        float x = c * (1f - MathF.Abs(hp % 2f - 1f));
-        float m = brightness - c;
+        static float Across(Rect r, float x) => r.Width <= 0f ? 0f : Math.Clamp((x - r.X) / r.Width, 0f, 1f);
+        switch (cp.DragPart)
+        {
+            case ColorPickerPart.Canvas:
+                cp.Set(saturation: Across(g.Canvas, p.X), brightness: 1f - Math.Clamp((p.Y - g.Canvas.Y) / g.Canvas.Height, 0f, 1f));
+                break;
+            case ColorPickerPart.HueBar:
+                cp.Set(hue: Across(g.HueBar, p.X) * 360f);
+                break;
+            case ColorPickerPart.Ring:
+            {
+                float angle = MathF.Atan2(p.X - g.WheelCenter.X, -(p.Y - g.WheelCenter.Y)) * 180f / MathF.PI;
+                cp.Set(hue: angle < 0f ? angle + 360f : angle);
+                break;
+            }
+            case ColorPickerPart.Triangle:
+            {
+                var (s, b) = g.TriangleAt(p);
+                cp.Set(saturation: s, brightness: b);
+                break;
+            }
+            case ColorPickerPart.Channel when cp.DragIndex < g.Channels.Count:
+            {
+                var (r, gg, b) = ColorMath.HsbToRgb(cp.Hue, cp.Saturation, cp.Brightness);
+                float[] channels = [r, gg, b];
+                channels[cp.DragIndex] = Across(g.Channels[cp.DragIndex], p.X);
+                var (h, s, v) = ColorMath.RgbToHsb(channels[0], channels[1], channels[2]);
+                cp.Set(hue: s > 0.001f && v > 0.001f ? h : cp.Hue, saturation: v > 0.001f ? s : cp.Saturation, brightness: v);
+                break;
+            }
+            case ColorPickerPart.Opacity:
+                cp.Set(alpha: Across(g.Opacity, p.X));
+                break;
+        }
+    }
 
-        float r, g, b;
-        if (hp < 1f) { r = c; g = x; b = 0f; }
-        else if (hp < 2f) { r = x; g = c; b = 0f; }
-        else if (hp < 3f) { r = 0f; g = c; b = x; }
-        else if (hp < 4f) { r = 0f; g = x; b = c; }
-        else if (hp < 5f) { r = x; g = 0f; b = c; }
-        else { r = c; g = 0f; b = x; }
+    // The eye dropper: the next press anywhere (the mouse is captured, so outside the window too)
+    // takes the colour of the screen under the pointer; Escape gives up.
+    private void BeginEyeDropper(ColorPicker cp)
+    {
+        cp.IsPickingFromScreen = true;
+        activeEyeDropper = cp;
+        RequestPointerCapture?.Invoke(true);
+        currentCursorKind = 5;
+        RequestCursorChange?.Invoke(5);
+    }
 
-        return ColorValue.FromRgba(r + m, g + m, b + m, 1f);
+    private void FinishEyeDropper(ColorPicker cp, bool take)
+    {
+        activeEyeDropper = null;
+        cp.IsPickingFromScreen = false;
+        RequestPointerCapture?.Invoke(false);
+        currentCursorKind = 0;
+        RequestCursorChange?.Invoke(0);
+        if (take && ScreenColor.AtPointer() is { } color)
+        {
+            cp.SetColor(color);
+            cp.NoteRecent();
+        }
+        if (rootNode is not null)
+        {
+            MarkScrollViewLayersDirty(rootNode, cp);
+        }
+        RequestRepaint?.Invoke();
+    }
+
+    /// <summary>
+    /// Keys on a focused picker: typing edits the value (Enter applies, Escape drops it); otherwise
+    /// Left/Right move saturation, Up/Down brightness (Shift: in tens), Page Up/Down the hue, and a
+    /// hex digit or # starts typing a value.
+    /// </summary>
+    private static bool HandleColorPickerKey(ColorPicker cp, NativeKeyEvent evt)
+    {
+        cp.Sync();
+        if (cp.EditText is { } text)
+        {
+            switch (evt.Key)
+            {
+                case Key.Enter:
+                    cp.CommitEdit();
+                    return true;
+                case Key.Escape:
+                    cp.EditText = null;
+                    return true;
+                case Key.Backspace when evt.Character is null:
+                    return true; // the '\b' character that follows deletes
+            }
+            if (evt.Character is '\b')
+            {
+                cp.EditText = cp.EditSelectAll || text.Length == 0 ? string.Empty : text[..^1];
+                cp.EditSelectAll = false;
+                return true;
+            }
+            if (evt.Character is { } typed && !char.IsControl(typed))
+            {
+                cp.EditText = (cp.EditSelectAll ? string.Empty : text) + typed;
+                cp.EditSelectAll = false;
+                return true;
+            }
+            return evt.Key is Key.Left or Key.Right or Key.Up or Key.Down or Key.Home or Key.End;
+        }
+
+        float step = evt.Modifiers.HasFlag(ModifierKeys.Shift) ? 0.1f : 0.01f;
+        float hueStep = evt.Modifiers.HasFlag(ModifierKeys.Shift) ? 30f : 10f;
+        switch (evt.Key)
+        {
+            case Key.Left:
+                cp.Set(saturation: cp.Saturation - step);
+                return true;
+            case Key.Right:
+                cp.Set(saturation: cp.Saturation + step);
+                return true;
+            case Key.Up:
+                cp.Set(brightness: cp.Brightness + step);
+                return true;
+            case Key.Down:
+                cp.Set(brightness: cp.Brightness - step);
+                return true;
+            case Key.PageUp:
+                cp.Set(hue: (cp.Hue + hueStep) % 360f);
+                return true;
+            case Key.PageDown:
+                cp.Set(hue: (cp.Hue - hueStep + 360f) % 360f);
+                return true;
+        }
+        if (evt.Character is { } c && (Uri.IsHexDigit(c) || c == '#') && !evt.Modifiers.HasFlag(ModifierKeys.Ctrl))
+        {
+            cp.EditText = c.ToString();
+            cp.EditSelectAll = false;
+            return true;
+        }
+        return false;
     }
 
     // ── PinInput helpers ──────────────────────────────────────────────

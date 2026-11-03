@@ -328,6 +328,7 @@ internal static class HitTester
                IRadioButton or
                SplitView or
                Image { ZoomPanEnabled: true } or
+               MarkdownText { HasLinks: true } or
                Expander or
                ISegmentedControl or
                IToggleGroup or
@@ -383,6 +384,7 @@ internal static class HitTester
             AnimatePresence ap  => ap.Child,
             IListViewNode lvn   => lvn.GetContentNode(),
             ITreeView tv        => tv.GetContentNode(),
+            Markdown md         => md.Tree,
             _ => null
         };
     }

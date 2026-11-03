@@ -40,18 +40,24 @@ public class GridContextMenuCliTests
 
             // Right-click the middle one: the selection stays, the batch menu opens for all three.
             await Run(appId, "right-click", gridId, "--x", "120", "--y", Format(LinkRow(1)), "--coord-space", "logical", "--wait-frames", "6");
-            var batchMenu = await Menu(appId);
-            await Assert.That(batchMenu).IsNotNull().Because("right-click inside a multi-selection must open the batch menu");
+            var batchMenu = await OpenMenu(appId);
+            if (batchMenu is null)
+            {
+                // Say what the app was showing, so a failure explains itself.
+                string tree = (await Run(appId, "accessibility", "--depth", "12")).StdOut;
+                throw new InvalidOperationException(
+                    $"No batch menu after the right-click at y={Format(LinkRow(1))} (grid y={Format(gridY)}).\nLabels:\n{await Labels(appId)}\nTree:\n{tree}");
+            }
             var batchItems = batchMenu!["children"]!.AsArray();
             await Assert.That(string.Join("|", batchItems.Select(i => i!["label"]!.GetValue<string>()))).IsEqualTo("Copy 3 clips|Delete 3 clips");
             await Assert.That(await Labels(appId)).Contains("Selected: https://nuget.org/packages").Because("the right-click must not reselect");
 
             await ClickItem(appId, gridId, batchItems[1]!);
-            string afterBatch = await Labels(appId);
+            string afterBatch = await LabelsWith(appId, "Last: delete all");
             await Assert.That(afterBatch)
                 .Contains("Last: delete all https://example.com/docs + https://cascade.dev + https://nuget.org/packages")
                 .Because(afterBatch);
-            await Assert.That(await Menu(appId)).IsNull();
+            await Assert.That(await MenuClosed(appId)).IsTrue();
 
             // The "Last" label may have wrapped and moved the grid down; measure it again.
             (gridId, gridY) = await FindGrid(appId);
@@ -60,25 +66,25 @@ public class GridContextMenuCliTests
 
             // A right-click outside the selection selects just that row and opens its own menu.
             await Run(appId, "right-click", gridId, "--x", "120", "--y", Format(shoppingList), "--coord-space", "logical", "--wait-frames", "6");
-            var rowMenu = await Menu(appId);
+            var rowMenu = await OpenMenu(appId);
             await Assert.That(rowMenu).IsNotNull();
             var rowItems = rowMenu!["children"]!.AsArray();
             await Assert.That(string.Join("|", rowItems.Select(i => i!["label"]!.GetValue<string>()))).IsEqualTo("Paste|Copy to Clipboard|Delete");
             await Assert.That(await Labels(appId)).Contains("Selected: Shopping list");
 
             await ClickItem(appId, gridId, rowItems[0]!);
-            await Assert.That(await Labels(appId)).Contains("Last: paste Shopping list");
+            await Assert.That(await LabelsWith(appId, "Last: paste")).Contains("Last: paste Shopping list");
 
             // From the keyboard: the context-menu key opens the selected row's menu, first item focused.
             await Run(appId, "type", "--key", "Apps");
-            var keyboardMenu = await Menu(appId);
+            var keyboardMenu = await OpenMenu(appId);
             await Assert.That(keyboardMenu).IsNotNull();
             await Assert.That(keyboardMenu!["children"]![0]!["focused"]?.GetValue<bool>()).IsTrue();
             await Run(appId, "type", "--key", "Down");
             await Run(appId, "type", "--key", "Down");
             await Run(appId, "type", "--key", "Enter");
-            await Assert.That(await Labels(appId)).Contains("Last: delete Shopping list");
-            await Assert.That(await Menu(appId)).IsNull();
+            await Assert.That(await LabelsWith(appId, "Last: delete Shopping")).Contains("Last: delete Shopping list");
+            await Assert.That(await MenuClosed(appId)).IsTrue();
         }
         finally
         {
@@ -105,6 +111,58 @@ public class GridContextMenuCliTests
     private static async Task<JsonNode?> Menu(string appId)
     {
         return FindMenu(JsonNode.Parse((await Run(appId, "accessibility", "--depth", "10")).StdOut)!["root"]!);
+    }
+
+    // The app runs in its own process and answers on its own frames: a menu opens (and finishes
+    // its opening animation) some frames after the press, a busy machine making that later. Poll
+    // a bounded number of times, as the other CLI tests do, and only take the menu once its item
+    // bounds have stopped moving, so a click lands where the item really is.
+    private static async Task<JsonNode?> OpenMenu(string appId)
+    {
+        string? lastBounds = null;
+        for (int attempt = 0; attempt < 30; attempt++)
+        {
+            if (await Menu(appId) is { } menu)
+            {
+                string bounds = menu["children"]?.ToJsonString() ?? string.Empty;
+                if (bounds == lastBounds)
+                {
+                    return menu;
+                }
+                lastBounds = bounds;
+            }
+            await Task.Delay(50);
+        }
+        return await Menu(appId);
+    }
+
+    private static async Task<bool> MenuClosed(string appId)
+    {
+        for (int attempt = 0; attempt < 30; attempt++)
+        {
+            if (await Menu(appId) is null)
+            {
+                return true;
+            }
+            await Task.Delay(50);
+        }
+        return false;
+    }
+
+    // The labels once one contains the text (an action runs on the app's next frame), or as they are.
+    private static async Task<string> LabelsWith(string appId, string text)
+    {
+        string labels = string.Empty;
+        for (int attempt = 0; attempt < 30; attempt++)
+        {
+            labels = await Labels(appId);
+            if (labels.Contains(text, StringComparison.Ordinal))
+            {
+                return labels;
+            }
+            await Task.Delay(50);
+        }
+        return labels;
     }
 
     private static string Format(float value)

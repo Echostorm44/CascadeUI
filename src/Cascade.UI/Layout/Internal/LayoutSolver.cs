@@ -432,6 +432,7 @@ internal static class LayoutSolver
             MentionInput mi => MeasureMentionInput(mi, constraints),
 
             Markdown md => MeasureMarkdown(md, constraints),
+            MarkdownText mdText => MeasureMarkdownText(mdText, constraints),
 
             CommandPalette => new Size(0, 0),
 
@@ -1232,151 +1233,30 @@ internal static class LayoutSolver
             constraints.ConstrainHeight(height));
     }
 
+    // Markdown is the node tree it builds; its text nodes flow styled spans.
     private static Size MeasureMarkdown(Markdown md, LayoutConstraints constraints)
     {
-        var blocks = md.GetParsedBlocks();
-        if (blocks.Count == 0)
+        md.EnclosingScrollView = enclosingScrollView;
+        if (enclosingScrollView is { } sv && md.AutoScrollMode != MarkdownAutoScrollMode.Never)
         {
-            return new Size(constraints.MinWidth, constraints.MinHeight);
+            sv.Control.ContentAutoScroll = md.AutoScrollMode == MarkdownAutoScrollMode.Always
+                ? AutoScrollMode.Always : AutoScrollMode.WhenAtBottom;
         }
-
-        float maxWidth = float.IsPositiveInfinity(constraints.MaxWidth) ? 600f : constraints.MaxWidth;
-        float totalHeight = 0f;
-        float widestBlock = 0f;
-        float bodySize = BodyFontSize;
-        const float blockSpacing = 8f;
-        const float codeBlockPadding = 12f;
-        const float listIndent = 24f;
-        const float blockQuotePadding = 16f;
-        const float blockQuoteBorderWidth = 3f;
-
-        foreach (var block in blocks)
-        {
-            if (totalHeight > 0)
-            {
-                totalHeight += blockSpacing;
-            }
-
-            switch (block.Type)
-            {
-                case MarkdownBlockType.Heading:
-                    float headingSize = block.HeadingLevel switch
-                    {
-                        1 => H1FontSize,
-                        2 => H2FontSize,
-                        3 => H3FontSize,
-                        _ => bodySize + 1f,
-                    };
-                    float headingHeight = EstimateTextHeight(block.Text, headingSize, maxWidth);
-                    totalHeight += headingHeight + 4f;
-                    widestBlock = Math.Max(widestBlock, EstimateTextWidth(block.Text, headingSize, maxWidth));
-                    break;
-
-                case MarkdownBlockType.Paragraph:
-                    float paraHeight = EstimateTextHeight(block.Text, bodySize, maxWidth);
-                    totalHeight += paraHeight;
-                    widestBlock = Math.Max(widestBlock, EstimateTextWidth(block.Text, bodySize, maxWidth));
-                    break;
-
-                case MarkdownBlockType.CodeBlock:
-                    float codeSize = bodySize - 1f;
-                    float codeHeight = EstimateCodeBlockHeight(block.Text, codeSize, 1.5f) + codeBlockPadding * 2;
-                    if (block.Language != null)
-                    {
-                        codeHeight += 20f;
-                    }
-                    totalHeight += codeHeight;
-                    widestBlock = Math.Max(widestBlock, maxWidth);
-                    break;
-
-                case MarkdownBlockType.BulletList:
-                case MarkdownBlockType.OrderedList:
-                    if (block.Items != null)
-                    {
-                        foreach (string item in block.Items)
-                        {
-                            float itemHeight = EstimateTextHeight(item, bodySize, maxWidth - listIndent);
-                            totalHeight += itemHeight;
-                        }
-                    }
-                    widestBlock = Math.Max(widestBlock, maxWidth);
-                    break;
-
-                case MarkdownBlockType.BlockQuote:
-                    float quoteHeight = EstimateTextHeight(block.Text, bodySize, maxWidth - blockQuotePadding - blockQuoteBorderWidth);
-                    totalHeight += quoteHeight + 8f;
-                    widestBlock = Math.Max(widestBlock, maxWidth);
-                    break;
-
-                case MarkdownBlockType.HorizontalRule:
-                    totalHeight += 17f;
-                    widestBlock = Math.Max(widestBlock, maxWidth);
-                    break;
-            }
-        }
-
-        float resultWidth = Math.Max(widestBlock, constraints.MinWidth);
-        return new Size(
-            constraints.ConstrainWidth(resultWidth),
-            constraints.ConstrainHeight(totalHeight));
+        var tree = md.Tree;
+        var size = MeasureChild(tree, constraints);
+        PositionChild(tree, 0, 0);
+        return size;
     }
 
-    private static float EstimateTextHeight(string text, float fontSize, float maxWidth)
+    private static Size MeasureMarkdownText(MarkdownText text, LayoutConstraints constraints)
     {
-        float lineHeight = fontSize * DefaultLineHeightMultiplier;
-        if (string.IsNullOrEmpty(text))
-        {
-            return lineHeight;
-        }
-
-        if (DefaultFontPath != null)
-        {
-            var options = new TextLayoutOptions
-            {
-                FontPath = DefaultFontPath,
-                FontSize = fontSize,
-                MaxWidth = maxWidth,
-            };
-            var result = TextLayoutEngine.Layout(text, options);
-            return result.BoundingBox.Height;
-        }
-
-        float estimatedWidth = text.Length * fontSize * AverageCharWidthRatio;
-        int lineCount = maxWidth > 0 && estimatedWidth > maxWidth
-            ? (int)Math.Ceiling(estimatedWidth / maxWidth) : 1;
-        return lineCount * lineHeight;
+        var size = text.Layout(constraints.MaxWidth, DefaultFontPath);
+        return constraints.Constrain(size);
     }
 
-    private static float EstimateTextWidth(string text, float fontSize, float maxWidth)
-    {
-        if (string.IsNullOrEmpty(text))
-        {
-            return 0f;
-        }
-
-        float estimatedWidth = text.Length * fontSize * AverageCharWidthRatio;
-        return Math.Min(estimatedWidth, maxWidth);
-    }
-
-    private static float EstimateCodeBlockHeight(string code, float fontSize, float lineHeightMultiplier = 0f)
-    {
-        float multiplier = lineHeightMultiplier > 0 ? lineHeightMultiplier : DefaultLineHeightMultiplier;
-        if (string.IsNullOrEmpty(code))
-        {
-            return fontSize * multiplier;
-        }
-
-        int lineCount = 1;
-        foreach (char c in code)
-        {
-            if (c == '\n')
-            {
-                lineCount++;
-            }
-        }
-
-        return lineCount * fontSize * multiplier;
-    }
+    /// <summary>The ScrollView whose content is being measured (innermost), for content that steers it.</summary>
+    [ThreadStatic]
+    private static ScrollView? enclosingScrollView;
 
     private static Size MeasureDateRangePicker(DateRangePicker drp, LayoutConstraints constraints)
     {
@@ -1654,7 +1534,18 @@ internal static class LayoutSolver
             sv.ScrollsHorizontally ? float.PositiveInfinity : constraints.MaxWidth,
             sv.ScrollsVertically ? 0 : constraints.MinHeight,
             sv.ScrollsVertically ? float.PositiveInfinity : constraints.MaxHeight);
-        var contentSize = MeasureChild(sv.Content, contentConstraints);
+        sv.Control.ContentAutoScroll = AutoScrollMode.None;
+        var outerScrollView = enclosingScrollView;
+        enclosingScrollView = sv;
+        Size contentSize;
+        try
+        {
+            contentSize = MeasureChild(sv.Content, contentConstraints);
+        }
+        finally
+        {
+            enclosingScrollView = outerScrollView;
+        }
 
         // Apply horizontal alignment when content is narrower than viewport
         float contentX = 0;
@@ -1677,6 +1568,13 @@ internal static class LayoutSolver
         if (vpHeight == 0)
         {
             vpHeight = contentSize.Height;
+        }
+
+        // A view that only scrolls when its content is too tall (capped Markdown code blocks)
+        // is no taller than the content.
+        if (sv.FitContentHeight)
+        {
+            vpHeight = Math.Min(vpHeight, contentSize.Height);
         }
 
         // Store max scroll extent and clamp current offset on the ScrollView instance
@@ -2327,12 +2225,14 @@ internal static class LayoutSolver
 
     private static Size MeasureColorPicker(ColorPicker cp, LayoutConstraints constraints)
     {
-        // SB canvas (130) + hue bar (14) + hex label row, with padding
-        const float width = 240f;
-        const float height = 200f;
-        return new Size(
-            constraints.ConstrainWidth(width),
-            constraints.ConstrainHeight(height));
+        // As tall as the parts it shows (the same arrangement the painter and input use).
+        cp.Sync();
+        float width = constraints.ConstrainWidth(float.IsPositiveInfinity(constraints.MaxWidth) ? 260f : Math.Min(constraints.MaxWidth, 260f));
+        if (constraints.MinWidth > width)
+        {
+            width = constraints.MinWidth;
+        }
+        return new Size(width, constraints.ConstrainHeight(ColorPickerGeometry.Arrange(cp, width).Height));
     }
 
     private static Size MeasurePinInput(PinInput pin, LayoutConstraints constraints)

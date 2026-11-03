@@ -7,7 +7,8 @@ namespace Cascade.UI.Tests.Rendering;
 /// (each damaging different rects), the window's pixels equal the CPU framebuffer — every rect
 /// landed where it belongs (no mirrored rows, no offset).
 /// </summary>
-[NotInParallel(nameof(GdiBlitTests))]
+// Shares the screen spot of TestWindow with every other test that shows one and reads it back.
+[NotInParallel(nameof(TestWindow))]
 public class GdiBlitTests
 {
     private const int Size = 192;

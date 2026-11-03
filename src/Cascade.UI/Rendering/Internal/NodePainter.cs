@@ -7634,7 +7634,16 @@ internal sealed partial class NodePainter
             : t.PaddingH + t.ChevronSize + 4f;
         float contentWidth = bounds.Width - t.PaddingH - chevronReserve;
 
-        if (ms.SelectedCount > 0)
+        if (ms.IsOpen && ms.IsSearchable)
+        {
+            // Searching: the field shows what is typed (or a hint) with a caret.
+            string search = ms.SearchText;
+            PaintText(search.Length > 0 ? search : "Search…", bounds, t.PaddingH,
+                (search.Length > 0 ? t.TextColor : t.PlaceholderColor).Opacity(opacity));
+            float caretX = bounds.X + t.PaddingH + (search.Length > 0 ? ctx.MeasureTextAdvance(search, theme.Typography.Scale.Body.Size).Width : 0f);
+            DrawCaret(new Rect(MathF.Min(caretX, bounds.X + contentWidth), bounds.Y + 6f, theme.Caret.Width, Math.Max(0f, bounds.Height - 12f)), theme.Caret.Color);
+        }
+        else if (ms.SelectedCount > 0)
         {
             if (ms.ShowPills)
             {
@@ -7666,7 +7675,7 @@ internal sealed partial class NodePainter
         PaintSelectChevron(bounds, opacity, openT, ms.IsOpen);
 
         // Dropdown overlay
-        if ((ms.IsOpen || openT > 0.001f) && !ms.IsNodeDisabled && ms.OptionCount > 0)
+        if ((ms.IsOpen || openT > 0.001f) && !ms.IsNodeDisabled && (ms.OptionCount > 0 || ms.DropdownStatus is not null))
         {
             float absX = absoluteX;
             float absY = absoluteY;
@@ -7855,7 +7864,8 @@ internal sealed partial class NodePainter
         var t = theme.Select;
         var cb = theme.Checkbox;
         var node = (Node)ms;
-        int optionCount = ms.OptionCount;
+        string? status = ms.DropdownStatus;
+        int optionCount = status is null ? ms.OptionCount : 1;
         float itemHeight = t.ItemHeight;
 
         // Open animation progress
@@ -7987,6 +7997,13 @@ internal sealed partial class NodePainter
                 itemBounds.Width, itemBounds.Height);
 
             // Checkbox
+            if (status is not null)
+            {
+                PaintText(status, staggeredBounds, t.ItemPaddingH, theme.Colors.TextMuted.Opacity(itemOpacity));
+                itemY += itemHeight;
+                continue;
+            }
+
             bool isSelected = ms.IsItemSelected(i);
             float cbX = staggeredBounds.X + t.ItemPaddingH;
             float cbY = staggeredBounds.Y + (itemHeight - checkboxSize) / 2f;
@@ -8004,13 +8021,20 @@ internal sealed partial class NodePainter
                     radius: cb.Radius);
             }
 
-            // Option label
+            // Option label (or the app's content)
             float textPadding = t.ItemPaddingH + checkboxSize + 8f;
-            PaintText(
-                ms.GetOptionLabel(i),
-                staggeredBounds,
-                textPadding,
-                t.TextColor.Opacity(itemOpacity));
+            if (ms.RenderOption(i) is { } optionContent)
+            {
+                PaintOptionContent(optionContent, staggeredBounds, textPadding);
+            }
+            else
+            {
+                PaintText(
+                    ms.GetOptionLabel(i),
+                    staggeredBounds,
+                    textPadding,
+                    t.TextColor.Opacity(itemOpacity));
+            }
 
             itemY += itemHeight;
         }

@@ -3081,6 +3081,13 @@ internal sealed partial class InputDispatcher
             return;
         }
 
+        // An open MultiSelect: arrows move, Space/Enter tick the highlighted row, typing searches.
+        if (openMultiSelect != null && evt.Type == NativeKeyEventType.KeyDown && HandleMultiSelectKeyboard(openMultiSelect, evt))
+        {
+            RequestRepaint?.Invoke();
+            return;
+        }
+
         // DatePicker calendar keyboard navigation
         if (openDatePicker != null)
         {
@@ -8133,6 +8140,49 @@ internal sealed partial class InputDispatcher
                 RequestRepaint?.Invoke();
                 break;
             }
+        }
+    }
+
+    /// <summary>
+    /// Keys for an open MultiSelect, which had none: Up/Down move the highlight, Space or Enter ticks
+    /// the highlighted row (Enter closes when nothing is highlighted), Escape closes; a searchable one
+    /// takes typing and Backspace. Returns whether the key was used.
+    /// </summary>
+    private bool HandleMultiSelectKeyboard(IMultiSelectNode ms, NativeKeyEvent evt)
+    {
+        if (ms.IsSearchable && !evt.Modifiers.HasFlag(ModifierKeys.Ctrl))
+        {
+            if (evt.Character is { } typed && typed > ' ' && typed != (char)127
+                || evt.Character == ' ' && ms.SearchText.Length > 0)
+            {
+                ms.SearchText += evt.Character!.Value;
+                return true;
+            }
+            if (evt.Key == Key.Backspace && ms.SearchText.Length > 0)
+            {
+                ms.SearchText = ms.SearchText[..^1];
+                return true;
+            }
+        }
+
+        int count = ms.OptionCount;
+        switch (evt.Key)
+        {
+            case Key.Down when count > 0:
+                ms.HighlightedIndex = ms.HighlightedIndex + 1 >= count ? 0 : ms.HighlightedIndex + 1;
+                return true;
+            case Key.Up when count > 0:
+                ms.HighlightedIndex = ms.HighlightedIndex - 1 < 0 ? count - 1 : ms.HighlightedIndex - 1;
+                return true;
+            case Key.Space or Key.Enter when ms.HighlightedIndex >= 0 && ms.HighlightedIndex < count:
+                ms.ToggleItem(ms.HighlightedIndex);
+                return true;
+            case Key.Enter or Key.Escape:
+                ms.Close();
+                openMultiSelect = null;
+                return true;
+            default:
+                return false;
         }
     }
 

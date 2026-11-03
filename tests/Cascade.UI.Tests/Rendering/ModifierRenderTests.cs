@@ -901,6 +901,67 @@ public class ModifierRenderTests
         await Assert.That(options.Distinct().Order().ToList()).IsEquivalentTo(["a", "b", "c"]);
     }
 
+    [Test]
+    public async Task MultiSelectSelectAll_TicksEverything_ThenClearsIt()
+    {
+        IReadOnlyList<string> chosen = [];
+        var multi = new MultiSelect<string>(new Bindable<IReadOnlyList<string>>(["a"], v => chosen = v), Fruit).SelectAll();
+        IMultiSelectNode node = multi;
+        using var app = new RenderHarness(() => multi.Width(200));
+        app.Frame();
+        node.ToggleOpen();
+
+        await Assert.That(node.OptionCount).IsEqualTo(4);
+        await Assert.That(node.GetOptionLabel(0)).IsEqualTo("Select all");
+        node.ToggleItem(0);
+        await Assert.That(node.IsItemSelected(0)).IsTrue();
+        await Assert.That(node.GetOptionLabel(0)).IsEqualTo("Clear all");
+        node.Close();
+        await Assert.That(string.Join(",", chosen.Order())).IsEqualTo("a,b,c");
+    }
+
+    [Test]
+    public async Task SearchableMultiSelect_FiltersAndTicksFromTheKeyboard()
+    {
+        IReadOnlyList<string> chosen = [];
+        var multi = new MultiSelect<string>(new Bindable<IReadOnlyList<string>>([], v => chosen = v), Fruit).Searchable();
+        IMultiSelectNode node = multi;
+        using var app = new RenderHarness(() => multi.Width(200));
+        app.Frame();
+        FocusManager.RequestFocus(multi);
+        app.Press(Key.Enter);
+        await Assert.That(node.IsOpen).IsTrue();
+
+        // "rr" matches Cherry; the first match is highlighted, Space ticks it, Escape closes and commits.
+        app.Press(Key.R, character: 'r');
+        app.Press(Key.R, character: 'r');
+        await Assert.That(node.OptionCount).IsEqualTo(1);
+        app.Press(Key.Space);
+        app.Press(Key.Escape);
+        await Assert.That(string.Join(",", chosen)).IsEqualTo("c");
+
+        // Nothing matching says so.
+        app.Press(Key.Enter);
+        app.Press(Key.Z, character: 'z');
+        await Assert.That(node.DropdownStatus).IsEqualTo("No matches");
+    }
+
+    [Test]
+    public async Task MultiSelect_KeepsOpenChoicesThroughARerender()
+    {
+        var first = new MultiSelect<string>(new Bindable<IReadOnlyList<string>>([], _ => { }), Fruit);
+        IMultiSelectNode node = first;
+        node.ToggleOpen();
+        node.ToggleItem(1);
+
+        IReadOnlyList<string> chosen = [];
+        var second = new MultiSelect<string>(new Bindable<IReadOnlyList<string>>([], v => chosen = v), Fruit);
+        ((IMultiSelectNode)second).IsOpen = true;
+        ((IPumpedNode)second).AdoptFrom(first);
+        ((IMultiSelectNode)second).Close();
+        await Assert.That(string.Join(",", chosen)).IsEqualTo("b");
+    }
+
     // Six buttons recording their index when clicked.
     private static ToolBarItem[] SixButtons(List<int> clicks) =>
         [.. Enumerable.Range(0, 6).Select(i => ToolBarItem.Button(Icons.Star, $"Item {i}", () => clicks.Add(i)))];

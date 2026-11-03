@@ -59,6 +59,18 @@ internal interface IMultiSelectNode
 
     /// <summary>Closes the dropdown without changes.</summary>
     void Close();
+
+    /// <summary>Whether typing while open searches the options (<c>.Searchable</c>).</summary>
+    bool IsSearchable { get; }
+
+    /// <summary>The search typed while open (searchable only).</summary>
+    string SearchText { get; set; }
+
+    /// <summary>The app's content for row <paramref name="index"/> (<c>.RenderOption</c>), or null.</summary>
+    Node? RenderOption(int index);
+
+    /// <summary>"No matches" when a search finds nothing, else null.</summary>
+    string? DropdownStatus { get; }
 }
 
 /// <summary>
@@ -66,7 +78,7 @@ internal interface IMultiSelectNode
 /// Each dropdown option has a checkbox for unambiguous multi-selection.
 /// </summary>
 /// <typeparam name="T">The type of the selectable values.</typeparam>
-public sealed class MultiSelect<T> : Node, IMultiSelectNode, IValidatable where T : notnull
+public sealed class MultiSelect<T> : Node, IMultiSelectNode, IValidatable, IPumpedNode where T : notnull
 {
     /// <summary>
     /// Creates a multi-select dropdown.
@@ -147,7 +159,14 @@ public sealed class MultiSelect<T> : Node, IMultiSelectNode, IValidatable where 
         get => IsOpen;
         set => IsOpen = value;
     }
-    int IMultiSelectNode.OptionCount => Options.Count;
+    int IMultiSelectNode.OptionCount
+    {
+        get
+        {
+            var visible = VisibleOptions();
+            return visible.Count + (HasSelectAllRow(visible) ? 1 : 0);
+        }
+    }
 
     int IMultiSelectNode.HighlightedIndex
     {
@@ -196,29 +215,79 @@ public sealed class MultiSelect<T> : Node, IMultiSelectNode, IValidatable where 
         }
     }
 
+    // ── Rows: "Select all" (.ShowSelectAll), then the options on show (.Searchable) ──
+
+    private string searchText = "";
+
+    private IReadOnlyList<SelectOption<T>> VisibleOptions()
+    {
+        if (!IsSearchable || !IsOpen || searchText.Length == 0)
+        {
+            return Options;
+        }
+        return [.. Options.Where(o => o.Label.Resolve().Contains(searchText, StringComparison.OrdinalIgnoreCase))];
+    }
+
+    private bool HasSelectAllRow(IReadOnlyList<SelectOption<T>> visible) => ShowSelectAll && visible.Count > 0;
+
+    /// <summary>The option at row <paramref name="index"/>, or null for the "Select all" row or out of range.</summary>
+    private SelectOption<T>? OptionAt(int index, out bool selectAll)
+    {
+        var visible = VisibleOptions();
+        int offset = HasSelectAllRow(visible) ? 1 : 0;
+        selectAll = offset == 1 && index == 0;
+        int i = index - offset;
+        return i >= 0 && i < visible.Count ? visible[i] : null;
+    }
+
+    private bool IsChosen(T value) =>
+        (PendingSelection ?? (IEnumerable<T>)Value.Value).Any(v => EqualityComparer<T>.Default.Equals(v, value));
+
     bool IMultiSelectNode.IsItemSelected(int index)
     {
-        if (index < 0 || index >= Options.Count)
+        var option = OptionAt(index, out bool selectAll);
+        if (selectAll)
         {
-            return false;
+            return VisibleOptions().All(o => IsChosen(o.Value));
         }
-
-        T optionValue = Options[index].Value;
-        IEnumerable<T> selected = PendingSelection ?? (IEnumerable<T>)Value.Value;
-        return selected.Any(v => EqualityComparer<T>.Default.Equals(v, optionValue));
+        return option is not null && IsChosen(option.Value);
     }
 
     void IMultiSelectNode.ToggleItem(int index)
     {
-        if (index < 0 || index >= Options.Count || IsReadOnly)
+        if (IsReadOnly)
         {
             return;
         }
-
-        // Ensure pending selection is initialized
+        var option = OptionAt(index, out bool selectAll);
         PendingSelection ??= Value.Value.ToList();
 
-        T optionValue = Options[index].Value;
+        if (selectAll)
+        {
+            // Everything on show chosen: clear them; else choose the rest (up to MaxSelected).
+            var visible = VisibleOptions();
+            if (visible.All(o => IsChosen(o.Value)))
+            {
+                PendingSelection.RemoveAll(v => visible.Any(o => EqualityComparer<T>.Default.Equals(o.Value, v)));
+            }
+            else
+            {
+                foreach (var o in visible)
+                {
+                    if (!IsChosen(o.Value) && (!MaxSelected.HasValue || PendingSelection.Count < MaxSelected.Value))
+                    {
+                        PendingSelection.Add(o.Value);
+                    }
+                }
+            }
+            return;
+        }
+
+        if (option is null)
+        {
+            return;
+        }
+        T optionValue = option.Value;
         int existingIndex = PendingSelection.FindIndex(v => EqualityComparer<T>.Default.Equals(v, optionValue));
 
         if (existingIndex >= 0)
@@ -237,11 +306,46 @@ public sealed class MultiSelect<T> : Node, IMultiSelectNode, IValidatable where 
 
     string IMultiSelectNode.GetOptionLabel(int index)
     {
-        if (index < 0 || index >= Options.Count)
+        var option = OptionAt(index, out bool selectAll);
+        if (selectAll)
         {
-            return string.Empty;
+            return VisibleOptions().All(o => IsChosen(o.Value)) ? "Clear all" : "Select all";
         }
-        return Options[index].Label.Resolve();
+        return option?.Label.Resolve() ?? string.Empty;
+    }
+
+    bool IMultiSelectNode.IsSearchable => IsSearchable;
+
+    string IMultiSelectNode.SearchText
+    {
+        get => searchText;
+        set
+        {
+            searchText = value;
+            HighlightedIndex = value.Length > 0 ? 0 : -1;
+            ScrollOffsetValue = 0;
+        }
+    }
+
+    Node? IMultiSelectNode.RenderOption(int index) =>
+        OptionRenderer is { } render && OptionAt(index, out bool selectAll) is { } option && !selectAll ? render(option.Value) : null;
+
+    string? IMultiSelectNode.DropdownStatus =>
+        IsOpen && IsSearchable && searchText.Length > 0 && VisibleOptions().Count == 0 ? "No matches" : null;
+
+    void IPumpedNode.Pump()
+    {
+    }
+
+    void IPumpedNode.AdoptFrom(Node previous)
+    {
+        // Choices made while the list is open are committed when it closes: keep them (and the
+        // search) through a re-render, which used to drop them.
+        if (previous is MultiSelect<T> old)
+        {
+            PendingSelection = old.PendingSelection;
+            searchText = old.searchText;
+        }
     }
 
     void IMultiSelectNode.ToggleOpen()
@@ -252,6 +356,7 @@ public sealed class MultiSelect<T> : Node, IMultiSelectNode, IValidatable where 
             return;
         }
         IsOpen = !IsOpen;
+        searchText = "";
         if (IsOpen)
         {
             HighlightedIndex = -1;
@@ -267,6 +372,7 @@ public sealed class MultiSelect<T> : Node, IMultiSelectNode, IValidatable where 
     void IMultiSelectNode.Close()
     {
         IsOpen = false;
+        searchText = "";
         HighlightedIndex = -1;
         ScrollOffsetValue = 0;
         CommitPendingSelection();

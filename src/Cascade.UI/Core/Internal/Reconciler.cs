@@ -188,6 +188,7 @@ internal sealed class Reconciler
             newDrp.HighlightedDayRight = oldDrp.HighlightedDayRight;
             newDrp.HoverDate = oldDrp.HoverDate;
             newDrp.HighlightedPreset = oldDrp.HighlightedPreset;
+            newDrp.KeyboardDate = oldDrp.KeyboardDate;
             newDrp.CalendarBounds = oldDrp.CalendarBounds;
             newDrp.CalendarCellSize = oldDrp.CalendarCellSize;
             newDrp.CalendarGridTop = oldDrp.CalendarGridTop;

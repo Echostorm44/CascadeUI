@@ -178,6 +178,34 @@ public sealed class DateRangePicker : Node
         CalendarBounds = default;
     }
 
+    /// <summary>The day the keyboard is on (previewing the range to it, as the pointer does).</summary>
+    internal DateOnly KeyboardDate { get; set; }
+
+    internal void MoveKeyboardTo(DateOnly day)
+    {
+        KeyboardDate = day;
+        HoverDate = day;
+        var left = new DateOnly(DisplayedYear, DisplayedMonth, 1);
+        var right = left.AddMonths(1);
+        var month = new DateOnly(day.Year, day.Month, 1);
+        if (month < left)
+        {
+            DisplayedMonth = month.Month;
+            DisplayedYear = month.Year;
+        }
+        else if (month > right)
+        {
+            var shown = month.AddMonths(-1);
+            DisplayedMonth = shown.Month;
+            DisplayedYear = shown.Year;
+        }
+        bool onLeft = day.Month == DisplayedMonth && day.Year == DisplayedYear;
+        var first = new DateOnly(day.Year, day.Month, 1);
+        int index = day.DayNumber - CalendarLayout.WeekStart(first).DayNumber;
+        HighlightedDayLeft = onLeft ? index : -1;
+        HighlightedDayRight = onLeft ? -1 : index;
+    }
+
     internal void ToggleCalendar()
     {
         if (IsCalendarOpen)

@@ -141,6 +141,24 @@ public sealed class DateTimePicker : Node
         CalendarBounds = default;
     }
 
+    /// <summary>Closes without keeping the date picked in the popup (Escape).</summary>
+    internal void CancelCalendar()
+    {
+        SelectedDate = Value.Value is { } v ? DateOnly.FromDateTime(v) : null;
+        IsCalendarOpen = false;
+        HighlightedDay = -1;
+        CalendarBounds = default;
+    }
+
+    /// <summary>Puts the keyboard on a day: picks it (kept on Enter) and shows its month.</summary>
+    internal void MoveKeyboardTo(DateOnly day)
+    {
+        SelectedDate = day;
+        DisplayedMonth = day.Month;
+        DisplayedYear = day.Year;
+        HighlightedDay = day.DayNumber - CalendarLayout.WeekStart(new DateOnly(day.Year, day.Month, 1)).DayNumber;
+    }
+
     internal void ToggleCalendar()
     {
         if (IsCalendarOpen)

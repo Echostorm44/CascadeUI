@@ -3317,6 +3317,12 @@ internal sealed partial class InputDispatcher
             return;
         }
 
+        if (evt.Type == NativeKeyEventType.KeyDown && HandleDateFamilyKey(evt))
+        {
+            RequestRepaint?.Invoke();
+            return;
+        }
+
         // A focused date picker opens from the keyboard, on its date (or today).
         if (evt.Type == NativeKeyEventType.KeyDown && openDatePicker is null && FocusManager.FocusedElement is DatePicker { IsCalendarOpen: false } focusedDate
             && evt.Key is Key.Enter or Key.Space or Key.Down)
@@ -7845,6 +7851,144 @@ internal sealed partial class InputDispatcher
         }
     }
 
+    /// <summary>
+    /// Keys for the range, date-and-time and month pickers (the date picker has its own): focused
+    /// and closed, Enter, Space or Down opens on the current value; open, Escape closes (the
+    /// date-and-time picker without keeping the change). In a day grid the arrows walk the days (a
+    /// week up or down), Page Up/Down the month (Shift: the year), Enter or Space chooses (the range
+    /// picker's start, then its end); the month picker's arrows go round its 4 × 3 grid.
+    /// </summary>
+    private bool HandleDateFamilyKey(NativeKeyEvent evt)
+    {
+        bool shift = evt.Modifiers.HasFlag(ModifierKeys.Shift);
+        DateOnly Walk(DateOnly from) => evt.Key switch
+        {
+            Key.Left => from.AddDays(-1),
+            Key.Right => from.AddDays(1),
+            Key.Up => from.AddDays(-7),
+            Key.Down => from.AddDays(7),
+            Key.PageUp => shift ? from.AddYears(-1) : from.AddMonths(-1),
+            Key.PageDown => shift ? from.AddYears(1) : from.AddMonths(1),
+            Key.Home => CalendarLayout.WeekStart(from),
+            Key.End => CalendarLayout.WeekStart(from).AddDays(6),
+            _ => from,
+        };
+        bool walking = evt.Key is Key.Left or Key.Right or Key.Up or Key.Down or Key.PageUp or Key.PageDown or Key.Home or Key.End;
+        bool choosing = evt.Key is Key.Enter or Key.Space;
+        var today = DateOnly.FromDateTime(DateTime.Today);
+
+        if (openDateRangePicker is { } range)
+        {
+            if (evt.Key == Key.Escape)
+            {
+                range.CloseCalendar();
+                openDateRangePicker = null;
+                return true;
+            }
+            var at = range.KeyboardDate == default ? range.StartBind.Value ?? today : range.KeyboardDate;
+            if (walking)
+            {
+                range.MoveKeyboardTo(Walk(at));
+                return true;
+            }
+            if (choosing)
+            {
+                range.SelectDay(at);
+                if (!range.IsCalendarOpen)
+                {
+                    openDateRangePicker = null;
+                }
+                return true;
+            }
+            return false;
+        }
+
+        if (openDateTimePicker is { } dateTime)
+        {
+            if (evt.Key == Key.Escape)
+            {
+                dateTime.CancelCalendar();
+                openDateTimePicker = null;
+                return true;
+            }
+            var at = dateTime.SelectedDate ?? (dateTime.Value.Value is { } v ? DateOnly.FromDateTime(v) : today);
+            if (walking)
+            {
+                dateTime.MoveKeyboardTo(Walk(at));
+                return true;
+            }
+            if (choosing)
+            {
+                dateTime.SelectDate(at);
+                dateTime.CloseCalendar();
+                openDateTimePicker = null;
+                return true;
+            }
+            return false;
+        }
+
+        if (openMonthPicker is { } month)
+        {
+            int at = month.HighlightedMonth < 0 ? (month.Value.Value is { } ym && ym.Year == month.DisplayedYear ? ym.Month - 1 : 0) : month.HighlightedMonth;
+            switch (evt.Key)
+            {
+                case Key.Escape:
+                    month.ClosePopup();
+                    openMonthPicker = null;
+                    return true;
+                case Key.Left:
+                    month.HighlightedMonth = Math.Max(0, at - 1);
+                    return true;
+                case Key.Right:
+                    month.HighlightedMonth = Math.Min(11, at + 1);
+                    return true;
+                case Key.Up:
+                    month.HighlightedMonth = Math.Max(0, at - 4);
+                    return true;
+                case Key.Down:
+                    month.HighlightedMonth = Math.Min(11, at + 4);
+                    return true;
+                case Key.PageUp or Key.PageDown:
+                    month.NavigateYear(evt.Key == Key.PageUp ? -1 : 1);
+                    month.HighlightedMonth = at;
+                    return true;
+                case Key.Enter or Key.Space:
+                    month.SelectMonth(at + 1);
+                    if (!month.IsPopupOpen)
+                    {
+                        openMonthPicker = null;
+                    }
+                    return true;
+            }
+            return false;
+        }
+
+        // Closed and focused: open from the keyboard.
+        if (evt.Key is not (Key.Enter or Key.Space or Key.Down))
+        {
+            return false;
+        }
+        switch (FocusManager.FocusedElement)
+        {
+            case DateRangePicker closedRange when !closedRange.IsCalendarOpen:
+                closedRange.OpenCalendar();
+                closedRange.MoveKeyboardTo(closedRange.StartBind.Value ?? today);
+                openDateRangePicker = closedRange;
+                return true;
+            case DateTimePicker closedDateTime when !closedDateTime.IsCalendarOpen:
+                closedDateTime.OpenCalendar();
+                closedDateTime.MoveKeyboardTo(closedDateTime.Value.Value is { } current ? DateOnly.FromDateTime(current) : today);
+                openDateTimePicker = closedDateTime;
+                return true;
+            case MonthPicker closedMonth when !closedMonth.IsPopupOpen:
+                closedMonth.OpenPopup();
+                closedMonth.HighlightedMonth = closedMonth.Value.Value is { } chosen && chosen.Year == closedMonth.DisplayedYear ? chosen.Month - 1 : 0;
+                openMonthPicker = closedMonth;
+                return true;
+        }
+        return false;
+    }
+
     // ── Calendar (full inline) helpers ────────────────────────────────
 
     // ── NavigationBar ─────────────────────────────────────────────────
@@ -9368,6 +9512,7 @@ internal sealed partial class InputDispatcher
         node is Button or LinkButton or IconButton
             or TextInput or TextArea or PasswordInput or PinInput
             or MentionInput or TagInput or ColorPicker or Calendar or TimePicker or NavItem { Enabled: true } or IRadioButton or RangeSlider or DatePicker
+            or DateRangePicker or DateTimePicker or MonthPicker
             or Checkbox or Toggle or Slider or HotkeyPicker or TabBar
             or ISelectNode or IMultiSelectNode or IComboboxNode
             or IToggleGroup or ISegmentedControl

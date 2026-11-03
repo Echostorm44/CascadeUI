@@ -768,9 +768,13 @@ internal static class LayoutSolver
 
     private static Size MeasureSlider(Slider slider, LayoutConstraints constraints)
     {
-        // Slider: default 200px wide (or explicit width), 32px tall
-        float desiredWidth = slider.WidthValue ?? 200f;
-        float desiredHeight = 32f;
+        // Slider: 200px long by default (or .Width), across a 32px band plus room for tick marks;
+        // a vertical slider stands the same box on end.
+        float length = slider.WidthValue ?? 200f;
+        float band = 32f + (slider.ShowTicksValue ? Slider.TickSpace : 0f);
+        bool vertical = slider.OrientationValue == Orientation.Vertical;
+        float desiredWidth = vertical ? band : length;
+        float desiredHeight = vertical ? length : band;
         return new Size(
             constraints.ConstrainWidth(desiredWidth),
             constraints.ConstrainHeight(desiredHeight));
@@ -2134,7 +2138,7 @@ internal static class LayoutSolver
     private static Size MeasureRangeSlider(RangeSlider rs, LayoutConstraints constraints)
     {
         float desiredWidth = 200f;
-        float desiredHeight = 32f;
+        float desiredHeight = 32f + (rs.ShowTicksValue ? Slider.TickSpace : 0f);
         return new Size(
             constraints.ConstrainWidth(desiredWidth),
             constraints.ConstrainHeight(desiredHeight));

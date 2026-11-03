@@ -28,6 +28,7 @@ internal sealed partial class InputDispatcher
 
     // Slider drag state — tracked across MouseDown/Move/Up
     private float sliderDragStartX;
+    private float sliderDragStartY;
     private float sliderDragStartValue;
 
     // RangeSlider drag state — which thumb (true = max, false = min)
@@ -1344,7 +1345,7 @@ internal sealed partial class InputDispatcher
         // If dragging a slider, update its value from the drag delta
         else if (isMouseDown && pressedNode is Slider slider && !slider.IsDisabled && !slider.IsReadOnly)
         {
-            UpdateSliderFromDrag(slider, evt.X);
+            UpdateSliderFromDrag(slider, evt.X, evt.Y);
             if (rootNode != null)
             {
                 MarkScrollViewLayersDirty(rootNode, slider);
@@ -2080,6 +2081,7 @@ internal sealed partial class InputDispatcher
         if (hitNode is Slider sl)
         {
             sliderDragStartX = evt.X;
+            sliderDragStartY = evt.Y;
             sliderDragStartValue = sl.Bind.Value;
         }
 
@@ -3211,6 +3213,13 @@ internal sealed partial class InputDispatcher
                 RequestRepaint?.Invoke();
                 return;
             }
+        }
+
+        if (evt.Type == NativeKeyEventType.KeyDown && focusedNode is Slider focusedSlider && !focusedSlider.IsDisabled && !focusedSlider.IsReadOnly
+            && evt.Modifiers == ModifierKeys.None && HandleSliderKey(focusedSlider, evt))
+        {
+            RequestRepaint?.Invoke();
+            return;
         }
 
         // PasswordInput character input — same as TextInput but with separate buffer
@@ -8180,30 +8189,50 @@ internal sealed partial class InputDispatcher
     /// Uses the delta from the drag-start X and the slider's rendered width to determine
     /// how far along the track the pointer is, then maps that to the value range.
     /// </summary>
-    private void UpdateSliderFromDrag(Slider slider, float currentX)
+    private void UpdateSliderFromDrag(Slider slider, float currentX, float currentY)
     {
-        float deltaX = currentX - sliderDragStartX;
-        const float thumbWidthEstimate = 20f;
-        float trackWidth = Math.Max(1f, slider.LayoutData.Bounds.Width - thumbWidthEstimate);
-        if (trackWidth <= 0)
-        {
-            return;
-        }
+        // Along the track: rightwards, or upwards on a vertical slider (its minimum is at the bottom).
+        bool vertical = slider.OrientationValue == Orientation.Vertical;
+        var theme = ThemeSwitcher.Current.Slider;
+        float thumbAlong = vertical ? theme.ThumbHeight : theme.ThumbWidth;
+        var bounds = slider.LayoutData.Bounds;
+        float trackLength = Math.Max(1f, (vertical ? bounds.Height : bounds.Width) - thumbAlong);
+        float delta = vertical ? sliderDragStartY - currentY : currentX - sliderDragStartX;
 
+        float newValue = slider.Snap(sliderDragStartValue + delta * (slider.Max - slider.Min) / trackLength);
+        if (newValue != slider.Bind.Value)
+        {
+            slider.Bind.OnChange(newValue);
+        }
+    }
+
+    /// <summary>
+    /// Arrow keys move a focused slider a step (Up/Right raise it), Page Up/Down a tenth of the
+    /// range, Home/End to its ends.
+    /// </summary>
+    private static bool HandleSliderKey(Slider slider, NativeKeyEvent evt)
+    {
         float range = slider.Max - slider.Min;
-        float valueDelta = deltaX * range / trackWidth;
-        float newValue = sliderDragStartValue + valueDelta;
-        newValue = Math.Clamp(newValue, slider.Min, slider.Max);
-
-        // Snap to step if specified
-        if (slider.Step.HasValue && slider.Step.Value > 0)
+        float? target = evt.Key switch
         {
-            float step = slider.Step.Value;
-            newValue = MathF.Round(newValue / step) * step;
-            newValue = Math.Clamp(newValue, slider.Min, slider.Max);
+            Key.Right or Key.Up => slider.Bind.Value + slider.KeyboardStep,
+            Key.Left or Key.Down => slider.Bind.Value - slider.KeyboardStep,
+            Key.PageUp => slider.Bind.Value + Math.Max(slider.KeyboardStep, range / 10f),
+            Key.PageDown => slider.Bind.Value - Math.Max(slider.KeyboardStep, range / 10f),
+            Key.Home => slider.Min,
+            Key.End => slider.Max,
+            _ => null,
+        };
+        if (target is not { } next)
+        {
+            return false;
         }
-
-        slider.Bind.OnChange(newValue);
+        next = slider.Snap(next);
+        if (next != slider.Bind.Value)
+        {
+            slider.Bind.OnChange(next);
+        }
+        return true;
     }
 
     private void UpdateRangeSliderFromDrag(RangeSlider rs, float currentX)

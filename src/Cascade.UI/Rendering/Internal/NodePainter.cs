@@ -6727,11 +6727,14 @@ internal sealed partial class NodePainter
     private void PaintSlider(Slider slider, Rect bounds)
     {
         var t = theme.Slider;
-        float trackHeight = t.TrackHeight;
-        float thumbWidth = t.ThumbWidth;
-        float thumbHeight = t.ThumbHeight;
+        bool vertical = slider.OrientationValue == Orientation.Vertical;
+        float trackThickness = t.TrackHeight;
+        // The thumb is drawn across the track: a vertical slider turns it a quarter turn.
+        float thumbAlong = vertical ? t.ThumbHeight : t.ThumbWidth;
+        float thumbAcross = vertical ? t.ThumbWidth : t.ThumbHeight;
         bool disabled = slider.IsDisabled || slider.IsReadOnly;
         bool reducedMotion = ControlStateAnimator.ReducedMotion;
+        slider.AbsoluteBounds = new Rect(absoluteX, absoluteY, bounds.Width, bounds.Height);
 
         // Animate hover/press/focus state
         var hoverModel = t.ThumbTransition.Model;
@@ -6743,46 +6746,67 @@ internal sealed partial class NodePainter
         float hoverT = anim.Hover.Current;
         float pressT = anim.Press.Current;
 
-        // Track
-        float trackY = bounds.Y + (bounds.Height - trackHeight) / 2f;
-        var trackBounds = new Rect(bounds.X + thumbWidth / 2f, trackY,
-            bounds.Width - thumbWidth, trackHeight);
-
-        // Empty track (full width)
+        // Track: centred across the control (leaving room for tick marks on the far side), inset by
+        // half a thumb at each end so the thumb's centre reaches both ends.
+        var geometry = Slider.Geometry(vertical, slider.ShowTicksValue, bounds, thumbAlong, trackThickness);
+        var trackBounds = geometry.Track;
         PaintBrush(t.TrackEmpty, trackBounds, t.TrackRadius);
 
-        // Filled portion
         float value = Math.Clamp(slider.Bind.Value, slider.Min, slider.Max);
         float fraction = (slider.Max - slider.Min) > 0
             ? (value - slider.Min) / (slider.Max - slider.Min)
             : 0f;
-        float fillWidth = trackBounds.Width * fraction;
-        if (fillWidth > 0)
+        float trackLength = vertical ? trackBounds.Height : trackBounds.Width;
+        float fillLength = trackLength * fraction;
+
+        // The filled part runs from the minimum end: the left, or the bottom of a vertical slider.
+        Rect FillRect(float from, float length) => vertical
+            ? new Rect(trackBounds.X, trackBounds.Bottom - from - length, trackBounds.Width, length)
+            : new Rect(trackBounds.X + from, trackBounds.Y, length, trackBounds.Height);
+
+        if (fillLength > 0)
         {
-            var fillBounds = new Rect(trackBounds.X, trackBounds.Y,
-                fillWidth, trackBounds.Height);
-            PaintBrush(t.TrackFill, fillBounds, t.TrackRadius);
+            PaintBrush(t.TrackFill, FillRect(0f, fillLength), t.TrackRadius);
 
             // Track fill glow near thumb — intensifies fill color near the thumb position
             if (!disabled && !reducedMotion && hoverT > 0.01f)
             {
-                float glowWidth = 40f;
-                float glowX = trackBounds.X + fillWidth - glowWidth / 2f;
-                glowX = Math.Max(glowX, trackBounds.X);
-                float clippedWidth = Math.Min(glowWidth, fillWidth);
-                if (clippedWidth > 0)
+                float glowLength = 40f;
+                float glowFrom = Math.Max(0f, fillLength - glowLength / 2f);
+                float clipped = Math.Min(glowLength, fillLength - glowFrom);
+                if (clipped > 0)
                 {
-                    var glowBounds = new Rect(glowX, trackBounds.Y, clippedWidth, trackBounds.Height);
-                    ctx.DrawRect(glowBounds, theme.Colors.Primary.Opacity(0.15f * hoverT),
+                    ctx.DrawRect(FillRect(glowFrom, clipped), theme.Colors.Primary.Opacity(0.15f * hoverT),
                         radius: t.TrackRadius);
                 }
             }
         }
 
+        // Tick marks (.ShowTicks): one per step, else at every tenth, below the track (right of a
+        // vertical one); in the fill colour up to the value.
+        if (slider.ShowTicksValue)
+        {
+            const float tickLong = 4f;
+            const float tickWidth = 1.5f;
+            foreach (float tick in Slider.TickFractions(slider.Min, slider.Max, slider.Step, trackLength))
+            {
+                float along = trackLength * tick;
+                var color = (tick <= fraction + 0.0001f ? theme.Colors.Primary : theme.Colors.TextMuted)
+                    .Opacity(disabled ? 0.4f : 0.8f);
+                var tickRect = vertical
+                    ? new Rect(geometry.TickLine, trackBounds.Bottom - along - tickWidth / 2f, tickLong, tickWidth)
+                    : new Rect(trackBounds.X + along - tickWidth / 2f, geometry.TickLine, tickWidth, tickLong);
+                ctx.DrawRect(tickRect, color, radius: tickWidth / 2f);
+            }
+        }
+
         // Thumb position
-        float thumbX = trackBounds.X + fillWidth - thumbWidth / 2f;
-        float thumbY = bounds.Y + (bounds.Height - thumbHeight) / 2f;
-        var thumbBounds = new Rect(thumbX, thumbY, thumbWidth, thumbHeight);
+        var thumbCenter = vertical
+            ? new Point(trackBounds.X + trackBounds.Width / 2f, trackBounds.Bottom - fillLength)
+            : new Point(trackBounds.X + fillLength, trackBounds.Y + trackBounds.Height / 2f);
+        float thumbW = vertical ? thumbAcross : thumbAlong;
+        float thumbH = vertical ? thumbAlong : thumbAcross;
+        var thumbBounds = new Rect(thumbCenter.X - thumbW / 2f, thumbCenter.Y - thumbH / 2f, thumbW, thumbH);
 
         // Spring-based scale: hover 1.15x, press 0.9x with spring back
         float hoverScale = disabled ? 1f : LerpF(1f, 1.15f, hoverT);
@@ -6859,23 +6883,30 @@ internal sealed partial class NodePainter
                 radius: t.ThumbRadius + ringOffset);
         }
 
-        // Value label — springs in above thumb on hover
+        // Value label — springs in above the thumb (beside it on a vertical slider) on hover
         if (slider.ShowValueLabelValue && !disabled)
         {
             float labelOpacity = reducedMotion ? (slider.IsHovered || slider.IsPressed ? 1f : 0f) : hoverT;
             if (labelOpacity > 0.01f)
             {
                 string fmt = slider.FormatString ?? "F1";
-                string labelText = value.ToString(fmt);
+                string labelText = value.ToString(fmt, System.Globalization.CultureInfo.CurrentCulture);
                 float labelFontSize = 11f;
 
                 var labelSize = ctx.MeasureText(labelText, labelFontSize);
-                float labelX = MathF.Round(thumbBounds.X + thumbBounds.Width / 2f - labelSize.Width / 2f);
-
-                // Spring-in: slight Y overshoot + scale
                 float labelSpringScale = reducedMotion ? 1f : LerpF(0.8f, 1f, hoverT);
-                float labelSlideY = reducedMotion ? 0f : LerpF(4f, 0f, hoverT);
-                float labelY = MathF.Round(thumbBounds.Y - labelSize.Height - 6f + labelSlideY);
+                float slide = reducedMotion ? 0f : LerpF(4f, 0f, hoverT);
+                float labelX, labelY;
+                if (vertical)
+                {
+                    labelX = MathF.Round(thumbBounds.Right + 6f - slide);
+                    labelY = MathF.Round(thumbBounds.Y + thumbBounds.Height / 2f - labelSize.Height / 2f);
+                }
+                else
+                {
+                    labelX = MathF.Round(thumbBounds.X + thumbBounds.Width / 2f - labelSize.Width / 2f);
+                    labelY = MathF.Round(thumbBounds.Y - labelSize.Height - 6f + slide);
+                }
 
                 if (!reducedMotion && MathF.Abs(labelSpringScale - 1f) > 0.001f)
                 {
@@ -9793,14 +9824,27 @@ internal sealed partial class NodePainter
         float minFrac = trackRange > 0 ? (minVal - rs.Min) / trackRange : 0f;
         float maxFrac = trackRange > 0 ? (maxVal - rs.Min) / trackRange : 1f;
 
-        // Track
-        float trackY = bounds.Y + (bounds.Height - trackHeight) / 2f;
-        float trackLeft = bounds.X + thumbW / 2f;
-        float trackW = bounds.Width - thumbW;
-        var trackBounds = new Rect(trackLeft, trackY, trackW, trackHeight);
+        // Track (the same geometry as Slider, tick marks below it)
+        var geometry = Slider.Geometry(vertical: false, rs.ShowTicksValue, bounds, thumbW, trackHeight);
+        var trackBounds = geometry.Track;
+        float trackY = trackBounds.Y;
+        float trackLeft = trackBounds.X;
+        float trackW = trackBounds.Width;
 
         // Empty track
         PaintBrush(t.TrackEmpty, trackBounds, t.TrackRadius);
+
+        // Tick marks (.ShowTicks): in the fill colour between the two thumbs.
+        if (rs.ShowTicksValue)
+        {
+            const float tickWidth = 1.5f;
+            foreach (float tick in Slider.TickFractions(rs.Min, rs.Max, rs.Step, trackW))
+            {
+                bool inRange = tick >= minFrac - 0.0001f && tick <= maxFrac + 0.0001f;
+                var color = (inRange ? theme.Colors.Primary : theme.Colors.TextMuted).Opacity(disabled ? 0.4f : 0.8f);
+                ctx.DrawRect(new Rect(trackLeft + trackW * tick - tickWidth / 2f, geometry.TickLine, tickWidth, 4f), color, radius: tickWidth / 2f);
+            }
+        }
 
         // Filled portion between the two thumbs
         float fillLeft = trackLeft + trackW * minFrac;
@@ -9825,7 +9869,7 @@ internal sealed partial class NodePainter
 
         // Min thumb
         float minThumbX = trackLeft + trackW * minFrac - thumbW / 2f;
-        float thumbY = bounds.Y + (bounds.Height - thumbH) / 2f;
+        float thumbY = trackY + trackHeight / 2f - thumbH / 2f;
         PaintRangeThumbPolished(new Rect(minThumbX, thumbY, thumbW, thumbH), t, disabled,
             thumbScale, reducedMotion);
 

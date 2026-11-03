@@ -475,6 +475,78 @@ public class ModifierRenderTests
         await Assert.That(second).IsEqualTo(first);
     }
 
+    [Test]
+    public async Task VerticalSlider_StandsOnEnd_AndDraggingUpRaisesIt()
+    {
+        float value = 0f;
+        var slider = new Slider(new Bindable<float>(0f, v => value = v), min: 0, max: 100).Orientation(Orientation.Vertical).Width(160);
+        using var app = new RenderHarness(() => slider);
+        var frame = app.Frame();
+
+        await Assert.That(slider.LayoutData.Bounds.Width).IsEqualTo(32f);
+        await Assert.That(slider.LayoutData.Bounds.Height).IsEqualTo(160f);
+        // At the minimum the thumb (bright, near white) sits at the bottom of the track.
+        await Assert.That(frame.Count(p => p.Y > 130 && p.Y < 160 && p.R > 200 && p.G > 200 && p.B > 200)).IsGreaterThan(20);
+        await Assert.That(frame.Count(p => p.Y < 40 && p.R > 200 && p.G > 200 && p.B > 200)).IsEqualTo(0);
+
+        // Dragging the thumb up by half the track raises the value by half the range.
+        float track = 160f - ThemeSwitcher.Current.Slider.ThumbHeight;
+        app.Drag(16, 150, 16, 150 - track / 2f);
+        await Assert.That(value).IsBetween(45f, 55f);
+    }
+
+    [Test]
+    public async Task Slider_ArrowKeys_PageKeys_HomeAndEnd()
+    {
+        // Each key from a known value (the harness doesn't re-render on a change).
+        static float After(float start, Key key)
+        {
+            float value = start;
+            var slider = new Slider(new Bindable<float>(start, v => value = v), min: 0, max: 100, step: 5);
+            using var app = new RenderHarness(() => slider);
+            app.Frame();
+            FocusManager.RequestFocus(slider);
+            app.Press(key);
+            return value;
+        }
+
+        await Assert.That(After(50, Key.Right)).IsEqualTo(55f);
+        await Assert.That(After(50, Key.Up)).IsEqualTo(55f);
+        await Assert.That(After(50, Key.Left)).IsEqualTo(45f);
+        await Assert.That(After(50, Key.Down)).IsEqualTo(45f);
+        await Assert.That(After(50, Key.PageUp)).IsEqualTo(60f);
+        await Assert.That(After(50, Key.PageDown)).IsEqualTo(40f);
+        await Assert.That(After(50, Key.End)).IsEqualTo(100f);
+        await Assert.That(After(50, Key.Home)).IsEqualTo(0f);
+        await Assert.That(After(100, Key.Right)).IsEqualTo(100f);    }
+
+    [Test]
+    public async Task SliderShowTicks_DrawsAMarkPerStep_BelowTheTrack()
+    {
+        int plain = TickInk(() => new Slider(new Bindable<float>(0f, _ => { }), min: 0, max: 10, step: 1));
+        Slider? ticked = null;
+        int marked = TickInk(() => ticked = new Slider(new Bindable<float>(0f, _ => { }), min: 0, max: 10, step: 1).ShowTicks());
+
+        await Assert.That(ticked!.LayoutData.Bounds.Height).IsEqualTo(32f + Slider.TickSpace);
+        // Eleven marks, each a few pixels, all below the track's band.
+        await Assert.That(marked - plain).IsGreaterThan(11 * 3);
+    }
+
+    [Test]
+    public async Task RangeSliderShowTicks_DrawsMarksBelowTheTrack()
+    {
+        int plain = TickInk(() => new RangeSlider(new Bindable<float>(2f, _ => { }), new Bindable<float>(8f, _ => { }), min: 0, max: 10, step: 1));
+        int marked = TickInk(() => new RangeSlider(new Bindable<float>(2f, _ => { }), new Bindable<float>(8f, _ => { }), min: 0, max: 10, step: 1).ShowTicks());
+        await Assert.That(marked - plain).IsGreaterThan(11 * 3);
+    }
+
+    // Ink below the 32px band where tick marks go.
+    private static int TickInk(Func<Node> build)
+    {
+        using var app = new RenderHarness(build);
+        return app.Frame().Count(p => p.Y >= 30 && p.Y < 32 + (int)Slider.TickSpace && p.R + p.G + p.B > 90);
+    }
+
     private static bool IsRedPixel(RenderHarness.Pixel p) => p.R > 200 && p.G < 60 && p.B < 60;
 
     private static bool IsRed(RenderHarness.Pixels frame, int x, int y) =>

@@ -55,6 +55,83 @@ public sealed class Slider : Node
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
 
+    /// <summary>Window-space bounds from the last paint, for pointer math.</summary>
+    internal Rect AbsoluteBounds { get; set; }
+
+    /// <summary>Room tick marks take beyond the track's usual 32px band.</summary>
+    internal const float TickSpace = 8f;
+
+    /// <summary>The track's rectangle, and where tick marks start across the control (y, or x when vertical).</summary>
+    internal readonly record struct SliderGeometry(Rect Track, float TickLine);
+
+    /// <summary>
+    /// The track within <paramref name="bounds"/>: centred across a 32px band (tick marks sit beyond
+    /// it, below or to the right), inset by half a thumb at each end so the thumb's centre reaches
+    /// both. Shared by paint and pointer input so a press lands where the thumb is drawn.
+    /// </summary>
+    internal static SliderGeometry Geometry(bool vertical, bool ticks, Rect bounds, float thumbAlong, float trackThickness)
+    {
+        float tickSpace = ticks ? TickSpace : 0f;
+        if (vertical)
+        {
+            float band = bounds.Width - tickSpace;
+            float x = bounds.X + (band - trackThickness) / 2f;
+            var track = new Rect(x, bounds.Y + thumbAlong / 2f, trackThickness, Math.Max(0f, bounds.Height - thumbAlong));
+            return new SliderGeometry(track, bounds.X + band - 2f);
+        }
+        else
+        {
+            float band = bounds.Height - tickSpace;
+            float y = bounds.Y + (band - trackThickness) / 2f;
+            var track = new Rect(bounds.X + thumbAlong / 2f, y, Math.Max(0f, bounds.Width - thumbAlong), trackThickness);
+            return new SliderGeometry(track, bounds.Y + band - 2f);
+        }
+    }
+
+    /// <summary>
+    /// Where the tick marks go along the track, as fractions 0..1: one per step, or every tenth
+    /// without a step. Steps closer than 4px are thinned to every second (third, …) step.
+    /// </summary>
+    internal static List<float> TickFractions(float min, float max, float? step, float trackLength)
+    {
+        var ticks = new List<float>();
+        float range = max - min;
+        if (range <= 0f)
+        {
+            return ticks;
+        }
+        int intervals = step is > 0f ? (int)MathF.Round(range / step.Value) : 10;
+        intervals = Math.Max(1, intervals);
+        int every = 1;
+        while (intervals / every > 0 && trackLength / (intervals / (float)every) < 4f)
+        {
+            every++;
+        }
+        for (int i = 0; i <= intervals; i += every)
+        {
+            ticks.Add(Math.Min(1f, i / (float)intervals));
+        }
+        if (ticks[^1] < 1f)
+        {
+            ticks.Add(1f);
+        }
+        return ticks;
+    }
+
+    /// <summary>The value one keyboard step from the current one: the step, or a hundredth of the range.</summary>
+    internal float KeyboardStep => Step is > 0f ? Step.Value : (Max - Min) / 100f;
+
+    /// <summary>Clamps to the range and snaps to the step, as a drag does.</summary>
+    internal float Snap(float value)
+    {
+        value = Math.Clamp(value, Min, Max);
+        if (Step is > 0f)
+        {
+            value = Math.Clamp(Min + MathF.Round((value - Min) / Step.Value) * Step.Value, Min, Max);
+        }
+        return value;
+    }
+
     /// <summary>
     /// Runs all registered validation rules against the current value.
     /// Returns the first failing result or <see cref="ValidationResult.Ok"/>.
@@ -108,7 +185,7 @@ public static class SliderExtensions
         return slider;
     }
 
-    /// <summary>Sets the slider width in logical pixels.</summary>
+    /// <summary>Sets the slider's length in logical pixels: its width, or its height when vertical.</summary>
     public static Slider Width(this Slider slider, float width)
     {
         slider.WidthValue = width;

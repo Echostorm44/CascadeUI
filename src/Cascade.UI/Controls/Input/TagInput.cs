@@ -5,7 +5,7 @@ namespace Cascade.UI;
 /// created by typing and pressing a delimiter key. Supports suggestions,
 /// drag-to-reorder, and per-tag validation.
 /// </summary>
-public sealed class TagInput : Node
+public sealed class TagInput : Node, IValidatable
 {
     /// <summary>
     /// Creates a tag input bound to a list of strings.
@@ -48,6 +48,31 @@ public sealed class TagInput : Node
 
     internal List<Func<string, ValidationResult>> ValidationRules { get; } = [];
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
+
+    // ── Validation (see Validation) ──
+    // The rules check one tag at a time: the text being typed, then each tag already added.
+    ValidationTrigger IValidatable.ValidationTriggerMode => ValidationTriggerMode;
+    bool IValidatable.HasValidationRules => ValidationRules.Count > 0;
+    object? IValidatable.ValidationValue => InputBuffer + "\u001e" + string.Join("\u001f", CurrentTags);
+    TimeSpan? IValidatable.ValidationDebounce => null;
+    ValidationState? IValidatable.ValidationState { get; set; }
+
+    ValidationResult IValidatable.RunValidation()
+    {
+        string pending = InputBuffer.Trim();
+        if (pending.Length > 0 && ValidateTag(pending) is { IsValid: false } typed)
+        {
+            return typed;
+        }
+        foreach (string tag in CurrentTags)
+        {
+            if (ValidateTag(tag) is { IsValid: false } failed)
+            {
+                return failed;
+            }
+        }
+        return ValidationResult.Ok;
+    }
     internal Func<string, IEnumerable<string>>? SuggestionSyncSource { get; set; }
     internal Func<string, Task<IEnumerable<string>>>? SuggestionAsyncSource { get; set; }
     internal bool AllowDuplicateValues { get; set; }
@@ -140,10 +165,12 @@ public sealed class TagInput : Node
             return;
         }
 
-        // Validate
+        // Validate: a rejected tag stays in the box with the rule's message under it.
         var result = ValidateTag(trimmed);
         if (!result.IsValid)
         {
+            Validation.StateOf(this).Result = result;
+            SharedScheduler.Instance.RequestFrame();
             return;
         }
 

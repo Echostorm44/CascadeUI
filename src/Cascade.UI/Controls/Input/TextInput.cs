@@ -5,7 +5,7 @@ namespace Cascade.UI;
 /// the text editing engine with support for masking, validation, prefix/suffix
 /// slots, and autocomplete.
 /// </summary>
-public sealed class TextInput : Node
+public sealed class TextInput : Node, IValidatable
 {
     /// <summary>
     /// Creates a text input bound to a string field via two-way binding.
@@ -48,6 +48,14 @@ public sealed class TextInput : Node
 
     internal List<Func<string, ValidationResult>> ValidationRules { get; } = [];
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
+
+    // ── Validation (see Validation) ──
+    ValidationTrigger IValidatable.ValidationTriggerMode => ValidationTriggerMode;
+    bool IValidatable.HasValidationRules => ValidationRules.Count > 0;
+    ValidationResult IValidatable.RunValidation() => RunValidation();
+    object? IValidatable.ValidationValue => Value.Value;
+    TimeSpan? IValidatable.ValidationDebounce => DebounceDelay;
+    ValidationState? IValidatable.ValidationState { get; set; }
     internal int? MaxLengthValue { get; set; }
     internal MaskPattern? MaskPatternValue { get; set; }
     internal CustomMask? CustomMaskValue { get; set; }

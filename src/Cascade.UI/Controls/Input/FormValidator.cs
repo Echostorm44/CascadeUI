@@ -47,11 +47,12 @@ public sealed class FormValidator : Node
 /// </summary>
 public sealed class FormScope
 {
-    private readonly List<FormFieldEntry> fields = [];
+    // The controls with rules inside the FormValidator, refreshed each layout (re-renders replace them).
+    private IReadOnlyList<IValidatable> fields = [];
 
     /// <summary>
-    /// Whether all input controls within the scope currently pass validation.
-    /// This is a reactive value — UI bound to it updates automatically.
+    /// Whether every field in the form passes its rules right now. It checks the current values
+    /// without showing any message, so a Submit button can be enabled from it.
     /// </summary>
     public bool IsValid
     {
@@ -59,7 +60,7 @@ public sealed class FormScope
         {
             foreach (var entry in fields)
             {
-                if (entry.LastResult is { IsValid: false })
+                if (!entry.RunValidation().IsValid)
                 {
                     return false;
                 }
@@ -70,19 +71,15 @@ public sealed class FormScope
     }
 
     /// <summary>
-    /// Triggers validation on all fields immediately, regardless of their
-    /// <see cref="ValidationTrigger"/> setting. Returns <c>false</c> if any
-    /// field fails validation.
+    /// Validates every field now, whatever its <see cref="ValidationTrigger"/>, and shows each
+    /// field's message. Returns <c>false</c> if any field fails.
     /// </summary>
     public bool ValidateAll()
     {
         bool allValid = true;
-
-        foreach (var field in fields)
+        foreach (var entry in fields)
         {
-            var result = field.Validate();
-            field.LastResult = result;
-            if (!result.IsValid)
+            if (!Validation.Run(entry).IsValid)
             {
                 allValid = false;
             }
@@ -91,43 +88,27 @@ public sealed class FormScope
         return allValid;
     }
 
-    /// <summary>
-    /// Resets all validation state, clearing error and warning messages
-    /// from all fields within the scope.
-    /// </summary>
+    /// <summary>Clears every field's message (after a form is submitted or cleared, say).</summary>
     public void Reset()
     {
-        foreach (var field in fields)
+        foreach (var entry in fields)
         {
-            field.LastResult = null;
+            if (entry.ValidationState is { } state)
+            {
+                state.Result = null;
+                state.Dirty = false;
+            }
         }
+        SharedScheduler.Instance.RequestFrame();
     }
 
-    /// <summary>
-    /// Registers a field's validation function with this scope.
-    /// Called by the framework when input controls are mounted inside a FormValidator.
-    /// </summary>
-    internal void RegisterField(Func<ValidationResult> validate)
-    {
-        fields.Add(new FormFieldEntry(validate));
-    }
+    /// <summary>The form's fields this frame. Called by layout.</summary>
+    internal void SetFields(IReadOnlyList<IValidatable> current) => fields = current;
 
-    /// <summary>
-    /// Removes all registered fields. Called when the form content is unmounted.
-    /// </summary>
-    internal void ClearFields()
-    {
-        fields.Clear();
-    }
-
-    /// <summary>
-    /// Returns the number of registered fields.
-    /// </summary>
+    /// <summary>The number of fields in the form.</summary>
     internal int FieldCount => fields.Count;
 
-    /// <summary>
-    /// Returns the number of fields that currently have validation errors.
-    /// </summary>
+    /// <summary>The number of fields showing an error.</summary>
     internal int ErrorCount
     {
         get
@@ -135,7 +116,7 @@ public sealed class FormScope
             int count = 0;
             foreach (var entry in fields)
             {
-                if (entry.LastResult is { IsValid: false })
+                if (entry.ValidationState?.Result is { IsValid: false })
                 {
                     count++;
                 }
@@ -144,18 +125,4 @@ public sealed class FormScope
             return count;
         }
     }
-}
-
-/// <summary>
-/// Tracks a single field's validation function and last result within a <see cref="FormScope"/>.
-/// </summary>
-internal sealed class FormFieldEntry
-{
-    internal FormFieldEntry(Func<ValidationResult> validate)
-    {
-        Validate = validate;
-    }
-
-    internal Func<ValidationResult> Validate { get; }
-    internal ValidationResult? LastResult { get; set; }
 }

@@ -5,7 +5,7 @@ namespace Cascade.UI;
 /// same track. The track segment between the thumbs is filled. The thumbs
 /// cannot cross each other.
 /// </summary>
-public sealed class RangeSlider : Node
+public sealed class RangeSlider : Node, IValidatable
 {
     /// <summary>
     /// Creates a range slider with two bound values.
@@ -57,6 +57,14 @@ public sealed class RangeSlider : Node
     internal bool ShowTicksValue { get; set; }
     internal List<Func<float, float, ValidationResult>> ValidationRules { get; } = [];
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
+
+    // ── Validation (see Validation) ──
+    ValidationTrigger IValidatable.ValidationTriggerMode => ValidationTriggerMode;
+    bool IValidatable.HasValidationRules => ValidationRules.Count > 0;
+    ValidationResult IValidatable.RunValidation() => RunValidation();
+    object? IValidatable.ValidationValue => (MinBind.Value, MaxBind.Value);
+    TimeSpan? IValidatable.ValidationDebounce => null;
+    ValidationState? IValidatable.ValidationState { get; set; }
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
 

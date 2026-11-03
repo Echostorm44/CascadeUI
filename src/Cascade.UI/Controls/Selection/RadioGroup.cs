@@ -41,7 +41,7 @@ internal interface IRadioGroup
 /// and keyboard navigation.
 /// </summary>
 /// <typeparam name="T">The type of the selectable value.</typeparam>
-public sealed class RadioGroup<T> : Node, IRadioGroup where T : notnull
+public sealed class RadioGroup<T> : Node, IRadioGroup, IValidatable where T : notnull
 {
     /// <summary>
     /// Creates a radio group bound to a typed field.
@@ -70,6 +70,14 @@ public sealed class RadioGroup<T> : Node, IRadioGroup where T : notnull
 
     internal List<Func<T, ValidationResult>> ValidationRules { get; } = [];
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
+
+    // ── Validation (see Validation) ──
+    ValidationTrigger IValidatable.ValidationTriggerMode => ValidationTriggerMode;
+    bool IValidatable.HasValidationRules => ValidationRules.Count > 0;
+    ValidationResult IValidatable.RunValidation() => RunValidation();
+    object? IValidatable.ValidationValue => Value.Value;
+    TimeSpan? IValidatable.ValidationDebounce => null;
+    ValidationState? IValidatable.ValidationState { get; set; }
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
 

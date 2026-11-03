@@ -4,7 +4,7 @@ namespace Cascade.UI;
 /// A binary on/off selection control. Supports an indeterminate state for
 /// partial selection (e.g., tree node parent with mixed children).
 /// </summary>
-public sealed class Checkbox : Node
+public sealed class Checkbox : Node, IValidatable
 {
     /// <summary>
     /// Creates a checkbox bound to a boolean field.
@@ -54,6 +54,14 @@ public sealed class Checkbox : Node
 
     internal List<Func<bool, ValidationResult>> ValidationRules { get; } = [];
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
+
+    // ── Validation (see Validation) ──
+    ValidationTrigger IValidatable.ValidationTriggerMode => ValidationTriggerMode;
+    bool IValidatable.HasValidationRules => ValidationRules.Count > 0;
+    ValidationResult IValidatable.RunValidation() => RunValidation();
+    object? IValidatable.ValidationValue => (object?)BoolValue?.Value ?? ThreeStateValue;
+    TimeSpan? IValidatable.ValidationDebounce => null;
+    ValidationState? IValidatable.ValidationState { get; set; }
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
 

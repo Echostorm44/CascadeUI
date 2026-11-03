@@ -613,6 +613,40 @@ internal sealed partial class NodePainter
 
     private void PaintNodeCore(Node node, Rect bounds)
     {
+        // A validation message on show: the control paints above it, the message below.
+        if (Validation.Shown(node) is { } problem)
+        {
+            var control = new Rect(bounds.X, bounds.Y, bounds.Width, Math.Max(0f, bounds.Height - Validation.MessageHeight));
+            PaintNodeControl(node, control);
+            PaintValidationMessage(node, problem, control, bounds);
+            return;
+        }
+
+        PaintNodeControl(node, bounds);
+    }
+
+    /// <summary>
+    /// Draws a validation message below a control (error in the danger colour, warning in the
+    /// warning colour), and for a field-like control a ring of that colour round the field.
+    /// </summary>
+    private void PaintValidationMessage(Node node, ValidationResult problem, Rect control, Rect bounds)
+    {
+        var color = problem.Status == ValidationStatus.Warning ? theme.Colors.Warning : theme.Colors.Danger;
+        if (node is TextInput or TextArea or PasswordInput or MentionInput or TagInput or INumberInput
+            or ISelectNode or IMultiSelectNode or IComboboxNode)
+        {
+            float fieldHeight = node is PasswordInput ? Math.Min(36f, control.Height) : control.Height;
+            ctx.DrawRect(new Rect(control.X, control.Y, control.Width, fieldHeight),
+                stroke: new Stroke(color, 1.5f), radius: theme.TextInput.Radius);
+        }
+
+        float fontSize = Validation.MessageFontSize;
+        var line = new Rect(bounds.X, control.Bottom + Validation.MessageGap, bounds.Width, bounds.Bottom - control.Bottom - Validation.MessageGap);
+        PaintText(problem.Message!, line, 0f, color, fontSize: fontSize, overflow: TextOverflow.Ellipsis);
+    }
+
+    private void PaintNodeControl(Node node, Rect bounds)
+    {
         switch (node)
         {
             // Layout containers — recurse into children

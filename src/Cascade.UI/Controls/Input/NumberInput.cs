@@ -71,7 +71,7 @@ public interface INumberInput
 /// <see cref="double"/>, <see cref="decimal"/>).
 /// </summary>
 /// <typeparam name="T">The numeric type of the bound value.</typeparam>
-public sealed class NumberInput<T> : Node, INumberInput where T : struct, IComparable<T>
+public sealed class NumberInput<T> : Node, INumberInput, IValidatable where T : struct, IComparable<T>
 {
     /// <summary>
     /// Creates a numeric input bound to a numeric field.
@@ -128,6 +128,14 @@ public sealed class NumberInput<T> : Node, INumberInput where T : struct, ICompa
 
     internal List<Func<T, ValidationResult>> ValidationRules { get; } = [];
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
+
+    // ── Validation (see Validation) ──
+    ValidationTrigger IValidatable.ValidationTriggerMode => ValidationTriggerMode;
+    bool IValidatable.HasValidationRules => ValidationRules.Count > 0;
+    ValidationResult IValidatable.RunValidation() => RunValidation(Value.Value);
+    object? IValidatable.ValidationValue => Value.Value;
+    TimeSpan? IValidatable.ValidationDebounce => null;
+    ValidationState? IValidatable.ValidationState { get; set; }
     internal StepperPosition StepperPos { get; set; } = StepperPosition.Right;
     internal Node PrefixNode { get; set; } = Node.Empty;
     internal Node SuffixNode { get; set; } = Node.Empty;

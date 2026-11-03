@@ -228,7 +228,7 @@ public static class PasswordStrengthEvaluator
 /// Built on top of <see cref="InputType.Password"/> semantics with dedicated
 /// password-specific features like strength evaluation and reveal toggle.
 /// </summary>
-public sealed class PasswordInput : Node
+public sealed class PasswordInput : Node, IValidatable
 {
     /// <summary>
     /// Creates a password input bound to a string field via two-way binding.
@@ -255,6 +255,14 @@ public sealed class PasswordInput : Node
     internal int? MaxLengthValue { get; set; }
     internal List<Func<string, ValidationResult>> ValidationRules { get; } = [];
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
+
+    // ── Validation (see Validation) ──
+    ValidationTrigger IValidatable.ValidationTriggerMode => ValidationTriggerMode;
+    bool IValidatable.HasValidationRules => ValidationRules.Count > 0;
+    ValidationResult IValidatable.RunValidation() => RunValidation();
+    object? IValidatable.ValidationValue => Value.Value;
+    TimeSpan? IValidatable.ValidationDebounce => null;
+    ValidationState? IValidatable.ValidationState { get; set; }
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
 

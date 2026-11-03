@@ -4,7 +4,7 @@ namespace Cascade.UI;
 /// A row of icons the user clicks to set a numeric rating. Supports
 /// half-stars, custom icons, custom colors, and per-value tooltip labels.
 /// </summary>
-public sealed class Rating : Node
+public sealed class Rating : Node, IValidatable
 {
     /// <summary>
     /// Creates a rating control bound to a float field.
@@ -73,6 +73,14 @@ public sealed class Rating : Node
     internal IReadOnlyList<string>? TooltipLabels { get; set; }
     internal List<Func<float, ValidationResult>> ValidationRules { get; } = [];
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
+
+    // ── Validation (see Validation) ──
+    ValidationTrigger IValidatable.ValidationTriggerMode => ValidationTriggerMode;
+    bool IValidatable.HasValidationRules => ValidationRules.Count > 0;
+    ValidationResult IValidatable.RunValidation() => RunValidation();
+    object? IValidatable.ValidationValue => BoundValue?.Value ?? ReadOnlyValue;
+    TimeSpan? IValidatable.ValidationDebounce => null;
+    ValidationState? IValidatable.ValidationState { get; set; }
     internal bool IsDisabled { get; set; }
 
     /// <summary>

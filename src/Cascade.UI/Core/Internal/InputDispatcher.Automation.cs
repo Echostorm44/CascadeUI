@@ -53,7 +53,7 @@ internal sealed partial class InputDispatcher
                     TextInputSelectionAnchor = text.Length;
                 }
                 input.Value.OnChange(text);
-                input.OnChangeHandler?.Invoke(text);
+                RaiseOnChange(input.OnChangeHandler, input.DebounceDelay, text);
                 break;
 
             case TextArea area when !area.IsDisabled && !area.IsReadOnly:
@@ -62,7 +62,7 @@ internal sealed partial class InputDispatcher
                     TextAreaEditBuffer = text;
                 }
                 area.Value.OnChange(text);
-                area.OnChangeHandler?.Invoke(text);
+                RaiseOnChange(area.OnChangeHandler, area.DebounceDelay, text);
                 break;
 
             case PasswordInput password when !password.IsDisabled:

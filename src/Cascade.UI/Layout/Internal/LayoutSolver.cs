@@ -189,7 +189,18 @@ internal static class LayoutSolver
         var innerConstraints = ShrinkConstraints(constraints, padding);
 
         // Measure content based on node type
+        // A control with validation rules runs them when its trigger says to; a message on show
+        // takes a line below the control.
+        if (node is IValidatable validatable)
+        {
+            Validation.Update(node, validatable);
+        }
+
         var contentSize = MeasureContent(node, innerConstraints);
+        if (Validation.Shown(node) is not null)
+        {
+            contentSize = new Size(contentSize.Width, contentSize.Height + Validation.MessageHeight);
+        }
 
         // Add padding back to get node size
         var desiredSize = new Size(
@@ -1704,8 +1715,13 @@ internal static class LayoutSolver
         return childSize;
     }
 
-    private static Size MeasureFormValidator(FormValidator fv, LayoutConstraints constraints) =>
-        MeasureSingleChildWrapper(fv.Content, constraints);
+    private static Size MeasureFormValidator(FormValidator fv, LayoutConstraints constraints)
+    {
+        var size = MeasureSingleChildWrapper(fv.Content, constraints);
+        // The form's fields are whatever controls with rules it holds this frame.
+        fv.Scope.SetFields(Validation.CollectFields(fv.Content));
+        return size;
+    }
 
     private static Size MeasureSingleChildWrapper(Node child, LayoutConstraints constraints)
     {

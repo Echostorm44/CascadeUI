@@ -5,7 +5,7 @@ namespace Cascade.UI;
 /// communicates on/off rather than selected/deselected. Use Toggle for settings
 /// and preferences; use Checkbox for form field selection and lists.
 /// </summary>
-public sealed class Toggle : Node
+public sealed class Toggle : Node, IValidatable
 {
     /// <summary>
     /// Creates a toggle switch bound to a boolean field.
@@ -37,6 +37,14 @@ public sealed class Toggle : Node
     internal ToggleLabelPosition LabelPositionValue { get; set; } = ToggleLabelPosition.Right;
     internal List<Func<bool, ValidationResult>> ValidationRules { get; } = [];
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
+
+    // ── Validation (see Validation) ──
+    ValidationTrigger IValidatable.ValidationTriggerMode => ValidationTriggerMode;
+    bool IValidatable.HasValidationRules => ValidationRules.Count > 0;
+    ValidationResult IValidatable.RunValidation() => RunValidation();
+    object? IValidatable.ValidationValue => Value.Value;
+    TimeSpan? IValidatable.ValidationDebounce => null;
+    ValidationState? IValidatable.ValidationState { get; set; }
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
 

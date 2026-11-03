@@ -4,7 +4,7 @@ namespace Cascade.UI;
 /// A single-value slider control for selecting a numeric value within a range.
 /// Supports step snapping, tick marks, value labels, and custom formatting.
 /// </summary>
-public sealed class Slider : Node
+public sealed class Slider : Node, IValidatable
 {
     /// <summary>
     /// Creates a slider bound to a float field.
@@ -52,6 +52,14 @@ public sealed class Slider : Node
     internal float? WidthValue { get; set; }
     internal List<Func<float, ValidationResult>> ValidationRules { get; } = [];
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
+
+    // ── Validation (see Validation) ──
+    ValidationTrigger IValidatable.ValidationTriggerMode => ValidationTriggerMode;
+    bool IValidatable.HasValidationRules => ValidationRules.Count > 0;
+    ValidationResult IValidatable.RunValidation() => RunValidation();
+    object? IValidatable.ValidationValue => Bind.Value;
+    TimeSpan? IValidatable.ValidationDebounce => null;
+    ValidationState? IValidatable.ValidationState { get; set; }
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
 

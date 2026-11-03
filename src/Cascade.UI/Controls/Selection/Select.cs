@@ -57,7 +57,7 @@ internal interface ISelectNode
 /// </summary>
 /// <typeparam name="T">The type of the selectable value.</typeparam>
 #pragma warning disable CA1716 // Type name Select matches a reserved keyword — intentional API name per spec
-public sealed class Select<T> : Node, ISelectNode where T : notnull
+public sealed class Select<T> : Node, ISelectNode, IValidatable where T : notnull
 #pragma warning restore CA1716
 {
     /// <summary>
@@ -123,6 +123,14 @@ public sealed class Select<T> : Node, ISelectNode where T : notnull
     internal Func<T, Node>? SelectedRenderer { get; set; }
     internal List<Func<T, ValidationResult>> ValidationRules { get; } = [];
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
+
+    // ── Validation (see Validation) ──
+    ValidationTrigger IValidatable.ValidationTriggerMode => ValidationTriggerMode;
+    bool IValidatable.HasValidationRules => ValidationRules.Count > 0;
+    ValidationResult IValidatable.RunValidation() => RunValidation();
+    object? IValidatable.ValidationValue => Value.Value;
+    TimeSpan? IValidatable.ValidationDebounce => null;
+    ValidationState? IValidatable.ValidationState { get; set; }
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
 

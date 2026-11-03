@@ -7,6 +7,7 @@ using TUnit.Core;
 
 namespace Cascade.UI.Tests;
 
+// How a FormValidator collects its fields and validates them is covered by ValidationTests.
 public sealed class FormValidatorTests
 {
     private sealed class TestNode : Node
@@ -37,79 +38,11 @@ public sealed class FormValidatorTests
     }
 
     [Test]
-    public async Task RegisterField_IncreasesCount()
+    public async Task EmptyScope_IsValid_AndValidateAllPasses()
     {
         var scope = new FormScope();
-        scope.RegisterField(() => ValidationResult.Ok);
-        scope.RegisterField(() => ValidationResult.Ok);
-
-        int count = scope.FieldCount;
-        await Assert.That(count).IsEqualTo(2);
-    }
-
-    [Test]
-    public async Task ValidateAll_StoresResultsAndReportsErrors()
-    {
-        var scope = new FormScope();
-        scope.RegisterField(() => ValidationResult.Ok);
-        scope.RegisterField(() => ValidationResult.Error("Invalid"));
-
-        bool allValid = scope.ValidateAll();
-        int errorCount = scope.ErrorCount;
-        bool isValid = scope.IsValid;
-
-        await Assert.That(allValid).IsFalse();
-        await Assert.That(errorCount).IsEqualTo(1);
-        await Assert.That(isValid).IsFalse();
-    }
-
-    [Test]
-    public async Task Reset_ClearsValidationResults()
-    {
-        var scope = new FormScope();
-        scope.RegisterField(() => ValidationResult.Error("Invalid"));
-        scope.ValidateAll();
-
-        scope.Reset();
-        int errorCount = scope.ErrorCount;
-        bool isValid = scope.IsValid;
-
-        await Assert.That(errorCount).IsEqualTo(0);
-        await Assert.That(isValid).IsTrue();
-    }
-
-    [Test]
-    public async Task ClearFields_EmptiesFieldList()
-    {
-        var scope = new FormScope();
-        scope.RegisterField(() => ValidationResult.Ok);
-        scope.RegisterField(() => ValidationResult.Ok);
-
-        scope.ClearFields();
-        int count = scope.FieldCount;
-
-        await Assert.That(count).IsEqualTo(0);
-    }
-
-    [Test]
-    public async Task FormScope_IsValidTrueWhenNoErrors()
-    {
-        var scope = new FormScope();
-        scope.RegisterField(() => ValidationResult.Ok);
-        scope.ValidateAll();
-
-        bool isValid = scope.IsValid;
-        await Assert.That(isValid).IsTrue();
-    }
-
-    [Test]
-    public async Task ValidateAll_ReturnsTrueWhenAllPass()
-    {
-        var scope = new FormScope();
-        scope.RegisterField(() => ValidationResult.Ok);
-        scope.RegisterField(() => ValidationResult.Ok);
-
-        bool allValid = scope.ValidateAll();
-        await Assert.That(allValid).IsTrue();
+        await Assert.That(scope.FieldCount).IsEqualTo(0);
+        await Assert.That(scope.IsValid).IsTrue();
+        await Assert.That(scope.ValidateAll()).IsTrue();
     }
 }

@@ -449,6 +449,7 @@ internal sealed class FrameOrchestrator : IDisposable
         animationScheduler.Tick(deltaTime);
         SharedScheduler.Instance.Tick(deltaTime);
         overlays.Advance(deltaTime);
+        InputDispatcher.FlushPendingChange();
 
         // 2. Process dirty re-renders (depth-sorted). A changed window context marks its readers
         // dirty first, so they render for this frame's size.

@@ -3677,6 +3677,9 @@ internal sealed partial class InputDispatcher
 
         CaretResetTimestamp = Stopwatch.GetTimestamp();
 
+        // A debounced change in the field being left is delivered now.
+        FlushPendingChange(now: true);
+
         switch (newFocus)
         {
             case TextInput ti:
@@ -3891,7 +3894,7 @@ internal sealed partial class InputDispatcher
             TextInputSelectionAnchor = TextInputCaretIndex;
             ActiveEditBuffer = textInputBuffer;
             textInput.Value.OnChange(textInputBuffer);
-            textInput.OnChangeHandler?.Invoke(textInputBuffer);
+            RaiseOnChange(textInput.OnChangeHandler, textInput.DebounceDelay, textInputBuffer);
             return true;
         }
 
@@ -3909,7 +3912,7 @@ internal sealed partial class InputDispatcher
                 TextInputSelectionAnchor = TextInputCaretIndex;
                 ActiveEditBuffer = textInputBuffer;
                 textInput.Value.OnChange(textInputBuffer);
-                textInput.OnChangeHandler?.Invoke(textInputBuffer);
+                RaiseOnChange(textInput.OnChangeHandler, textInput.DebounceDelay, textInputBuffer);
             }
             return true;
         }
@@ -3926,7 +3929,7 @@ internal sealed partial class InputDispatcher
                 textInputBuffer = textInputBuffer.Remove(TextInputCaretIndex, 1);
                 ActiveEditBuffer = textInputBuffer;
                 textInput.Value.OnChange(textInputBuffer);
-                textInput.OnChangeHandler?.Invoke(textInputBuffer);
+                RaiseOnChange(textInput.OnChangeHandler, textInput.DebounceDelay, textInputBuffer);
             }
             return true;
         }
@@ -4151,7 +4154,7 @@ internal sealed partial class InputDispatcher
             TextAreaCaretIndex++;
             TextAreaSelectionAnchor = TextAreaCaretIndex;
             ta.Value.OnChange(TextAreaEditBuffer);
-            ta.OnChangeHandler?.Invoke(TextAreaEditBuffer);
+            RaiseOnChange(ta.OnChangeHandler, ta.DebounceDelay, TextAreaEditBuffer);
             return true;
         }
 
@@ -4306,7 +4309,7 @@ internal sealed partial class InputDispatcher
             TextAreaCaretIndex++;
             TextAreaSelectionAnchor = TextAreaCaretIndex;
             ta.Value.OnChange(TextAreaEditBuffer);
-            ta.OnChangeHandler?.Invoke(TextAreaEditBuffer);
+            RaiseOnChange(ta.OnChangeHandler, ta.DebounceDelay, TextAreaEditBuffer);
             return true;
         }
 
@@ -4323,7 +4326,7 @@ internal sealed partial class InputDispatcher
                 TextAreaCaretIndex--;
                 TextAreaSelectionAnchor = TextAreaCaretIndex;
                 ta.Value.OnChange(TextAreaEditBuffer);
-                ta.OnChangeHandler?.Invoke(TextAreaEditBuffer);
+                RaiseOnChange(ta.OnChangeHandler, ta.DebounceDelay, TextAreaEditBuffer);
             }
             return true;
         }
@@ -4339,7 +4342,7 @@ internal sealed partial class InputDispatcher
             {
                 TextAreaEditBuffer = TextAreaEditBuffer.Remove(TextAreaCaretIndex, 1);
                 ta.Value.OnChange(TextAreaEditBuffer);
-                ta.OnChangeHandler?.Invoke(TextAreaEditBuffer);
+                RaiseOnChange(ta.OnChangeHandler, ta.DebounceDelay, TextAreaEditBuffer);
             }
             return true;
         }
@@ -4558,7 +4561,7 @@ internal sealed partial class InputDispatcher
         TextAreaCaretIndex = start;
         TextAreaSelectionAnchor = start;
         ta.Value.OnChange(TextAreaEditBuffer);
-        ta.OnChangeHandler?.Invoke(TextAreaEditBuffer);
+        RaiseOnChange(ta.OnChangeHandler, ta.DebounceDelay, TextAreaEditBuffer);
     }
 
     /// <summary>Pastes clipboard text into the TextArea at the caret, replacing any selection.</summary>
@@ -4586,7 +4589,7 @@ internal sealed partial class InputDispatcher
         TextAreaCaretIndex += text.Length;
         TextAreaSelectionAnchor = TextAreaCaretIndex;
         ta.Value.OnChange(TextAreaEditBuffer);
-        ta.OnChangeHandler?.Invoke(TextAreaEditBuffer);
+        RaiseOnChange(ta.OnChangeHandler, ta.DebounceDelay, TextAreaEditBuffer);
     }
 
     /// <summary>Copies the TextInput selection to the system clipboard.</summary>
@@ -4616,7 +4619,7 @@ internal sealed partial class InputDispatcher
         TextInputSelectionAnchor = start;
         ActiveEditBuffer = textInputBuffer;
         ti.Value.OnChange(textInputBuffer);
-        ti.OnChangeHandler?.Invoke(textInputBuffer);
+        RaiseOnChange(ti.OnChangeHandler, ti.DebounceDelay, textInputBuffer);
     }
 
     /// <summary>Pastes clipboard text into the TextInput at the caret, replacing any selection.</summary>
@@ -4647,7 +4650,7 @@ internal sealed partial class InputDispatcher
         TextInputSelectionAnchor = TextInputCaretIndex;
         ActiveEditBuffer = textInputBuffer;
         ti.Value.OnChange(textInputBuffer);
-        ti.OnChangeHandler?.Invoke(textInputBuffer);
+        RaiseOnChange(ti.OnChangeHandler, ti.DebounceDelay, textInputBuffer);
     }
 
     /// <summary>
@@ -6612,6 +6615,51 @@ internal sealed partial class InputDispatcher
             default:
                 return false;
         }
+    }
+
+    // ── Debounced OnChange (.Debounce) ──────────────────────────────────
+
+    private static Action<string>? pendingChangeHandler;
+    private static string pendingChangeValue = "";
+    private static long pendingChangeDue;
+
+    /// <summary>
+    /// Raises a text field's OnChange: at once, or with <c>.Debounce(delay)</c> once typing has
+    /// paused that long (only the latest text is reported). A pending change is delivered early when
+    /// focus moves on, so it is never lost.
+    /// </summary>
+    internal static void RaiseOnChange(Action<string>? handler, TimeSpan? delay, string value)
+    {
+        if (handler is null)
+        {
+            return;
+        }
+        if (delay is not { } wait || wait <= TimeSpan.Zero)
+        {
+            handler(value);
+            return;
+        }
+        pendingChangeHandler = handler;
+        pendingChangeValue = value;
+        pendingChangeDue = Stopwatch.GetTimestamp() + (long)(wait.TotalSeconds * Stopwatch.Frequency);
+        ControlStateAnimator.SignalActiveTransition();
+    }
+
+    /// <summary>Delivers a debounced OnChange whose delay has passed (or any, with <paramref name="now"/>). Called each frame.</summary>
+    internal static void FlushPendingChange(bool now = false)
+    {
+        if (pendingChangeHandler is not { } handler)
+        {
+            return;
+        }
+        if (!now && Stopwatch.GetTimestamp() < pendingChangeDue)
+        {
+            // Keep frames coming until it is due.
+            ControlStateAnimator.SignalActiveTransition();
+            return;
+        }
+        pendingChangeHandler = null;
+        handler(pendingChangeValue);
     }
 
     /// <summary>Arrow keys move a focused toggle group's selection to the previous or next option.</summary>

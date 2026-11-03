@@ -5,7 +5,7 @@ namespace Cascade.UI;
 /// Each box accepts exactly one character. Focus advances automatically
 /// to the next box.
 /// </summary>
-public sealed class PinInput : Node
+public sealed class PinInput : Node, IValidatable
 {
     /// <summary>
     /// Creates a PIN/OTP input with the specified number of character boxes.
@@ -40,6 +40,14 @@ public sealed class PinInput : Node
     internal List<int> SeparatorPositions { get; } = [];
     internal List<Func<string, ValidationResult>> ValidationRules { get; } = [];
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
+
+    // ── Validation (see Validation) ──
+    ValidationTrigger IValidatable.ValidationTriggerMode => ValidationTriggerMode;
+    bool IValidatable.HasValidationRules => ValidationRules.Count > 0;
+    ValidationResult IValidatable.RunValidation() => RunValidation();
+    object? IValidatable.ValidationValue => Value.Value;
+    TimeSpan? IValidatable.ValidationDebounce => null;
+    ValidationState? IValidatable.ValidationState { get; set; }
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
 

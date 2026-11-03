@@ -66,7 +66,7 @@ internal interface IMultiSelectNode
 /// Each dropdown option has a checkbox for unambiguous multi-selection.
 /// </summary>
 /// <typeparam name="T">The type of the selectable values.</typeparam>
-public sealed class MultiSelect<T> : Node, IMultiSelectNode where T : notnull
+public sealed class MultiSelect<T> : Node, IMultiSelectNode, IValidatable where T : notnull
 {
     /// <summary>
     /// Creates a multi-select dropdown.
@@ -115,6 +115,14 @@ public sealed class MultiSelect<T> : Node, IMultiSelectNode where T : notnull
     internal bool IsSearchable { get; set; }
     internal List<Func<IReadOnlyList<T>, ValidationResult>> ValidationRules { get; } = [];
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
+
+    // ── Validation (see Validation) ──
+    ValidationTrigger IValidatable.ValidationTriggerMode => ValidationTriggerMode;
+    bool IValidatable.HasValidationRules => ValidationRules.Count > 0;
+    ValidationResult IValidatable.RunValidation() => RunValidation();
+    object? IValidatable.ValidationValue => string.Join("\u001f", Value.Value);
+    TimeSpan? IValidatable.ValidationDebounce => null;
+    ValidationState? IValidatable.ValidationState { get; set; }
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
 

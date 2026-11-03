@@ -54,7 +54,7 @@ internal interface IComboboxNode
 /// value is not restricted to the options list.
 /// </summary>
 /// <typeparam name="T">The type of the bound value.</typeparam>
-public sealed class Combobox<T> : Node, IComboboxNode where T : notnull
+public sealed class Combobox<T> : Node, IComboboxNode, IValidatable where T : notnull
 {
     /// <summary>
     /// Creates a combobox with a static list of options.
@@ -94,6 +94,14 @@ public sealed class Combobox<T> : Node, IComboboxNode where T : notnull
     internal Func<T, Node>? OptionRenderer { get; set; }
     internal List<Func<T, ValidationResult>> ValidationRules { get; } = [];
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
+
+    // ── Validation (see Validation) ──
+    ValidationTrigger IValidatable.ValidationTriggerMode => ValidationTriggerMode;
+    bool IValidatable.HasValidationRules => ValidationRules.Count > 0;
+    ValidationResult IValidatable.RunValidation() => RunValidation();
+    object? IValidatable.ValidationValue => Value.Value;
+    TimeSpan? IValidatable.ValidationDebounce => null;
+    ValidationState? IValidatable.ValidationState { get; set; }
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
 

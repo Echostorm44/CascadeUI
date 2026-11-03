@@ -4,7 +4,7 @@ namespace Cascade.UI;
 /// Multi-line text entry control. Shares all TextInput modifiers except masking.
 /// Supports auto-grow, user resize, and character count display.
 /// </summary>
-public sealed class TextArea : Node
+public sealed class TextArea : Node, IValidatable
 {
     /// <summary>
     /// Creates a multi-line text area bound to a string field.
@@ -47,6 +47,14 @@ public sealed class TextArea : Node
 
     internal List<Func<string, ValidationResult>> ValidationRules { get; } = [];
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
+
+    // ── Validation (see Validation) ──
+    ValidationTrigger IValidatable.ValidationTriggerMode => ValidationTriggerMode;
+    bool IValidatable.HasValidationRules => ValidationRules.Count > 0;
+    ValidationResult IValidatable.RunValidation() => RunValidation();
+    object? IValidatable.ValidationValue => Value.Value;
+    TimeSpan? IValidatable.ValidationDebounce => DebounceDelay;
+    ValidationState? IValidatable.ValidationState { get; set; }
     internal int? MaxLengthValue { get; set; }
     internal CountStyle? CharacterCountStyle { get; set; }
     internal int? FixedLines { get; set; }

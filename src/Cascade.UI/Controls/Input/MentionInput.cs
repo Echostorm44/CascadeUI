@@ -5,7 +5,7 @@ namespace Cascade.UI;
 /// to open an autocomplete popover for mentions and hashtags. Confirmed
 /// mentions render as inline pills.
 /// </summary>
-public sealed class MentionInput : Node
+public sealed class MentionInput : Node, IValidatable
 {
     /// <summary>
     /// Creates a mention-capable text input.
@@ -44,6 +44,14 @@ public sealed class MentionInput : Node
 
     internal List<Func<string, ValidationResult>> ValidationRules { get; } = [];
     internal ValidationTrigger ValidationTriggerMode { get; set; } = ValidationTrigger.Blur;
+
+    // ── Validation (see Validation) ──
+    ValidationTrigger IValidatable.ValidationTriggerMode => ValidationTriggerMode;
+    bool IValidatable.HasValidationRules => ValidationRules.Count > 0;
+    ValidationResult IValidatable.RunValidation() => RunValidation();
+    object? IValidatable.ValidationValue => Value.Value;
+    TimeSpan? IValidatable.ValidationDebounce => DebounceDelay;
+    ValidationState? IValidatable.ValidationState { get; set; }
     internal int? MaxLengthValue { get; set; }
     internal TimeSpan? DebounceDelay { get; set; }
     internal bool IsDisabled { get; set; }
@@ -219,7 +227,7 @@ public static class MentionInputExtensions
         return input;
     }
 
-    /// <summary>Debounces the OnChange callback.</summary>
+    /// <summary>How long the text must be still before <see cref="ValidationTrigger.Debounced"/> validation runs (300 ms by default).</summary>
     public static MentionInput Debounce(this MentionInput input, TimeSpan delay)
     {
         input.DebounceDelay = delay;

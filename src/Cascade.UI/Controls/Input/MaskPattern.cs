@@ -178,6 +178,56 @@ public sealed class MaskPattern
     }
 
     /// <summary>
+    /// Whether <paramref name="c"/> can fill the next empty slot after <paramref name="raw"/> (the
+    /// user's characters so far, literals excluded).
+    /// </summary>
+    internal bool Accepts(string raw, char c)
+    {
+        int slot = 0;
+        foreach (char maskChar in Pattern)
+        {
+            if (maskChar is '#' or 'A' or '*' or '?')
+            {
+                if (slot == raw.Length)
+                {
+                    return IsSlotMatch(maskChar, c);
+                }
+                slot++;
+            }
+        }
+        return false; // every slot is filled
+    }
+
+    /// <summary>
+    /// The text of a partly filled mask: the pattern up to the last character typed, literals
+    /// included ("(555) 12" for "55512" in "(###) ###-####"). A literal is only added once a
+    /// character follows it, so Backspace never stops at a separator.
+    /// </summary>
+    internal string FormatPartial(string raw)
+    {
+        var text = new System.Text.StringBuilder(Pattern.Length);
+        var pendingLiterals = new System.Text.StringBuilder();
+        int used = 0;
+        foreach (char maskChar in Pattern)
+        {
+            if (used == raw.Length)
+            {
+                break;
+            }
+            if (maskChar is '#' or 'A' or '*' or '?')
+            {
+                text.Append(pendingLiterals).Append(raw[used++]);
+                pendingLiterals.Clear();
+            }
+            else
+            {
+                pendingLiterals.Append(maskChar);
+            }
+        }
+        return text.ToString();
+    }
+
+    /// <summary>
     /// Strips literal mask characters from a formatted value, returning only user input.
     /// </summary>
     internal string StripLiterals(string formattedValue)

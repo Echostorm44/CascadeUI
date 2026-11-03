@@ -4,7 +4,7 @@ namespace Cascade.UI;
 /// Multi-line text entry control. Shares all TextInput modifiers except masking.
 /// Supports auto-grow, user resize, and character count display.
 /// </summary>
-public sealed class TextArea : Node, IValidatable
+public sealed class TextArea : Node, IValidatable, IPumpedNode
 {
     /// <summary>
     /// Creates a multi-line text area bound to a string field.
@@ -64,6 +64,33 @@ public sealed class TextArea : Node, IValidatable
     internal ResizeDirection ResizeDir { get; set; } = ResizeDirection.None;
     internal Node PrefixNode { get; set; } = Node.Empty;
     internal Node SuffixNode { get; set; } = Node.Empty;
+
+    // ── Resizing (.Resizable): the size the user dragged it to, kept across re-renders ──
+
+    /// <summary>The width the user dragged the area to, or null.</summary>
+    internal float? ResizedWidth { get; set; }
+
+    /// <summary>The height the user dragged the area to, or null.</summary>
+    internal float? ResizedHeight { get; set; }
+
+    /// <summary>The square in the bottom-right corner that resizes the area.</summary>
+    internal const float GripSize = 14f;
+
+    /// <summary>Whether the user can drag the area larger or smaller.</summary>
+    internal bool IsResizable => ResizeDir != ResizeDirection.None;
+
+    void IPumpedNode.Pump()
+    {
+    }
+
+    void IPumpedNode.AdoptFrom(Node previous)
+    {
+        if (previous is TextArea old)
+        {
+            ResizedWidth = old.ResizedWidth;
+            ResizedHeight = old.ResizedHeight;
+        }
+    }
     internal TimeSpan? DebounceDelay { get; set; }
     internal Action<string>? OnChangeHandler { get; set; }
     internal bool IsDisabled { get; set; }

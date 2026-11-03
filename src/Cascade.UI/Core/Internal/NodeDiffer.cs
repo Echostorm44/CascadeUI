@@ -171,6 +171,16 @@ internal static class NodeDiffer
     }
 
     [SuppressMessage("Design", "CA1024:Use properties where appropriate", Justification = "Method performs work based on runtime node type.")]
+    // A field's prefix and suffix that are set.
+    internal static IReadOnlyList<Node> Adornments(Node prefix, Node suffix) =>
+        (prefix.IsLayoutEmpty, suffix.IsLayoutEmpty) switch
+        {
+            (false, false) => [prefix, suffix],
+            (false, true) => [prefix],
+            (true, false) => [suffix],
+            _ => [],
+        };
+
     internal static IReadOnlyList<Node> GetChildren(Node node)
     {
         return node switch
@@ -194,6 +204,9 @@ internal static class NodeDiffer
             IRadioButton rb when !rb.NodeLabel.IsLayoutEmpty => [rb.NodeLabel],
             IToggleGroup tg => SegmentLayout.ToggleOptionNodes(tg),
             ToolBar tb => tb.CustomNodes,
+            TextInput adorned when !adorned.PrefixNode.IsLayoutEmpty || !adorned.SuffixNode.IsLayoutEmpty => Adornments(adorned.PrefixNode, adorned.SuffixNode),
+            INumberInput number when !number.PrefixContent.IsLayoutEmpty || !number.SuffixContent.IsLayoutEmpty => Adornments(number.PrefixContent, number.SuffixContent),
+            TextArea area when !area.PrefixNode.IsLayoutEmpty || !area.SuffixNode.IsLayoutEmpty => Adornments(area.PrefixNode, area.SuffixNode),
             // Only the incoming page is a live, reconcilable child — it must be
             // mounted/rendered during the transition so it paints (not just at
             // completion). The outgoing tree is a frozen snapshot painted with a

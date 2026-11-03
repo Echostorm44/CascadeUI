@@ -1065,6 +1065,169 @@ public class ModifierRenderTests
         await Assert.That(string.Join(",", tags)).IsEqualTo("Berlin,Bern");
     }
 
+    private static string TypeInto(TextInput input, string keys, Action<RenderHarness>? before = null)
+    {
+        using var app = new RenderHarness(() => input.Width(240));
+        app.Frame();
+        FocusManager.RequestFocus(input);
+        before?.Invoke(app);
+        foreach (char c in keys)
+        {
+            if (c == '\b')
+            {
+                app.Press(Key.Backspace, character: '\b');
+            }
+            else
+            {
+                app.Press(Key.A, character: c);
+            }
+        }
+        return InputDispatcher.ActiveEditBuffer ?? "";
+    }
+
+    [Test]
+    public async Task MaskedTextInput_FormatsAsYouType_AndRefusesWrongCharacters()
+    {
+        // Letters are refused in digit slots; the separators come by themselves.
+        await Assert.That(TypeInto(new TextInput(new Bindable<string>("", _ => { })).Mask(MaskPattern.PhoneUs), "55x512")).IsEqualTo("(555) 12");
+        // Backspace removes the last digit, never stopping at a separator.
+        await Assert.That(TypeInto(new TextInput(new Bindable<string>("", _ => { })).Mask(MaskPattern.PhoneUs), "5551\b")).IsEqualTo("(555");
+        // Full: nothing more goes in.
+        await Assert.That(TypeInto(new TextInput(new Bindable<string>("", _ => { })).Mask("##-##"), "123456")).IsEqualTo("12-34");
+        // A pattern string works too, letters and digits by slot.
+        await Assert.That(TypeInto(new TextInput(new Bindable<string>("", _ => { })).Mask(MaskPattern.PostalCodeCa), "k1a0b1")).IsEqualTo("k1a 0b1");
+    }
+
+    [Test]
+    public async Task CustomMask_FormatsAndParsesThroughTheAppsFunctions()
+    {
+        // Upper-cases and groups in fours.
+        var mask = new CustomMask(
+            raw => string.Join(' ', raw.ToUpperInvariant().Chunk(4).Select(c => new string(c))),
+            shown => shown.Replace(" ", "", StringComparison.Ordinal),
+            CharSet.AlphaNumeric);
+        await Assert.That(TypeInto(new TextInput(new Bindable<string>("", _ => { })).Mask(mask), "ab-cd1e")).IsEqualTo("ABCD 1E");
+    }
+
+    [Test]
+    public async Task TextInputPaste_KeepsToMaxLength()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+        string result = TypeInto(new TextInput(new Bindable<string>("", _ => { })).MaxLength(5), "",
+            app =>
+            {
+                Clipboard.WriteTextAsync("0123456789").GetAwaiter().GetResult();
+                app.Press(Key.Insert, ModifierKeys.Shift);
+            });
+        await Assert.That(result).IsEqualTo("01234");
+    }
+
+    [Test]
+    public async Task TextInputPrefixAndSuffix_SitEitherSideOfTheText_AndTheSuffixIsClickable()
+    {
+        int cleared = 0;
+        var prefix = new Label("$").Color(Red);
+        var input = new TextInput(new Bindable<string>("", _ => { }))
+            .Prefix(prefix)
+            .Suffix(new IconButton(Icons.X, () => cleared++).AccessibleLabel("Clear"));
+        using var app = new RenderHarness(() => input.Width(240));
+        var frame = app.Frame();
+
+        // The prefix is drawn (red) near the left; the text starts after it.
+        await Assert.That(frame.Count(p => p.X < 40 && IsRedPixel(p))).IsGreaterThan(5);
+        float textStart = TextInputMetrics.ContentLeft(input, ThemeSwitcher.Current);
+        await Assert.That(textStart).IsGreaterThan(prefix.LayoutData.Bounds.Right);
+
+        // The suffix button sits at the right and takes a click; a click elsewhere focuses the field.
+        var button = ((IconButton)input.SuffixNode).LayoutData.Bounds;
+        await Assert.That(button.Right).IsGreaterThan(200f);
+        app.Click(button.X + button.Width / 2, button.Y + button.Height / 2);
+        await Assert.That(cleared).IsEqualTo(1);
+        app.Click(100, 18);
+        await Assert.That(FocusManager.FocusedElement).IsSameReferenceAs(input);
+    }
+
+    private static float AreaHeight(TextArea area)
+    {
+        using var app = new RenderHarness(() => area.Width(240));
+        app.Frame();
+        return area.LayoutData.Bounds.Height;
+    }
+
+    [Test]
+    public async Task TextAreaAutoGrow_FitsTheTextBetweenItsMinAndMaxLines()
+    {
+        static TextArea Area(string text) => new TextArea(new Bindable<string>(text, _ => { }), minLines: 1).AutoGrow(minLines: 2, maxLines: 4);
+
+        float two = AreaHeight(Area("one"));
+        float three = AreaHeight(Area("one\ntwo\nthree"));
+        float four = AreaHeight(Area("1\n2\n3\n4\n5\n6"));
+        await Assert.That(three - two).IsEqualTo(22f);
+        await Assert.That(four - two).IsEqualTo(44f);
+
+        // Without AutoGrow it stays at its lines whatever the text.
+        float fixedHeight = AreaHeight(new TextArea(new Bindable<string>("1\n2\n3\n4\n5", _ => { }), minLines: 2));
+        await Assert.That(fixedHeight).IsEqualTo(two);
+    }
+
+    [Test]
+    public async Task TextAreaPrefixAndSuffix_AreLaidOutInside_AndTheSuffixIsClickable()
+    {
+        int sent = 0;
+        var prefix = new Label("»").Color(Red);
+        var area = new TextArea(new Bindable<string>("", _ => { }), minLines: 3)
+            .Prefix(prefix)
+            .Suffix(new Button("Send", () => sent++));
+        using var app = new RenderHarness(() => area.Width(300));
+        var frame = app.Frame();
+
+        await Assert.That(frame.Count(p => p.X < 40 && p.Y < 40 && IsRedPixel(p))).IsGreaterThan(3);
+        var button = ((Button)area.SuffixNode).LayoutData.Bounds;
+        await Assert.That(button.Right).IsGreaterThan(250f);
+        await Assert.That(button.Bottom).IsLessThanOrEqualTo(area.LayoutData.Bounds.Height);
+        app.Click(button.X + button.Width / 2, button.Y + button.Height / 2);
+        await Assert.That(sent).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task ResizableTextArea_GrowsWhenItsGripIsDragged()
+    {
+        var area = new TextArea(new Bindable<string>("", _ => { }), minLines: 2).Resizable(ResizeDirection.Vertical);
+        using var app = new RenderHarness(() => area.Width(240));
+        app.Frame();
+        var before = area.LayoutData.Bounds;
+
+        app.Drag(before.Right - 4, before.Bottom - 4, before.Right - 4, before.Bottom + 36);
+        app.Frame();
+        await Assert.That(area.LayoutData.Bounds.Height).IsEqualTo(before.Height + 40f);
+        // Vertical only: the width stays.
+        await Assert.That(area.LayoutData.Bounds.Width).IsEqualTo(before.Width);
+    }
+
+    [Test]
+    public async Task NumberInputPrefix_IsDrawn_AndWidensTheField()
+    {
+        // (A long prefix, past the field's 100px minimum width.)
+        float plainWidth, prefixedWidth;
+        var number = new NumberInput<int>(new Bindable<int>(5, _ => { })).Prefix(new Label("Amount in dollars").Color(Red));
+        var bare = new NumberInput<int>(new Bindable<int>(5, _ => { }));
+        using (var app = new RenderHarness(() => bare))
+        {
+            app.Frame();
+            plainWidth = bare.LayoutData.Bounds.Width;
+        }
+        using (var app = new RenderHarness(() => number))
+        {
+            var frame = app.Frame();
+            prefixedWidth = number.LayoutData.Bounds.Width;
+            await Assert.That(frame.Count(IsRedPixel)).IsGreaterThan(3);
+        }
+        await Assert.That(prefixedWidth).IsGreaterThan(plainWidth);
+    }
+
     // Six buttons recording their index when clicked.
     private static ToolBarItem[] SixButtons(List<int> clicks) =>
         [.. Enumerable.Range(0, 6).Select(i => ToolBarItem.Button(Icons.Star, $"Item {i}", () => clicks.Add(i)))];

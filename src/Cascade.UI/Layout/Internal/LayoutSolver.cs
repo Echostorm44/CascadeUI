@@ -1076,9 +1076,32 @@ internal static class LayoutSolver
 
         float desiredWidth = Math.Min(defaultWidth, constraints.MaxWidth);
 
-        return new Size(
+        var size = new Size(
             constraints.ConstrainWidth(desiredWidth),
             constraints.ConstrainHeight(height));
+        LayOutFieldAdornments(textInput.PrefixNode, textInput.SuffixNode, size,
+            TextInputMetrics.PrefixLeft(textInput, ThemeSwitcher.Current), ThemeSwitcher.Current.TextInput.PaddingH);
+        return size;
+    }
+
+    /// <summary>
+    /// Lays out a field's prefix and suffix (<c>.Prefix</c> / <c>.Suffix</c>): each at its natural size,
+    /// centred vertically, the prefix <paramref name="prefixLeft"/> from the left edge, the suffix
+    /// <paramref name="suffixRight"/> from the right.
+    /// </summary>
+    internal static void LayOutFieldAdornments(Node prefix, Node suffix, Size field, float prefixLeft, float suffixRight)
+    {
+        var loose = new LayoutConstraints(0f, Math.Max(0f, field.Width / 2f), 0f, field.Height);
+        if (!prefix.IsLayoutEmpty)
+        {
+            var p = MeasureChild(prefix, loose);
+            PositionChild(prefix, prefixLeft, (field.Height - p.Height) / 2f);
+        }
+        if (!suffix.IsLayoutEmpty)
+        {
+            var s = MeasureChild(suffix, loose);
+            PositionChild(suffix, field.Width - suffixRight - s.Width, (field.Height - s.Height) / 2f);
+        }
     }
 
     private static Size MeasureSelect(ISelectNode select, LayoutConstraints constraints)
@@ -2040,9 +2063,34 @@ internal static class LayoutSolver
             totalWidth = paddingH + valueWidth + paddingH + buttonWidth;
         }
 
-        return new Size(
+        // A prefix or suffix sits inside the value area, which widens to hold it.
+        var loose = new LayoutConstraints(0f, float.PositiveInfinity, 0f, height);
+        foreach (var adornment in new[] { ni.PrefixContent, ni.SuffixContent })
+        {
+            if (!adornment.IsLayoutEmpty)
+            {
+                totalWidth += MeasureChild(adornment, loose).Width + TextInputMetrics.AdornmentGap;
+            }
+        }
+
+        var size = new Size(
             constraints.ConstrainWidth(Math.Max(totalWidth, 100f)),
             constraints.ConstrainHeight(height));
+        var (valueStart, valueEnd) = NumberValueArea(ni, size.Width);
+        LayOutFieldAdornments(ni.PrefixContent, ni.SuffixContent, size, valueStart + paddingH, size.Width - valueEnd + paddingH);
+        return size;
+    }
+
+    /// <summary>Where a NumberInput's value area runs (left and right x), between its stepper buttons.</summary>
+    internal static (float Start, float End) NumberValueArea(INumberInput ni, float width)
+    {
+        const float buttonWidth = 28f;
+        return ni.StepperPos switch
+        {
+            StepperPosition.Split => (buttonWidth, width - buttonWidth),
+            StepperPosition.None => (0f, width),
+            _ => (0f, width - buttonWidth),
+        };
     }
 
     private static Size MeasureGauge(Gauge gauge, LayoutConstraints constraints)
@@ -2833,16 +2881,6 @@ internal static class LayoutSolver
         const float lineHeight = 22f;
         const float paddingV = 16f;
 
-        int lines = textArea.FixedLines ?? textArea.MinLines;
-        float height = lines * lineHeight + paddingV;
-
-        // Grow the box to fit the floating character count below the content so the
-        // last line never runs underneath it (the painter reserves a matching strip).
-        if (textArea.CharacterCountStyle.HasValue)
-        {
-            height += 30f;
-        }
-
         // A TextArea is a block control: it fills the width its container offers so
         // text wraps to the full pane, rather than sitting at a fixed narrow default
         // that leaves the caret running off the right edge. Only when width is
@@ -2850,9 +2888,75 @@ internal static class LayoutSolver
         float width = float.IsFinite(constraints.MaxWidth)
             ? constraints.MaxWidth
             : defaultWidth;
+        if (textArea.ResizedWidth is { } draggedWidth && textArea.ResizeDir is ResizeDirection.Horizontal or ResizeDirection.Both)
+        {
+            width = draggedWidth;
+        }
 
-        return new Size(
+        // The prefix indents the text; the suffix sits in a strip along the bottom (with the count).
+        var loose = new LayoutConstraints(0f, Math.Max(0f, width / 2f), 0f, float.PositiveInfinity);
+        float prefixIndent = textArea.PrefixNode.IsLayoutEmpty ? 0f : MeasureChild(textArea.PrefixNode, loose).Width + TextInputMetrics.AdornmentGap;
+        float suffixHeight = textArea.SuffixNode.IsLayoutEmpty ? 0f : MeasureChild(textArea.SuffixNode, loose).Height;
+
+        int lines = textArea.FixedLines ?? textArea.MinLines;
+        if (textArea.AutoGrowEnabled && textArea.FixedLines is null)
+        {
+            // AutoGrow: as many lines as the text wraps to, within its min and max (MaxLines caps it too).
+            int min = textArea.AutoGrowMinLines ?? textArea.MinLines;
+            int? max = textArea.AutoGrowMaxLines ?? textArea.MaxLines;
+            int wrapped = TextAreaLineCount(textArea, width - 2f * ThemeSwitcher.Current.TextInput.PaddingH - prefixIndent);
+            lines = Math.Max(min, max is { } cap ? Math.Min(wrapped, cap) : wrapped);
+        }
+        float height = lines * lineHeight + paddingV;
+
+        // Grow the box to fit the floating character count (or the suffix) below the content
+        // so the last line never runs underneath it (the painter reserves a matching strip).
+        float strip = Math.Max(textArea.CharacterCountStyle.HasValue ? 30f : 0f, suffixHeight > 0f ? suffixHeight + 8f : 0f);
+        height += strip;
+        if (textArea.ResizedHeight is { } draggedHeight && textArea.ResizeDir is ResizeDirection.Vertical or ResizeDirection.Both)
+        {
+            height = draggedHeight;
+        }
+
+        var size = new Size(
             constraints.ConstrainWidth(width),
             constraints.ConstrainHeight(height));
+
+        float paddingH = ThemeSwitcher.Current.TextInput.PaddingH;
+        if (!textArea.PrefixNode.IsLayoutEmpty)
+        {
+            PositionChild(textArea.PrefixNode, paddingH, 8f);
+        }
+        if (!textArea.SuffixNode.IsLayoutEmpty)
+        {
+            var s = textArea.SuffixNode.LayoutData.MeasuredSize;
+            float rightInset = paddingH + (textArea.IsResizable ? TextArea.GripSize : 0f);
+            PositionChild(textArea.SuffixNode, size.Width - rightInset - s.Width, size.Height - 6f - s.Height);
+        }
+        return size;
+    }
+
+    /// <summary>How many lines a TextArea's text wraps to at <paramref name="contentWidth"/> (at least 1).</summary>
+    private static int TextAreaLineCount(TextArea textArea, float contentWidth)
+    {
+        string text = ReferenceEquals(FocusManager.FocusedElement, textArea) && InputDispatcher.TextAreaEditBuffer is { } editing
+            ? editing
+            : textArea.Value.Value ?? "";
+        if (text.Length == 0 || DefaultFontPath is null || contentWidth <= 0f)
+        {
+            return 1;
+        }
+        var layout = TextLayoutEngine.Layout(text, new TextLayoutOptions
+        {
+            FontPath = DefaultFontPath,
+            FontSize = BodyFontSize,
+            MaxWidth = contentWidth,
+            MaxLines = 0,
+            Overflow = TextOverflow.Clip,
+        });
+        // A trailing newline starts an empty line the layout doesn't count when its last line holds the newline.
+        int count = Math.Max(1, layout.Lines.Count);
+        var last = layout.Lines.Count > 0 ? layout.Lines[^1] : null;
+        return text.EndsWith('\n') && last is not null && last.TextStart + last.TextLength >= text.Length ? count + 1 : count;
     }
 }

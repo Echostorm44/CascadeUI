@@ -345,6 +345,9 @@ internal static class HitTester
             Grid grid => grid.Children,
             Accordion acc => acc.Sections,
             ToolBar tb => tb.ShownCustomNodes,
+            TextInput adorned when !adorned.PrefixNode.IsLayoutEmpty || !adorned.SuffixNode.IsLayoutEmpty => NodeDiffer.Adornments(adorned.PrefixNode, adorned.SuffixNode),
+            INumberInput number when !number.PrefixContent.IsLayoutEmpty || !number.SuffixContent.IsLayoutEmpty => NodeDiffer.Adornments(number.PrefixContent, number.SuffixContent),
+            TextArea area when !area.PrefixNode.IsLayoutEmpty || !area.SuffixNode.IsLayoutEmpty => NodeDiffer.Adornments(area.PrefixNode, area.SuffixNode),
             _ => null
         };
     }

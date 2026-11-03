@@ -2027,7 +2027,8 @@ internal sealed partial class NodePainter
         float fontSize = TextInputMetrics.FontSize(theme);
         float scrollX = focused ? InputDispatcher.TextInputScrollOffsetX : 0f;
         float contentLeft = TextInputMetrics.ContentLeft(ti, theme);
-        float availableWidth = bounds.Width - contentLeft - t.PaddingH;
+        float contentRight = TextInputMetrics.ContentRight(ti, theme);
+        float availableWidth = bounds.Width - contentLeft - contentRight;
 
         // Leading icon (e.g. a magnifier on a search field), in the placeholder's colour.
         float iconSize = TextInputMetrics.IconSize(ti, theme);
@@ -2045,14 +2046,25 @@ internal sealed partial class NodePainter
             if (!string.IsNullOrEmpty(placeholder))
             {
                 float placeholderOpacity = 1f - placeholderHidden;
-                var placeholderBounds = new Rect(bounds.X + contentLeft - t.PaddingH, bounds.Y, bounds.Width - (contentLeft - t.PaddingH), bounds.Height);
+                var placeholderBounds = new Rect(bounds.X + contentLeft - t.PaddingH, bounds.Y, bounds.Width - (contentLeft - t.PaddingH) - (contentRight - t.PaddingH), bounds.Height);
                 PaintText(placeholder, placeholderBounds, t.PaddingH, t.PlaceholderColor.Opacity(placeholderOpacity));
             }
         }
 
-        // With an icon, horizontally scrolled text must not slide under it.
-        using var textClip = iconSize > 0f
-            ? ctx.PushClip(new Rect(bounds.X + contentLeft - 1f, bounds.Y, bounds.Width - contentLeft + 1f, bounds.Height))
+        // The prefix and suffix (laid-out children) sit either side of the text.
+        if (!ti.PrefixNode.IsLayoutEmpty)
+        {
+            PaintRecursive(ti.PrefixNode);
+        }
+        if (!ti.SuffixNode.IsLayoutEmpty)
+        {
+            PaintRecursive(ti.SuffixNode);
+        }
+
+        // With an icon, prefix or suffix, horizontally scrolled text must not slide under them.
+        bool adorned = iconSize > 0f || !ti.PrefixNode.IsLayoutEmpty || !ti.SuffixNode.IsLayoutEmpty;
+        using var textClip = adorned
+            ? ctx.PushClip(new Rect(bounds.X + contentLeft - 1f, bounds.Y, bounds.Width - contentLeft - contentRight + 2f, bounds.Height))
             : default;
 
         if (!string.IsNullOrEmpty(text))
@@ -2089,6 +2101,18 @@ internal sealed partial class NodePainter
             float textX = MathF.Round(bounds.X + contentLeft - scrollX);
             ctx.DrawText(text, textX, textY, fontSize, textColor,
                 maxWidth: float.PositiveInfinity, maxLines: 1);
+
+            // A mask being filled in shows the rest of itself faintly ("(555) 12_-____").
+            if (focused && ti.MaskPatternValue is { } mask)
+            {
+                string full = mask.Apply(mask.StripLiterals(text));
+                if (full.Length > text.Length && full.StartsWith(text, StringComparison.Ordinal))
+                {
+                    float typedWidth = ctx.MeasureTextAdvance(text, fontSize).Width;
+                    ctx.DrawText(full[text.Length..], textX + typedWidth, textY, fontSize, t.PlaceholderColor,
+                        maxWidth: float.PositiveInfinity, maxLines: 1);
+                }
+            }
         }
 
         // Caret when focused — a hard blink (see DrawCaret)
@@ -9485,6 +9509,21 @@ internal sealed partial class NodePainter
         string text = editing ? InputDispatcher.NumberEditBuffer! : ni.DisplayValue;
         var textColor = disabled ? theme.Colors.TextMuted : theme.Colors.Text;
 
+        // A prefix and suffix (laid-out children) narrow the value's room either side.
+        float prefixWidth = TextInputMetrics.AdornmentWidth(ni.PrefixContent);
+        float suffixWidth = TextInputMetrics.AdornmentWidth(ni.SuffixContent);
+        if (prefixWidth > 0f)
+        {
+            PaintRecursive(ni.PrefixContent);
+            float inset = prefixWidth + TextInputMetrics.AdornmentGap;
+            valueBounds = new Rect(valueBounds.X + inset, valueBounds.Y, Math.Max(0f, valueBounds.Width - inset), valueBounds.Height);
+        }
+        if (suffixWidth > 0f)
+        {
+            PaintRecursive(ni.SuffixContent);
+            valueBounds = new Rect(valueBounds.X, valueBounds.Y, Math.Max(0f, valueBounds.Width - suffixWidth - TextInputMetrics.AdornmentGap), valueBounds.Height);
+        }
+
         PaintText(text, valueBounds, paddingH, textColor, fontSize: fontSize, alignment: align);
 
         if (!editing)
@@ -15840,15 +15879,28 @@ internal sealed partial class NodePainter
             ? paddingV + ctx.MeasureText("0/0", fontSize - 2f).Height + 2f
             : 0f;
 
+        // A prefix indents the text column; a suffix shares the bottom strip (laid-out children).
+        float prefixIndent = ta.PrefixNode.IsLayoutEmpty ? 0f : TextInputMetrics.AdornmentWidth(ta.PrefixNode) + TextInputMetrics.AdornmentGap;
+        float suffixWidth = TextInputMetrics.AdornmentWidth(ta.SuffixNode);
+        if (!ta.SuffixNode.IsLayoutEmpty)
+        {
+            countReserve = Math.Max(countReserve, ta.SuffixNode.LayoutData.Bounds.Height + 8f);
+            PaintRecursive(ta.SuffixNode);
+        }
+        if (!ta.PrefixNode.IsLayoutEmpty)
+        {
+            PaintRecursive(ta.PrefixNode);
+        }
+
         // Use font metrics for line height instead of arbitrary constant
         float lineHeight = ctx.MeasureText("Xg", fontSize).Height;
 
         float scrollY = focused ? InputDispatcher.TextAreaScrollOffsetY : 0f;
 
-        float contentLeft = bounds.X + paddingH;
+        float contentLeft = bounds.X + paddingH + prefixIndent;
         float contentTop = bounds.Y + paddingV;
         float contentBottom = bounds.Y + bounds.Height - countReserve;
-        float contentWidth = bounds.Width - paddingH * 2;
+        float contentWidth = bounds.Width - paddingH * 2 - prefixIndent;
 
         // Soft word-wrap: lay the text out to the content width via the shared text
         // layout engine so long lines wrap to the next visual line instead of running
@@ -15877,7 +15929,7 @@ internal sealed partial class NodePainter
             InputDispatcher.TextAreaFontPath = fontPath;
             InputDispatcher.TextAreaFontSize = fontSize;
             InputDispatcher.TextAreaContentWidth = contentWidth;
-            InputDispatcher.TextAreaPaddingH = paddingH;
+            InputDispatcher.TextAreaPaddingH = paddingH + prefixIndent;
             InputDispatcher.TextAreaPaddingV = paddingV;
         }
 
@@ -16157,11 +16209,25 @@ internal sealed partial class NodePainter
             }
 
             var countSize = ctx.MeasureText(countText, countFontSize);
+            // Left of the suffix and the resize grip when they share the bottom-right corner.
+            float countRight = paddingH + (suffixWidth > 0f ? suffixWidth + TextInputMetrics.AdornmentGap : 0f)
+                + (ta.IsResizable ? TextArea.GripSize : 0f);
             var countBounds = new Rect(
-                bounds.X + bounds.Width - paddingH - countSize.Width,
+                bounds.X + bounds.Width - countRight - countSize.Width,
                 bounds.Y + bounds.Height - paddingV - countSize.Height,
                 countSize.Width, countSize.Height);
             PaintText(countText, countBounds, 0, countColor, fontSize: countFontSize);
+        }
+
+        // The resize grip (.Resizable): two short diagonals in the bottom-right corner.
+        if (ta.IsResizable && !ta.IsDisabled)
+        {
+            var gripColor = theme.Colors.TextMuted.Opacity(0.7f);
+            float right = bounds.X + bounds.Width - 4f;
+            float bottom = bounds.Y + bounds.Height - 4f;
+            var grip = new Stroke(gripColor, 1.2f, StrokeCap.Round, StrokeJoin.Round);
+            ctx.DrawLine(new Point(right - 8f, bottom), new Point(right, bottom - 8f), grip);
+            ctx.DrawLine(new Point(right - 4f, bottom), new Point(right, bottom - 4f), grip);
         }
     }
 

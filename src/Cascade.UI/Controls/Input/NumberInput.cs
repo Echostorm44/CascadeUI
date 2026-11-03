@@ -27,6 +27,12 @@ public interface INumberInput
     /// <summary>Stepper button layout position.</summary>
     StepperPosition StepperPos { get; }
 
+    /// <summary>Content before the value (<c>.Prefix</c>), or <see cref="Node.Empty"/>.</summary>
+    Node PrefixContent => Node.Empty;
+
+    /// <summary>Content after the value (<c>.Suffix</c>), or <see cref="Node.Empty"/>.</summary>
+    Node SuffixContent => Node.Empty;
+
     /// <summary>Whether the value is at the minimum bound (disable decrement).</summary>
     bool IsAtMin { get; }
 
@@ -139,6 +145,8 @@ public sealed class NumberInput<T> : Node, INumberInput, IValidatable where T : 
     internal StepperPosition StepperPos { get; set; } = StepperPosition.Right;
     internal Node PrefixNode { get; set; } = Node.Empty;
     internal Node SuffixNode { get; set; } = Node.Empty;
+    Node INumberInput.PrefixContent => PrefixNode;
+    Node INumberInput.SuffixContent => SuffixNode;
     internal bool IsDisabled { get; set; }
     internal bool IsReadOnly { get; set; }
 

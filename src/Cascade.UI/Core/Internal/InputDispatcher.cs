@@ -29,6 +29,10 @@ internal sealed partial class InputDispatcher
     // Slider drag state — tracked across MouseDown/Move/Up
     private float sliderDragStartX;
     private float sliderDragStartY;
+
+    // A TextArea being resized by its grip, and the pointer and size when the drag began.
+    private TextArea? textAreaResizeTarget;
+    private Rect textAreaResizeStart;
     private float sliderDragStartValue;
 
     // RangeSlider drag state — which thumb (true = max, false = min)
@@ -544,6 +548,11 @@ internal sealed partial class InputDispatcher
             self.dragDropCurrentTarget = newNode;
         }
 
+        if (ReferenceEquals(self.textAreaResizeTarget, oldNode) && newNode is TextArea newResizeTarget)
+        {
+            self.textAreaResizeTarget = newResizeTarget;
+        }
+
         if (ReferenceEquals(self.openDatePicker, oldNode) && newNode is DatePicker newDp)
         {
             self.openDatePicker = newDp;
@@ -641,6 +650,39 @@ internal sealed partial class InputDispatcher
         if (rootNode is null)
         {
             return;
+        }
+
+        // Dragging a TextArea's resize grip (.Resizable) captures the pointer until release.
+        if (textAreaResizeTarget is { } resizing)
+        {
+            if (evt.Type == NativeMouseEventType.MouseMove)
+            {
+                if (resizing.ResizeDir is ResizeDirection.Horizontal or ResizeDirection.Both)
+                {
+                    resizing.ResizedWidth = Math.Max(80f, textAreaResizeStart.Width + evt.X - textAreaResizeStart.X);
+                }
+                if (resizing.ResizeDir is ResizeDirection.Vertical or ResizeDirection.Both)
+                {
+                    resizing.ResizedHeight = Math.Max(38f, textAreaResizeStart.Height + evt.Y - textAreaResizeStart.Y);
+                }
+                RequestRepaint?.Invoke();
+            }
+            else if (evt.Type == NativeMouseEventType.MouseUp)
+            {
+                textAreaResizeTarget = null;
+            }
+            return;
+        }
+        if (evt.Type == NativeMouseEventType.MouseDown && evt.Button == NativeMouseButton.Left
+            && HitTester.HitTest(rootNode, evt.X, evt.Y) is TextArea { IsResizable: true, IsDisabled: false } gripArea)
+        {
+            var area = gripArea.AbsoluteBounds;
+            if (evt.X >= area.Right - TextArea.GripSize && evt.Y >= area.Bottom - TextArea.GripSize)
+            {
+                textAreaResizeTarget = gripArea;
+                textAreaResizeStart = new Rect(evt.X, evt.Y, area.Width, area.Height);
+                return;
+            }
         }
 
         // A ListView's scrollbar drag: the same, against the list's own offset.
@@ -3808,6 +3850,13 @@ internal sealed partial class InputDispatcher
         bool shift = evt.Modifiers.HasFlag(ModifierKeys.Shift);
         bool ctrl = evt.Modifiers.HasFlag(ModifierKeys.Ctrl);
 
+        // A masked field edits its raw characters (see HandleMaskedTextKey).
+        if ((textInput.MaskPatternValue is not null || textInput.CustomMaskValue is not null)
+            && HandleMaskedTextKey(textInput, evt, ctrl, shift))
+        {
+            return true;
+        }
+
         // Ctrl+A — select all
         if (ctrl && evt.Key == Key.A)
         {
@@ -3840,8 +3889,8 @@ internal sealed partial class InputDispatcher
             return true;
         }
 
-        // Ctrl+V — paste
-        if (ctrl && evt.Key == Key.V)
+        // Ctrl+V / Shift+Insert — paste
+        if ((ctrl && evt.Key == Key.V) || (shift && evt.Key == Key.Insert))
         {
             PasteIntoTextInput(textInput);
             return true;
@@ -4651,6 +4700,77 @@ internal sealed partial class InputDispatcher
     }
 
     /// <summary>Pastes clipboard text into the TextInput at the caret, replacing any selection.</summary>
+    /// <summary>
+    /// Typing into a masked field (<c>.Mask</c>): only characters the next slot accepts go in, the
+    /// mask's separators appear by themselves, Backspace removes the last character typed, and a
+    /// paste is fed through character by character. The caret stays at the end. With everything
+    /// selected (Ctrl+A), the next edit starts afresh. Other keys (arrows, copy) work as usual.
+    /// </summary>
+    private bool HandleMaskedTextKey(TextInput ti, NativeKeyEvent evt, bool ctrl, bool shift)
+    {
+        string buffer = textInputBuffer ?? "";
+        bool allSelected = buffer.Length > 0 && Math.Min(TextInputSelectionAnchor, TextInputCaretIndex) == 0
+            && Math.Max(TextInputSelectionAnchor, TextInputCaretIndex) == buffer.Length;
+        var pattern = ti.MaskPatternValue;
+        var custom = ti.CustomMaskValue;
+        string raw = allSelected ? "" : pattern is not null ? pattern.StripLiterals(buffer) : custom!.Parse(buffer);
+
+        bool Accepts(string r, char c) => pattern is not null ? pattern.Accepts(r, c) : custom!.IsCharAllowed(c);
+        string Format(string r) => pattern is not null ? pattern.FormatPartial(r) : custom!.Format(r);
+
+        string? next = null;
+        if (evt.Character is { } typed && typed >= ' ' && typed != (char)127 && !ctrl)
+        {
+            next = Accepts(raw, typed) ? raw + typed : null;
+            if (next is null)
+            {
+                return true; // not allowed here: swallowed
+            }
+        }
+        else if (evt.Character == '\b' || evt.Key == Key.Delete)
+        {
+            next = allSelected ? "" : raw.Length > 0 ? raw[..^1] : raw;
+        }
+        else if ((ctrl && evt.Key == Key.V) || (shift && evt.Key == Key.Insert))
+        {
+            var content = Clipboard.GetContentAsync().GetAwaiter().GetResult();
+            string pasted = content.HasText ? content.GetTextAsync().GetAwaiter().GetResult() ?? "" : "";
+            next = raw;
+            foreach (char c in pasted)
+            {
+                if (Accepts(next, c))
+                {
+                    next += c;
+                }
+            }
+        }
+        else if (ctrl && evt.Key == Key.X)
+        {
+            return false; // cut works on the shown text as usual
+        }
+
+        if (next is null)
+        {
+            return false;
+        }
+
+        string formatted = Format(next);
+        if (ti.MaxLengthValue is { } max && formatted.Length > max)
+        {
+            return true;
+        }
+        textInputBuffer = formatted;
+        ActiveEditBuffer = formatted;
+        TextInputCaretIndex = formatted.Length;
+        TextInputSelectionAnchor = formatted.Length;
+        if (formatted != buffer)
+        {
+            ti.Value.OnChange(formatted);
+            RaiseOnChange(ti.OnChangeHandler, ti.DebounceDelay, formatted);
+        }
+        return true;
+    }
+
     private void PasteIntoTextInput(TextInput ti)
     {
         var content = Clipboard.GetContentAsync().GetAwaiter().GetResult();
@@ -4673,6 +4793,15 @@ internal sealed partial class InputDispatcher
         }
 
         textInputBuffer ??= "";
+        // MaxLength holds for a paste as for typing.
+        if (ti.MaxLengthValue is { } max)
+        {
+            text = text[..Math.Clamp(max - textInputBuffer.Length, 0, text.Length)];
+            if (text.Length == 0)
+            {
+                return;
+            }
+        }
         textInputBuffer = textInputBuffer.Insert(TextInputCaretIndex, text);
         TextInputCaretIndex += text.Length;
         TextInputSelectionAnchor = TextInputCaretIndex;

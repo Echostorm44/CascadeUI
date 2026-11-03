@@ -82,6 +82,8 @@ public sealed class ToggleGroup<T> : Node, IToggleGroup where T : notnull
 
     bool IToggleGroup.IsVertical => OrientationValue == Orientation.Vertical;
 
+    Node IToggleGroup.GetOptionNode(int index) => Options[index].NodeLabel;
+
     /// <summary>
     /// Runs all registered validation rules against the current value.
     /// Returns the first failing result or <see cref="ValidationResult.Ok"/>.
@@ -224,6 +226,9 @@ public interface IToggleGroup
 
     /// <summary>Whether the options are stacked in a column rather than laid in a row.</summary>
     bool IsVertical => false;
+
+    /// <summary>An option's rich label (an icon, say), or <see cref="Node.Empty"/> for a text label.</summary>
+    Node GetOptionNode(int index) => Node.Empty;
 
     /// <summary>The height of one option when the group is vertical.</summary>
     internal const float VerticalRowHeight = 32f;

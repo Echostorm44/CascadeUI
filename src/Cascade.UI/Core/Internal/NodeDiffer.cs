@@ -192,6 +192,7 @@ internal static class NodeDiffer
             StatusBar sb => [sb.Left, sb.Center, sb.Right],
             IRadioGroup rg => [rg.Content],
             IRadioButton rb when !rb.NodeLabel.IsLayoutEmpty => [rb.NodeLabel],
+            IToggleGroup tg => SegmentLayout.ToggleOptionNodes(tg),
             // Only the incoming page is a live, reconcilable child — it must be
             // mounted/rendered during the transition so it paints (not just at
             // completion). The outgoing tree is a frozen snapshot painted with a

@@ -12568,13 +12568,7 @@ internal sealed partial class NodePainter
 
         // Button geometry shared with MeasureToggleGroup and the click hit test.
         float[] buttonLefts = new float[count];
-        float[] buttonWidths = new float[count];
-        for (int i = 0; i < count; i++)
-        {
-            buttonWidths[i] = SegmentLayout.NaturalWidth(tg.GetOptionLabel(i), SegmentLayout.ToggleGroupPaddingH);
-        }
-
-        SegmentLayout.ScaleToFit(buttonWidths, bounds.Width);
+        float[] buttonWidths = SegmentLayout.ToggleWidths(tg, bounds.Width);
 
         float xAcc = 0f;
         for (int i = 0; i < count; i++)
@@ -12669,7 +12663,15 @@ internal sealed partial class NodePainter
                 }
             }
 
-            PaintSegmentLabel(label, buttonLefts[i], buttonWidths[i], bounds.Height, SegmentLayout.ToggleGroupPaddingH, fontSize, textColor);
+            // A rich label is a laid-out child; a text one is drawn here.
+            if (tg.GetOptionNode(i) is { IsLayoutEmpty: false } optionNode)
+            {
+                PaintRecursive(optionNode);
+            }
+            else
+            {
+                PaintSegmentLabel(label, buttonLefts[i], buttonWidths[i], bounds.Height, SegmentLayout.ToggleGroupPaddingH, fontSize, textColor);
+            }
 
             // Dividers between non-selected buttons — fade near animated indicator
             if (i > 0 && i != selectedIdx && i - 1 != selectedIdx)
@@ -12745,8 +12747,15 @@ internal sealed partial class NodePainter
             {
                 color = color.Opacity(isSelected ? 0.5f : 0.4f);
             }
-            PaintText(tg.GetOptionLabel(i), new Rect(bounds.X, top, bounds.Width, row), SegmentLayout.ToggleGroupPaddingH, color,
-                fontSize: fontSize, alignment: TextAlignment.Center, overflow: TextOverflow.Ellipsis);
+            if (tg.GetOptionNode(i) is { IsLayoutEmpty: false } optionNode)
+            {
+                PaintRecursive(optionNode);
+            }
+            else
+            {
+                PaintText(tg.GetOptionLabel(i), new Rect(bounds.X, top, bounds.Width, row), SegmentLayout.ToggleGroupPaddingH, color,
+                    fontSize: fontSize, alignment: TextAlignment.Center, overflow: TextOverflow.Ellipsis);
+            }
 
             // A hairline between two unselected rows, fading as the selection passes.
             if (i > 0 && i != selected && i - 1 != selected)

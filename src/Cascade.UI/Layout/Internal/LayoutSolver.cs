@@ -2094,6 +2094,17 @@ internal static class LayoutSolver
 
         float buttonHeight = 36f;
         float totalWidth = 0;
+        float row = IToggleGroup.VerticalRowHeight;
+
+        // Rich option labels are children: lay them out first, their widths size their buttons.
+        var loose = new LayoutConstraints(0f, float.PositiveInfinity, 0f, tg.IsVertical ? row : buttonHeight);
+        for (int i = 0; i < count; i++)
+        {
+            if (tg.GetOptionNode(i) is { IsLayoutEmpty: false } node)
+            {
+                MeasureChild(node, loose);
+            }
+        }
 
         if (tg.IsVertical)
         {
@@ -2101,21 +2112,42 @@ internal static class LayoutSolver
             float widest = 0f;
             for (int i = 0; i < count; i++)
             {
-                widest = Math.Max(widest, SegmentLayout.NaturalWidth(tg.GetOptionLabel(i), SegmentLayout.ToggleGroupPaddingH));
+                widest = Math.Max(widest, SegmentLayout.ToggleNaturalWidth(tg, i));
             }
-            return new Size(
+            var size = new Size(
                 constraints.ConstrainWidth(Math.Max(widest, 80f)),
-                constraints.ConstrainHeight(count * IToggleGroup.VerticalRowHeight + 4f));
+                constraints.ConstrainHeight(count * row + 4f));
+            for (int i = 0; i < count; i++)
+            {
+                if (tg.GetOptionNode(i) is { IsLayoutEmpty: false } node)
+                {
+                    var b = node.LayoutData.Bounds;
+                    PositionChild(node, (size.Width - b.Width) / 2f, 2f + i * row + (row - b.Height) / 2f);
+                }
+            }
+            return size;
         }
 
         for (int i = 0; i < count; i++)
         {
-            totalWidth += SegmentLayout.NaturalWidth(tg.GetOptionLabel(i), SegmentLayout.ToggleGroupPaddingH);
+            totalWidth += SegmentLayout.ToggleNaturalWidth(tg, i);
         }
 
-        return new Size(
+        var rowSize = new Size(
             constraints.ConstrainWidth(Math.Max(totalWidth, 80f)),
             constraints.ConstrainHeight(buttonHeight));
+        float[] widths = SegmentLayout.ToggleWidths(tg, rowSize.Width);
+        float left = 0f;
+        for (int i = 0; i < count; i++)
+        {
+            if (tg.GetOptionNode(i) is { IsLayoutEmpty: false } node)
+            {
+                var b = node.LayoutData.Bounds;
+                PositionChild(node, left + (widths[i] - b.Width) / 2f, (rowSize.Height - b.Height) / 2f);
+            }
+            left += widths[i];
+        }
+        return rowSize;
     }
 
     /// <summary>

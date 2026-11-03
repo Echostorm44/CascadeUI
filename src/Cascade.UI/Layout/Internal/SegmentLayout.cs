@@ -21,6 +21,41 @@ internal static class SegmentLayout
     /// <summary>Horizontal padding on each side of a <c>ToggleGroup</c> button.</summary>
     internal const float ToggleGroupPaddingH = 24f;
 
+    /// <summary>
+    /// A toggle group option's natural width: a text label's shaped width, or a rich label's laid-out
+    /// width (measure lays the node out first), plus padding.
+    /// </summary>
+    internal static float ToggleNaturalWidth(IToggleGroup tg, int index) =>
+        tg.GetOptionNode(index) is { IsLayoutEmpty: false } node
+            ? node.LayoutData.Bounds.Width + (ToggleGroupPaddingH * 2f)
+            : NaturalWidth(tg.GetOptionLabel(index), ToggleGroupPaddingH);
+
+    /// <summary>A horizontal toggle group's button widths, scaled to <paramref name="totalWidth"/>.</summary>
+    internal static float[] ToggleWidths(IToggleGroup tg, float totalWidth)
+    {
+        var widths = new float[tg.OptionCount];
+        for (int i = 0; i < widths.Length; i++)
+        {
+            widths[i] = ToggleNaturalWidth(tg, i);
+        }
+        ScaleToFit(widths, totalWidth);
+        return widths;
+    }
+
+    /// <summary>The rich option labels of a toggle group: its child nodes.</summary>
+    internal static IReadOnlyList<Node> ToggleOptionNodes(IToggleGroup tg)
+    {
+        List<Node>? nodes = null;
+        for (int i = 0; i < tg.OptionCount; i++)
+        {
+            if (tg.GetOptionNode(i) is { IsLayoutEmpty: false } node)
+            {
+                (nodes ??= []).Add(node);
+            }
+        }
+        return nodes ?? (IReadOnlyList<Node>)[];
+    }
+
     /// <summary>The label font size of both controls (85% of body text).</summary>
     internal static float FontSize => LayoutSolver.BodyFontSize * 0.85f;
 

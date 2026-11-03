@@ -6473,14 +6473,27 @@ internal sealed partial class InputDispatcher
             return;
         }
 
-        int clickedIndex = tg.IsVertical
-            ? Math.Clamp((int)MathF.Floor((lastMousePosition.Y - bounds.Y - 2f) / IToggleGroup.VerticalRowHeight), 0, count - 1)
-            : HitTestVariableWidthSegments(
-                bounds,
-                count,
-                i => tg.GetOptionLabel(i),
-                SegmentLayout.ToggleGroupPaddingH,
-                lastMousePosition.X);
+        int clickedIndex = count - 1;
+        if (tg.IsVertical)
+        {
+            clickedIndex = Math.Clamp((int)MathF.Floor((lastMousePosition.Y - bounds.Y - 2f) / IToggleGroup.VerticalRowHeight), 0, count - 1);
+        }
+        else
+        {
+            // The buttons as layout and paint size them (rich labels by their laid-out width).
+            float[] widths = SegmentLayout.ToggleWidths(tg, bounds.Width);
+            float relX = lastMousePosition.X - bounds.X;
+            float right = 0f;
+            for (int i = 0; i < count; i++)
+            {
+                right += widths[i];
+                if (relX < right)
+                {
+                    clickedIndex = i;
+                    break;
+                }
+            }
+        }
         tg.SelectIndex(clickedIndex);
     }
 

@@ -615,6 +615,28 @@ public class ModifierRenderTests
     }
 
     [Test]
+    public async Task ToggleGroup_RichOptionLabels_AreDrawn_AndClickable()
+    {
+        // Two icon options: each draws its icon (red) in its own button, not "Option 1".
+        string chosen = "left";
+        ToggleOption<string>[] icons =
+        [
+            new("left", new IconView(Icons.AlignLeft, 20).Color(Red)),
+            new("right", new IconView(Icons.AlignRight, 20).Color(Red)),
+        ];
+        ToggleGroup<string>? group = null;
+        using var app = new RenderHarness(() => group = new ToggleGroup<string>(new Bindable<string>("left", v => chosen = v), icons));
+        var frame = app.Frame();
+
+        float width = group!.LayoutData.Bounds.Width;
+        await Assert.That(frame.Count(p => p.X < width / 2 && IsRedPixel(p))).IsGreaterThan(15);
+        await Assert.That(frame.Count(p => p.X > width / 2 && p.X < width && IsRedPixel(p))).IsGreaterThan(15);
+
+        app.Click(width * 0.75f, 18);
+        await Assert.That(chosen).IsEqualTo("right");
+    }
+
+    [Test]
     public async Task ToggleGroup_ArrowKeysMoveTheSelection()
     {
         static string After(string start, Key key)

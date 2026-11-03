@@ -386,6 +386,132 @@ public class ModifierRenderTests
     }
 
     [Test]
+    public async Task Rating_DrawsStars_NotCircles()
+    {
+        using var app = new RenderHarness(() => new Rating(1f, max: 1).Size(64).Color(Red, Green), crossAxisCenter: true);
+        var (cx, cy, r) = RedShape(app.Frame());
+
+        // A solid star: its middle is filled, but the notch between its top and upper-left points
+        // (126° round from the top, three quarters out) is empty, where a circle would be filled.
+        var frame = app.Frame();
+        await Assert.That(IsRed(frame, cx, cy)).IsTrue();
+        double notch = (-90 - 36) * Math.PI / 180;
+        await Assert.That(IsRed(frame, cx + (int)(Math.Cos(notch) * r * 0.75), cy + (int)(Math.Sin(notch) * r * 0.75))).IsFalse();
+    }
+
+    [Test]
+    public async Task RatingHalfStars_FillsOnlyTheLeftHalf()
+    {
+        using var app = new RenderHarness(() => new Rating(0.5f, max: 1).HalfStars().Size(64).Color(Red, Green), crossAxisCenter: true);
+        var frame = app.Frame();
+
+        int centerX = RenderHarnessCenterX(frame);
+        int leftRed = frame.Count(p => p.X < centerX && IsRedPixel(p));
+        int rightRed = frame.Count(p => p.X > centerX + 2 && IsRedPixel(p));
+        await Assert.That(leftRed).IsGreaterThan(100);
+        await Assert.That(rightRed).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task RatingIcon_DrawsTheGivenGlyphs()
+    {
+        // Straight down the middle from the top: a star's point is filled there, a heart dips between
+        // its lobes. (One harness at a time: they share their content.)
+        await Assert.That(TopCentreIsRed(() => new Rating(1f, max: 1).Size(64).Color(Red, Green))).IsTrue();
+        await Assert.That(TopCentreIsRed(() => new Rating(1f, max: 1).Icon(Icons.Heart, Icons.Heart).Size(64).Color(Red, Green))).IsFalse();
+    }
+
+    private static bool TopCentreIsRed(Func<Node> build)
+    {
+        using var app = new RenderHarness(build, crossAxisCenter: true);
+        var frame = app.Frame();
+        var (cx, cy, r) = RedShape(frame);
+        // The ink's top edge in the middle column, a few pixels in.
+        return IsRed(frame, cx, cy - r + 4);
+    }
+
+    [Test]
+    public async Task RatingLabels_ShowTheHoveredStarsLabel()
+    {
+        // Hover the middle star; only the labelled rating adds a tooltip's worth of ink.
+        int plainInk = HoveredInk(() => new Rating(new Bindable<float>(0f, _ => { }), max: 3).Size(32));
+        int labelledInk = HoveredInk(() => new Rating(new Bindable<float>(0f, _ => { }), max: 3).Size(32).Labels(["Poor", "Fine", "Great"]));
+        await Assert.That(labelledInk).IsGreaterThan(plainInk + 200);
+    }
+
+    private static int HoveredInk(Func<Node> build)
+    {
+        using var app = new RenderHarness(build, crossAxisCenter: true);
+        app.Frame();
+        app.MoveMouse(RenderHarness.Width / 2f, 16);
+        app.Frame();
+        return app.Frame().Count(p => p.R + p.G + p.B > 60);
+    }
+
+    [Test]
+    public async Task OneImageSource_DrawsInEveryBackendThatShowsIt()
+    {
+        // Image handles are numbered per backend: a second window (or a rebuilt backend) drawing the
+        // same ImageSource used to get the first backend's handle - nothing, or another image.
+        byte[] red = new byte[16 * 16 * 4];
+        for (int i = 0; i < red.Length; i += 4)
+        {
+            red[i] = 255;
+            red[i + 3] = 255;
+        }
+        using var image = ImageSource.FromBytes(red, 16, 16);
+
+        int first, second;
+        using (var app = new RenderHarness(() => new Image(image).AccessibleLabel("").Size(40, 40)))
+        {
+            first = app.Frame().Count(IsRedPixel);
+        }
+        using (var app = new RenderHarness(() => new Image(image).AccessibleLabel("").Size(40, 40)))
+        {
+            second = app.Frame().Count(IsRedPixel);
+        }
+
+        await Assert.That(first).IsGreaterThan(1000);
+        await Assert.That(second).IsEqualTo(first);
+    }
+
+    private static bool IsRedPixel(RenderHarness.Pixel p) => p.R > 200 && p.G < 60 && p.B < 60;
+
+    private static bool IsRed(RenderHarness.Pixels frame, int x, int y) =>
+        frame.Count(p => Math.Abs(p.X - x) <= 1 && Math.Abs(p.Y - y) <= 1 && IsRedPixel(p)) > 0;
+
+    // Centre and half-width of the red ink.
+    private static (int X, int Y, int R) RedShape(RenderHarness.Pixels frame)
+    {
+        int minX = int.MaxValue, maxX = 0, minY = int.MaxValue, maxY = 0;
+        frame.Count(p =>
+        {
+            if (IsRedPixel(p))
+            {
+                minX = Math.Min(minX, p.X); maxX = Math.Max(maxX, p.X);
+                minY = Math.Min(minY, p.Y); maxY = Math.Max(maxY, p.Y);
+            }
+            return false;
+        });
+        return ((minX + maxX) / 2, (minY + maxY) / 2, (maxX - minX) / 2);
+    }
+
+    // The x the 64px star is centred on: the middle of all its ink (red and green).
+    private static int RenderHarnessCenterX(RenderHarness.Pixels frame)
+    {
+        int minX = int.MaxValue, maxX = 0;
+        frame.Count(p =>
+        {
+            if (p.R > 150 || p.G > 150)
+            {
+                minX = Math.Min(minX, p.X); maxX = Math.Max(maxX, p.X);
+            }
+            return false;
+        });
+        return (minX + maxX) / 2;
+    }
+
+    [Test]
     public async Task SelectableTag_WithOnlyABinding_TogglesOnClick()
     {
         var seen = new List<bool>();

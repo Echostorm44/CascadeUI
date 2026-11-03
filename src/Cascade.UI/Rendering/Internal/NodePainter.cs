@@ -6168,6 +6168,10 @@ internal sealed partial class NodePainter
         var filledColor = rating.FilledColor ?? t.FilledColor;
         var emptyColor = disabled ? t.DisabledColor : (rating.EmptyColor ?? t.EmptyColor);
         float starRadius = iconSize / 2f;
+        // Stars by default (.Icon swaps them): the filled glyph drawn solid, the empty one as an outline.
+        Icon glyph = rating.DefaultIcon.Paths.Length > 0 ? rating.DefaultIcon : Icons.Star;
+        Icon filledIcon = rating.FilledIcon ?? glyph;
+        Icon emptyIcon = rating.EmptyIcon ?? glyph;
 
         // Store absolute bounds for click-to-star mapping in InputDispatcher
         rating.AbsoluteBounds = new Rect(absoluteX, absoluteY, bounds.Width, bounds.Height);
@@ -6259,48 +6263,46 @@ internal sealed partial class NodePainter
             }
 
             float effectiveScale = waveScale * starPressScale * pulseScale;
-            float radius = starRadius * 0.85f * effectiveScale;
+            // The glyph at its resting size, scaled for the wave, press and pulse at blit time only
+            // (so animating never re-rasterises).
+            float strokeWidth = Math.Max(1.5f, iconSize / 12f);
+            void DrawGlyph(Icon glyph, bool filled, ColorValue color, float opacity) =>
+                PaintIconBitmap(glyph, cx, centerY, iconSize, effectiveScale, color, strokeWidth, filled, opacity);
 
-            // Star fill with smooth transition
             if (currentValue >= starValue)
             {
-                // Fully filled
-                float fillOpacity = 1f;
-
-                // Pulse brightness on recently clicked star
-                if (!reducedMotion && i == ratingAnim.LastClickedStar && pulseElapsed < 0.3f)
-                {
-                    fillOpacity = LerpF(1.2f, 1f, Math.Clamp(pulseElapsed / 0.3f, 0f, 1f));
-                }
-
-                ctx.DrawCircle(new Point(cx, centerY), radius,
-                    fill: filledColor.Opacity(Math.Min(fillOpacity, 1f)));
+                DrawGlyph(filledIcon, true, filledColor, 1f);
             }
             else if (rating.HalfStarsEnabled && currentValue >= starValue - 0.5f)
             {
-                // Half star
-                ctx.DrawCircle(new Point(cx, centerY), radius, fill: emptyColor);
-                var halfRect = new Rect(cx - radius, centerY - radius,
-                    radius, radius * 2f);
-                ctx.DrawRect(halfRect, filledColor, radius: radius);
+                // Half: the empty glyph, with the filled one over its left half.
+                DrawGlyph(emptyIcon, false, emptyColor, 1f);
+                float half = iconSize * effectiveScale;
+                using var halfClip = ctx.PushClip(new Rect(cx - half, centerY - half, half, half * 2f));
+                DrawGlyph(filledIcon, true, filledColor, 1f);
             }
             else
             {
-                // Empty — dimmed with smooth transition
+                // Empty — dimmed; stars up to the pointer preview the fill.
                 float dimOpacity = disabled ? 1f : LerpF(0.5f, 1f, 1f - hoverT * 0.3f);
-
-                // Hover preview: stars at and before cursor show half-intensity fill
+                DrawGlyph(emptyIcon, false, emptyColor, dimOpacity);
                 if (hoverStarIndex >= 0 && i <= hoverStarIndex && !disabled)
                 {
-                    float previewOpacity = 0.35f * hoverT;
-                    ctx.DrawCircle(new Point(cx, centerY), radius,
-                        fill: filledColor.Opacity(previewOpacity));
+                    DrawGlyph(filledIcon, true, filledColor, 0.35f * hoverT);
                 }
-                else
-                {
-                    ctx.DrawCircle(new Point(cx, centerY), radius,
-                        fill: emptyColor.Opacity(dimOpacity));
-                }
+            }
+        }
+
+        // .Labels: the label of the star under the pointer, as a tooltip on that star.
+        if (rating.TooltipLabels is { Count: > 0 } labels && rating.IsHovered && !disabled)
+        {
+            int index = (int)MathF.Floor((InputDispatcher.CurrentMousePosition.X - absoluteX - startX) / (iconSize + gap));
+            if (index >= 0 && index < Math.Min(max, labels.Count) && !string.IsNullOrEmpty(labels[index]))
+            {
+                string label = labels[index];
+                var starBounds = new Rect(absoluteX + startX + index * (iconSize + gap), absoluteY + centerY - iconSize / 2f, iconSize, iconSize);
+                deferredOverlays ??= [];
+                deferredOverlays.Add(() => PaintTooltipOverlay(label, starBounds));
             }
         }
 
@@ -6574,7 +6576,7 @@ internal sealed partial class NodePainter
     /// </summary>
     private void PaintIconBitmap(
         Icon icon, float centerX, float centerY, float baseDrawSize,
-        float renderScale, ColorValue color, float strokeWidthLogical, bool fill = false)
+        float renderScale, ColorValue color, float strokeWidthLogical, bool fill = false, float opacity = 1f)
     {
         if (icon.Paths.Length == 0 || baseDrawSize <= 0f)
         {
@@ -6590,7 +6592,7 @@ internal sealed partial class NodePainter
         // The bitmap is the icon's box plus a stroke margin on each side; blit it that much larger
         // so the box itself lands at baseDrawSize.
         float drawn = baseDrawSize * renderScale * (devicePx + (2f * margin)) / devicePx;
-        ctx.DrawImage(image, new Rect(centerX - drawn * 0.5f, centerY - drawn * 0.5f, drawn, drawn));
+        ctx.DrawImage(image, new Rect(centerX - drawn * 0.5f, centerY - drawn * 0.5f, drawn, drawn), opacity);
     }
 
     private static ImageSource GetOrCreateIconImage(Icon icon, int devicePx, float strokeDevice, ColorValue color, out int margin, bool fill = false)

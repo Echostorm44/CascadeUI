@@ -19,8 +19,11 @@ namespace Cascade.UI;
 public sealed class ImageSource : IDisposable
 {
     private byte[] pixels;
-    private ulong gpuHandle;
-    private EtchBackend? uploadedTo;
+    // One texture per backend that has drawn the image. Image handles are numbered per backend, so
+    // a handle from one is meaningless (or another image) on the next: a second window, or a
+    // backend rebuilt after a device change, must upload its own copy. Held weakly so a cached
+    // image (icons live for the process) never keeps a finished backend alive.
+    private readonly List<(WeakReference<EtchBackend> Backend, ulong Handle)> uploads = new(1);
     private bool disposed;
 
     private ImageSource(byte[] pixels, int width, int height)
@@ -107,9 +110,12 @@ public sealed class ImageSource : IDisposable
         if (width == Width && height == Height)
         {
             pixels.CopyTo(this.pixels);
-            if (gpuHandle != 0)
+            foreach (var (backendRef, handle) in uploads)
             {
-                uploadedTo?.MarkImageChanged(gpuHandle);
+                if (backendRef.TryGetTarget(out var backend))
+                {
+                    backend.MarkImageChanged(handle);
+                }
             }
         }
         else
@@ -148,23 +154,36 @@ public sealed class ImageSource : IDisposable
     /// <summary>Ensures the image is uploaded to the GPU, returning the handle.</summary>
     internal ulong EnsureUploaded(EtchBackend backend)
     {
-        if (gpuHandle == 0)
+        for (int i = uploads.Count - 1; i >= 0; i--)
         {
-            gpuHandle = backend.UploadImage(pixels, Width, Height);
-            uploadedTo = backend;
+            if (!uploads[i].Backend.TryGetTarget(out var target))
+            {
+                uploads.RemoveAt(i);
+            }
+            else if (ReferenceEquals(target, backend))
+            {
+                return uploads[i].Handle;
+            }
         }
 
-        return gpuHandle;
+        ulong handle = backend.UploadImage(pixels, Width, Height);
+        if (handle != 0)
+        {
+            uploads.Add((new WeakReference<EtchBackend>(backend), handle));
+        }
+        return handle;
     }
 
     private void ReleaseGpuImage()
     {
-        if (uploadedTo is not null && gpuHandle != 0)
+        foreach (var (backendRef, handle) in uploads)
         {
-            uploadedTo.DestroyImage(gpuHandle);
+            if (backendRef.TryGetTarget(out var backend))
+            {
+                backend.DestroyImage(handle);
+            }
         }
-        gpuHandle = 0;
-        uploadedTo = null;
+        uploads.Clear();
     }
 
     /// <summary>Releases GPU resources held by this image.</summary>

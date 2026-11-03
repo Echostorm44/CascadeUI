@@ -8058,7 +8058,7 @@ internal sealed partial class NodePainter
         PaintSelectChevron(bounds, opacity, openT, cb.IsOpen);
 
         // Dropdown overlay (deferred)
-        if ((cb.IsOpen || openT > 0.001f) && !cb.IsNodeDisabled && cb.FilteredOptionCount > 0)
+        if ((cb.IsOpen || openT > 0.001f) && !cb.IsNodeDisabled && (cb.FilteredOptionCount > 0 || cb.DropdownStatus is not null))
         {
             float absX = absoluteX;
             float absY = absoluteY;
@@ -8082,7 +8082,8 @@ internal sealed partial class NodePainter
     {
         var t = theme.Select;
         var node = (Node)cb;
-        int optionCount = cb.FilteredOptionCount;
+        string? status = cb.DropdownStatus;
+        int optionCount = status is null ? cb.FilteredOptionCount : 1;
         float itemHeight = t.ItemHeight;
 
         // Open animation progress
@@ -8214,18 +8215,46 @@ internal sealed partial class NodePainter
             var staggeredBounds = new Rect(itemBounds.X, itemBounds.Y + itemSlideY,
                 itemBounds.Width, itemBounds.Height);
 
-            // Option label
-            var textColor = (i == highlightedIndex ? theme.Colors.PrimaryText : t.TextColor).Opacity(itemOpacity);
-            PaintText(
-                cb.GetFilteredOptionLabel(i),
-                staggeredBounds,
-                t.ItemPaddingH,
-                textColor);
+            if (status is not null)
+            {
+                // "Loading…" / "No matches" in place of options.
+                PaintText(status, staggeredBounds, t.ItemPaddingH, theme.Colors.TextMuted.Opacity(itemOpacity));
+            }
+            else if (cb.RenderFilteredOption(i) is { } content)
+            {
+                PaintOptionContent(content, staggeredBounds, t.ItemPaddingH);
+            }
+            else
+            {
+                // Option label
+                var textColor = (i == highlightedIndex ? theme.Colors.PrimaryText : t.TextColor).Opacity(itemOpacity);
+                PaintText(
+                    cb.GetFilteredOptionLabel(i),
+                    staggeredBounds,
+                    t.ItemPaddingH,
+                    textColor);
+            }
 
             itemY += itemHeight;
         }
 
         PaintDropdownScrollbar(dropdownBounds, optionCount, visibleCount, scrollOffset, openT, t.TextColor);
+    }
+
+    private LayoutEngine? optionContentLayout;
+
+    /// <summary>
+    /// Draws an app's custom option content (<c>.RenderOption</c>) in a dropdown row: laid out to the
+    /// row's width less its padding, centred vertically, clipped to the row.
+    /// </summary>
+    private void PaintOptionContent(Node content, Rect row, float paddingH)
+    {
+        optionContentLayout ??= new LayoutEngine();
+        float width = Math.Max(0f, row.Width - paddingH * 2f);
+        optionContentLayout.Layout(content, LayoutConstraints.Loose(new Size(width, row.Height)));
+        float height = content.LayoutData.Bounds.Height;
+        using var clip = ctx.PushClip(row);
+        PaintMenuContent(content, row.X + paddingH, row.Y + MathF.Max(0f, (row.Height - height) / 2f));
     }
 
     // ── Canvas ─────────────────────────────────────────────────────────

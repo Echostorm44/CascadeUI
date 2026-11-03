@@ -195,6 +195,10 @@ internal static class LayoutSolver
         {
             Validation.Update(node, validatable);
         }
+        if (node is IPumpedNode pumped)
+        {
+            pumped.Pump();
+        }
 
         var contentSize = MeasureContent(node, innerConstraints);
         if (Validation.Shown(node) is not null)

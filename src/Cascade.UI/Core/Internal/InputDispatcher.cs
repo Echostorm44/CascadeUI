@@ -8237,11 +8237,11 @@ internal sealed partial class InputDispatcher
 
             default:
             {
-                // Append typed character if it's a printable key
-                char? ch = KeyToChar(evt.Key, evt.Modifiers);
-                if (ch.HasValue)
+                // Append the typed character (the platform's, so any keyboard layout and accented or
+                // non-Latin letters work; a US-only key table used to stand in for it).
+                if (evt.Character is { } ch && ch >= ' ' && ch != (char)127 && !evt.Modifiers.HasFlag(ModifierKeys.Ctrl))
                 {
-                    openCombobox.SearchText += ch.Value;
+                    openCombobox.SearchText += ch;
                     openCombobox.HighlightedIndex = -1;
                     openCombobox.ScrollOffset = 0;
                     RequestRepaint?.Invoke();
@@ -8251,61 +8251,6 @@ internal sealed partial class InputDispatcher
             }
         }
     }
-
-    private static char? KeyToChar(Key key, ModifierKeys modifiers)
-    {
-        bool shift = modifiers.HasFlag(ModifierKeys.Shift);
-
-        // Letters A-Z
-        if (key >= Key.A && key <= Key.Z)
-        {
-            char c = (char)('a' + (key - Key.A));
-            return shift ? char.ToUpperInvariant(c) : c;
-        }
-
-        // Digits 0-9 — shifted digits produce symbols on US QWERTY
-        if (key >= Key.D0 && key <= Key.D9)
-        {
-            if (shift)
-            {
-                return key switch
-                {
-                    Key.D0 => ')',
-                    Key.D1 => '!',
-                    Key.D2 => '@',
-                    Key.D3 => '#',
-                    Key.D4 => '$',
-                    Key.D5 => '%',
-                    Key.D6 => '^',
-                    Key.D7 => '&',
-                    Key.D8 => '*',
-                    Key.D9 => '(',
-                    _ => null,
-                };
-            }
-
-            return (char)('0' + (key - Key.D0));
-        }
-
-        // Common punctuation — shifted variants
-        return key switch
-        {
-            Key.Space => ' ',
-            Key.Period => shift ? '>' : '.',
-            Key.Comma => shift ? '<' : ',',
-            Key.Minus => shift ? '_' : '-',
-            Key.Semicolon => shift ? ':' : ';',
-            Key.Slash => shift ? '?' : '/',
-            Key.Backtick => shift ? '~' : '`',
-            Key.LeftBracket => shift ? '{' : '[',
-            Key.RightBracket => shift ? '}' : ']',
-            Key.Backslash => shift ? '|' : '\\',
-            Key.Quote => shift ? '\"' : '\'',
-            Key.Equals => shift ? '+' : '=',
-            _ => null,
-        };
-    }
-
 
     private static void InvokePointerEnter(Node node)
     {

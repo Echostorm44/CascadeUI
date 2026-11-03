@@ -44,6 +44,12 @@ internal interface IComboboxNode
     /// <summary>Toggles the dropdown open/closed state.</summary>
     void ToggleOpen();
 
+    /// <summary>A line shown in the open list instead of options ("Loading…", "No matches"), or null.</summary>
+    string? DropdownStatus => null;
+
+    /// <summary>The custom content for a filtered option (<c>.RenderOption</c>), or null to draw its label.</summary>
+    Node? RenderFilteredOption(int index) => null;
+
     /// <summary>Closes the dropdown without selecting.</summary>
     void Close();
 }
@@ -54,7 +60,7 @@ internal interface IComboboxNode
 /// value is not restricted to the options list.
 /// </summary>
 /// <typeparam name="T">The type of the bound value.</typeparam>
-public sealed class Combobox<T> : Node, IComboboxNode, IValidatable where T : notnull
+public sealed class Combobox<T> : Node, IComboboxNode, IValidatable, IPumpedNode where T : notnull
 {
     /// <summary>
     /// Creates a combobox with a static list of options.
@@ -192,8 +198,9 @@ public sealed class Combobox<T> : Node, IComboboxNode, IValidatable where T : no
         IsOpen = !IsOpen;
         if (IsOpen)
         {
-            // Pre-populate search with current display text
+            // Pre-populate search with current display text; the list stays whole until it is edited.
             SearchTextValue = ((IComboboxNode)this).DisplayText ?? "";
+            searchAtOpen = SearchTextValue;
             HighlightedIndex = -1;
             ScrollOffsetValue = 0;
         }
@@ -222,24 +229,80 @@ public sealed class Combobox<T> : Node, IComboboxNode, IValidatable where T : no
             }
 
             // Try to find a matching option label
-            var options = StaticOptions;
-            if (options is not null)
+            foreach (var opt in (IEnumerable<SelectOption<T>>?)StaticOptions ?? loader.Results)
             {
-                foreach (var opt in options)
+                if (EqualityComparer<T>.Default.Equals(opt.Value, val))
                 {
-                    if (EqualityComparer<T>.Default.Equals(opt.Value, val))
-                    {
-                        return opt.Label.Resolve();
-                    }
+                    return opt.Label.Resolve();
                 }
             }
 
-            return val.ToString();
+            return chosenLabel ?? val.ToString();
         }
+    }
+
+    // ── Async options (.Options(async source), .Debounce) ──
+
+    private OptionLoader<SelectOption<T>> loader = new();
+
+    // The label of the value chosen from async results, which may not be in the next query's results.
+    private string? chosenLabel;
+
+    private static readonly TimeSpan DefaultSearchDelay = TimeSpan.FromMilliseconds(250);
+
+    // The search text the list opened with (the current value's label): until it is edited, every
+    // option shows rather than only the current one.
+    private string? searchAtOpen;
+
+    void IPumpedNode.Pump()
+    {
+        if (AsyncOptionSource is { } source && IsOpen)
+        {
+            loader.Want(SearchTextValue, DebounceDelay ?? DefaultSearchDelay);
+            loader.Pump(source);
+        }
+    }
+
+    void IPumpedNode.AdoptFrom(Node previous)
+    {
+        if (previous is Combobox<T> old)
+        {
+            loader = old.loader;
+            chosenLabel = old.chosenLabel;
+            searchAtOpen = old.searchAtOpen;
+        }
+    }
+
+    string? IComboboxNode.DropdownStatus
+    {
+        get
+        {
+            if (AsyncOptionSource is null || !IsOpen || GetFilteredOptions().Count > 0)
+            {
+                return null;
+            }
+            if (loader.IsLoading || loader.ResultsQuery is null)
+            {
+                return "Loading…";
+            }
+            return loader.Error is { } error ? error : "No matches";
+        }
+    }
+
+    Node? IComboboxNode.RenderFilteredOption(int index)
+    {
+        var filtered = GetFilteredOptions();
+        return OptionRenderer is { } render && index >= 0 && index < filtered.Count ? render(filtered[index].Value) : null;
     }
 
     private IReadOnlyList<SelectOption<T>> GetFilteredOptions()
     {
+        // An async source has already searched: its results are the list.
+        if (AsyncOptionSource is not null)
+        {
+            return loader.Results;
+        }
+
         var options = StaticOptions;
         if (options is null || options.Count == 0)
         {
@@ -247,7 +310,7 @@ public sealed class Combobox<T> : Node, IComboboxNode, IValidatable where T : no
         }
 
         string search = SearchTextValue;
-        if (string.IsNullOrEmpty(search))
+        if (string.IsNullOrEmpty(search) || search == searchAtOpen)
         {
             return options;
         }
@@ -286,6 +349,7 @@ public sealed class Combobox<T> : Node, IComboboxNode, IValidatable where T : no
             return;
         }
 
+        chosenLabel = filtered[index].Label.Resolve();
         Value.OnChange(filtered[index].Value);
         IsOpen = false;
         SearchTextValue = "";
@@ -304,14 +368,15 @@ public sealed class Combobox<T> : Node, IComboboxNode, IValidatable where T : no
             return;
         }
 
-        // Try exact match first
-        var options = StaticOptions;
+        // Try exact match first (among the static options, or the async results on show)
+        IReadOnlyList<SelectOption<T>>? options = AsyncOptionSource is not null ? loader.Results : StaticOptions;
         if (options is not null)
         {
             foreach (var opt in options)
             {
                 if (string.Equals(opt.Label.Resolve(), text, StringComparison.OrdinalIgnoreCase))
                 {
+                    chosenLabel = opt.Label.Resolve();
                     Value.OnChange(opt.Value);
                     IsOpen = false;
                     SearchTextValue = "";

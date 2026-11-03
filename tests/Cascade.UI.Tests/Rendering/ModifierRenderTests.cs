@@ -753,6 +753,66 @@ public class ModifierRenderTests
         await Assert.That(After<float>(set => new Rating(new Bindable<float>(2f, set)), 2f, Key.End)).IsEqualTo(5f);
     }
 
+    [Test]
+    public async Task ComboboxAsyncOptions_SearchAfterTheDebounce_AndShowLoadingMeanwhile()
+    {
+        var queries = new List<string>();
+        Task<IEnumerable<SelectOption<string>>> Search(string query)
+        {
+            queries.Add(query);
+            return Task.FromResult<IEnumerable<SelectOption<string>>>(
+                Fruit.Where(f => f.Label.Resolve().Contains(query, StringComparison.OrdinalIgnoreCase)).ToList());
+        }
+
+        string chosen = "";
+        var combo = new Combobox<string>(new Bindable<string>("", v => chosen = v))
+            .Options(Search).Debounce(TimeSpan.FromMilliseconds(80));
+        IComboboxNode node = combo;
+        using var app = new RenderHarness(() => combo.Width(200));
+        app.Frame();
+        FocusManager.RequestFocus(combo);
+
+        // Typing opens it and searches; before the debounce passes, it says it is loading.
+        foreach (char c in "an")
+        {
+            app.Press(Key.A, character: c);
+            app.Frame();
+        }
+        await Assert.That(node.IsOpen).IsTrue();
+        await Assert.That(node.DropdownStatus).IsEqualTo("Loading…");
+        await Assert.That(queries.Count).IsEqualTo(0);
+
+        await Task.Delay(120);
+        app.Frame();
+        app.Frame();
+        // One search, for the settled text: "an" matches Banana.
+        await Assert.That(string.Join(",", queries)).IsEqualTo("an");
+        await Assert.That(node.DropdownStatus).IsNull();
+        await Assert.That(node.FilteredOptionCount).IsEqualTo(1);
+
+        node.SelectFilteredIndex(0);
+        await Assert.That(chosen).IsEqualTo("b");
+        await Assert.That(node.DisplayText).IsEqualTo("Banana");
+    }
+
+    [Test]
+    public async Task ComboboxRenderOption_DrawsTheAppsContentPerRow()
+    {
+        var rendered = new List<string>();
+        var combo = new Combobox<string>(new Bindable<string>("a", _ => { }), Fruit)
+            .RenderOption(v => { rendered.Add(v); return new Label(v.ToUpperInvariant()); });
+        IComboboxNode node = combo;
+        using var app = new RenderHarness(() => combo.Width(200));
+        app.Frame();
+        node.ToggleOpen();
+        for (int i = 0; i < 20; i++)
+        {
+            app.Frame();
+        }
+
+        await Assert.That(rendered.Distinct().Order().ToList()).IsEquivalentTo(["a", "b", "c"]);
+    }
+
     // Six buttons recording their index when clicked.
     private static ToolBarItem[] SixButtons(List<int> clicks) =>
         [.. Enumerable.Range(0, 6).Select(i => ToolBarItem.Button(Icons.Star, $"Item {i}", () => clicks.Add(i)))];

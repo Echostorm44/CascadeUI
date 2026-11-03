@@ -123,6 +123,33 @@ internal sealed partial class InputDispatcher
     private Rect TableBounds(ITabularDataNode table) =>
         table is Node node && TryGetAbsoluteBounds(node, out var live) ? live : table.AbsoluteBounds;
 
+    // Where controls are this event, found once each (Live).
+    private readonly Dictionary<Node, Rect> liveBounds = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
+    /// Where a control is now, from layout. Controls stamp AbsoluteBounds as they paint, which
+    /// lags a frame behind a layout change and goes stale inside a ScrollView whose content is a
+    /// cached layer (scrolling moves the layer without repainting it), so a press or hover worked
+    /// out from them could land on the wrong row, cell or button. <paramref name="painted"/> is
+    /// kept for what is not in the tree (an overlay's content), and for a control not laid out yet.
+    /// </summary>
+    private Rect Live(object control, Rect painted)
+    {
+        if (control is not Node node)
+        {
+            return painted;
+        }
+        if (!liveBounds.TryGetValue(node, out var live))
+        {
+            live = TryGetAbsoluteBounds(node, out var found) ? found : default;
+            liveBounds[node] = live;
+        }
+        return live.Width > 0f || live.Height > 0f ? live : painted;
+    }
+
+    /// <summary>Forgets where controls were: called as each input event starts (layout may have moved them).</summary>
+    private void ForgetLiveBounds() => liveBounds.Clear();
+
     internal bool TryGetAbsoluteBounds(Node node, out Rect bounds)
     {
         bounds = default;
@@ -396,7 +423,7 @@ internal sealed partial class InputDispatcher
             return;
         }
 
-        OpenMenu(splitButton.Items, MenuPlacement.Below(splitButton.AbsoluteBounds), highlightFirst, owner: splitButton);
+        OpenMenu(splitButton.Items, MenuPlacement.Below(Live(splitButton, splitButton.AbsoluteBounds)), highlightFirst, owner: splitButton);
     }
 
     /// <summary>Whether <paramref name="splitButton"/>'s dropdown menu is the open menu.</summary>

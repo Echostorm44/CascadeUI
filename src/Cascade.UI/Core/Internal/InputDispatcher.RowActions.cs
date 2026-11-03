@@ -42,9 +42,9 @@ internal sealed partial class InputDispatcher
     }
 
     /// <summary>Marks the action control under a left press as pressed (cleared on release).</summary>
-    private static void PressRowAction(ITabularDataNode tdn, float x, float y)
+    private void PressRowAction(ITabularDataNode tdn, float x, float y)
     {
-        var bounds = tdn.AbsoluteBounds;
+        var bounds = Live(tdn, tdn.AbsoluteBounds);
         if (tdn.RowActionStrip is not { } actions
             || !TabularRowGeometry.TryHitRowAction(tdn, x - bounds.X, y - bounds.Y, bounds.Height, out _, out var target))
         {
@@ -83,7 +83,7 @@ internal sealed partial class InputDispatcher
             return;
         }
 
-        var bounds = tdn.AbsoluteBounds;
+        var bounds = Live(tdn, tdn.AbsoluteBounds);
         Node? target = TabularRowGeometry.TryHitRowAction(tdn, x - bounds.X, y - bounds.Y, bounds.Height, out _, out var hit)
             ? hit
             : null;
@@ -100,10 +100,10 @@ internal sealed partial class InputDispatcher
         if (tdn.IsHoverHighlightEnabled)
         {
             int row = HitTestTabularRow(tdn, x, y);
-            float relX = x - tdn.AbsoluteBounds.X;
+            float relX = x - Live(tdn, tdn.AbsoluteBounds).X;
             float dataRelX = tdn.HasRowDetail ? relX - ExpandIndicatorWidth : relX;
             tdn.HoveredRowIndex = row;
-            tdn.HoveredColIndex = row >= 0 ? HitTestTabularColumn(tdn, dataRelX, tdn.AbsoluteBounds.Width) : -1;
+            tdn.HoveredColIndex = row >= 0 ? HitTestTabularColumn(tdn, dataRelX, Live(tdn, tdn.AbsoluteBounds).Width) : -1;
         }
 
         if (tdn is Node node)

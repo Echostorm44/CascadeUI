@@ -59,9 +59,10 @@ public class TextInputIconAndCaretTests
         }).Lines[0].Width;
         float textStart = 100 + TextInputMetrics.ContentLeft(input, theme);
 
-        // Just right of "hello" → after the 'o'; on the icon or padding → start.
-        await Assert.That(InputDispatcher.CaretIndexAt(input, text, textStart + prefix + 1f)).IsEqualTo(5);
-        await Assert.That(InputDispatcher.CaretIndexAt(input, text, 101f)).IsEqualTo(0);
-        await Assert.That(InputDispatcher.CaretIndexAt(input, text, 499f)).IsEqualTo(text.Length);
+        // Just right of "hello" → after the 'o'; on the icon or padding → start. (Not in a tree: the painted bounds.)
+        var dispatcher = new InputDispatcher();
+        await Assert.That(dispatcher.CaretIndexAt(input, text, textStart + prefix + 1f)).IsEqualTo(5);
+        await Assert.That(dispatcher.CaretIndexAt(input, text, 101f)).IsEqualTo(0);
+        await Assert.That(dispatcher.CaretIndexAt(input, text, 499f)).IsEqualTo(text.Length);
     }
 }

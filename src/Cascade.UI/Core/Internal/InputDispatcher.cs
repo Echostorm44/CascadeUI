@@ -633,6 +633,7 @@ internal sealed partial class InputDispatcher
     /// </summary>
     internal void HandleMouseEvent(NativeMouseEvent evt)
     {
+        ForgetLiveBounds();
         if (rootNode == null)
         {
             return;
@@ -732,7 +733,7 @@ internal sealed partial class InputDispatcher
         if (evt.Type == NativeMouseEventType.MouseDown && evt.Button == NativeMouseButton.Left
             && HitTester.HitTest(rootNode, evt.X, evt.Y) is TextArea { IsResizable: true, IsDisabled: false } gripArea)
         {
-            var area = gripArea.AbsoluteBounds;
+            var area = Live(gripArea, gripArea.AbsoluteBounds);
             if (evt.X >= area.Right - TextArea.GripSize && evt.Y >= area.Bottom - TextArea.GripSize)
             {
                 textAreaResizeTarget = gripArea;
@@ -902,7 +903,7 @@ internal sealed partial class InputDispatcher
                     var dragData = dragDropCurrentTarget.LayoutData.DragData;
                     if (dragData?.OnDrop != null)
                     {
-                        var targetBounds = dragData.AbsoluteBounds;
+                        var targetBounds = Live(dragDropCurrentTarget, dragData.AbsoluteBounds);
                         var dropPos = new DropPosition
                         {
                             Point = new Point(evt.X - targetBounds.X, evt.Y - targetBounds.Y),
@@ -1239,7 +1240,7 @@ internal sealed partial class InputDispatcher
             }
 
             // -2 = hovering bell icon itself
-            if (openNotificationBell.AbsoluteBounds.Contains(new Point(evt.X, evt.Y)))
+            if (Live(openNotificationBell, openNotificationBell.AbsoluteBounds).Contains(new Point(evt.X, evt.Y)))
             {
                 newIdx = -2;
             }
@@ -1252,7 +1253,7 @@ internal sealed partial class InputDispatcher
         }
         else if (hitNode is NotificationBell { IsDisabled: false } nbHover)
         {
-            int newIdx = nbHover.AbsoluteBounds.Contains(new Point(evt.X, evt.Y)) ? -2 : -1;
+            int newIdx = Live(nbHover, nbHover.AbsoluteBounds).Contains(new Point(evt.X, evt.Y)) ? -2 : -1;
             if (newIdx != nbHover.HoveredIndex)
             {
                 nbHover.HoveredIndex = newIdx;
@@ -1292,7 +1293,7 @@ internal sealed partial class InputDispatcher
         if (hitNode is ITabularDataNode tdnHover && tdnHover.IsHoverHighlightEnabled)
         {
             int newRow = HitTestTabularRow(tdnHover, evt.X, evt.Y);
-            var tdnBounds = tdnHover.AbsoluteBounds;
+            var tdnBounds = Live(tdnHover, tdnHover.AbsoluteBounds);
             float relX = evt.X - tdnBounds.X;
             // Data rows are shifted right by the expand indicator when row detail is enabled
             float dataRelX = tdnHover.HasRowDetail ? relX - ExpandIndicatorWidth : relX;
@@ -1313,7 +1314,7 @@ internal sealed partial class InputDispatcher
         // Update hovered column header on DataGrid/DataTable
         if (hitNode is ITabularDataNode tdnHeaderHover)
         {
-            var tdnBounds = tdnHeaderHover.AbsoluteBounds;
+            var tdnBounds = Live(tdnHeaderHover, tdnHeaderHover.AbsoluteBounds);
             float relY = evt.Y - tdnBounds.Y;
             float headerH = tdnHeaderHover.GetRowHeight() + 4f;
             if (relY >= 0 && relY < headerH)
@@ -1367,7 +1368,7 @@ internal sealed partial class InputDispatcher
                 {
                     // First time exceeding threshold — initialize reorder visual state
                     reorderDragActive = true;
-                    var tdnBoundsInit = columnReorderTdn.AbsoluteBounds;
+                    var tdnBoundsInit = Live(columnReorderTdn, columnReorderTdn.AbsoluteBounds);
                     float headerH = columnReorderTdn.GetRowHeight() + 4f;
                     float colW = GetScaledColumnWidths(columnReorderTdn, tdnBoundsInit.Width)[reorderPendingCol];
                     columnReorderTdn.ReorderDragIndex = reorderPendingCol;
@@ -1380,7 +1381,7 @@ internal sealed partial class InputDispatcher
 
                 columnReorderTdn.ReorderDragX = evt.X;
                 // Determine drop target based on mouse position
-                var tdnBounds = columnReorderTdn.AbsoluteBounds;
+                var tdnBounds = Live(columnReorderTdn, columnReorderTdn.AbsoluteBounds);
                 float relX = evt.X - tdnBounds.X;
                 int dropIdx = HitTestTabularColumn(columnReorderTdn, relX, tdnBounds.Width);
                 if (dropIdx < 0)
@@ -1805,7 +1806,7 @@ internal sealed partial class InputDispatcher
         if (openNotificationBell != null && evt.Button == NativeMouseButton.Left)
         {
             var dropBounds = openNotificationBell.DropdownBounds;
-            var bellBounds = openNotificationBell.AbsoluteBounds;
+            var bellBounds = Live(openNotificationBell, openNotificationBell.AbsoluteBounds);
             var click = new Point(evt.X, evt.Y);
 
             if (dropBounds.Width > 0 && dropBounds.Contains(click))
@@ -2076,7 +2077,7 @@ internal sealed partial class InputDispatcher
         // DataGrid column resize — detect drag start on column border in header
         if (hitNode is ITabularDataNode tdnResize && evt.Button == NativeMouseButton.Left)
         {
-            var tdnBounds = tdnResize.AbsoluteBounds;
+            var tdnBounds = Live(tdnResize, tdnResize.AbsoluteBounds);
             float relY = evt.Y - tdnBounds.Y;
             float headerH = tdnResize.GetRowHeight() + 4f;
             if (relY >= 0 && relY < headerH)
@@ -2843,6 +2844,7 @@ internal sealed partial class InputDispatcher
     /// </summary>
     internal void HandleScrollEvent(NativeScrollEvent evt)
     {
+        ForgetLiveBounds();
         LastScroll = ScrollOutcome.Nothing;
         if (rootNode == null)
         {
@@ -3073,7 +3075,7 @@ internal sealed partial class InputDispatcher
         // An emoji picker scrolls its grid.
         if (HitTester.HitTest(rootNode, evt.X, evt.Y) is EmojiPicker { IsDisabled: false } emojiPicker)
         {
-            var pickerBounds = emojiPicker.AbsoluteBounds;
+            var pickerBounds = Live(emojiPicker, emojiPicker.AbsoluteBounds);
             float max = emojiPicker.MaxScroll(pickerBounds.Height);
             float next = Math.Clamp(emojiPicker.ScrollOffset - evt.DeltaY * 48f, 0f, max);
             if (Math.Abs(next - emojiPicker.ScrollOffset) > 0.001f)
@@ -3087,7 +3089,7 @@ internal sealed partial class InputDispatcher
         // A toolbar in OverflowMode.Scroll scrolls its items along its axis.
         if (HitTester.HitTest(rootNode, evt.X, evt.Y) is ToolBar { OverflowSetting: OverflowMode.Scroll } scrollBar)
         {
-            var barBounds = scrollBar.AbsoluteBounds;
+            var barBounds = Live(scrollBar, scrollBar.AbsoluteBounds);
             float view = scrollBar.IsVertical ? barBounds.Height : barBounds.Width;
             float max = Math.Max(0f, scrollBar.NaturalLength - view);
             if (max > 0f)
@@ -3108,7 +3110,7 @@ internal sealed partial class InputDispatcher
         var hitForGrid = HitTester.HitTest(rootNode, evt.X, evt.Y);
         if (hitForGrid is ITabularDataNode tdnScroll && tdnScroll.MaxScrollOffsetY > 0)
         {
-            var gdBounds = tdnScroll.AbsoluteBounds;
+            var gdBounds = Live(tdnScroll, tdnScroll.AbsoluteBounds);
             if (gdBounds.Width > 0 && gdBounds.Contains(new Point(evt.X, evt.Y)))
             {
                 const float pixelsPerNotch = 48f;
@@ -3196,6 +3198,7 @@ internal sealed partial class InputDispatcher
 
     internal void HandleKeyEvent(NativeKeyEvent evt)
     {
+        ForgetLiveBounds();
         bool isCharacter = evt.Character is not null && evt.Key == Key.None;
         if (!isCharacter)
         {
@@ -4475,15 +4478,15 @@ internal sealed partial class InputDispatcher
     /// The caret index for a click at window x on a password field: measured against the text as the
     /// painter draws it (masked or revealed, same font, padding and scroll).
     /// </summary>
-    internal static int PasswordCaretIndexAt(PasswordInput pwd, string buffer, float x)
+    internal int PasswordCaretIndexAt(PasswordInput pwd, string buffer, float x)
     {
-        if (buffer.Length == 0 || pwd.AbsoluteBounds.Width <= 0)
+        if (buffer.Length == 0 || Live(pwd, pwd.AbsoluteBounds).Width <= 0)
         {
             return 0;
         }
         var theme = ThemeSwitcher.Current;
         float scrollX = ReferenceEquals(FocusManager.FocusedElement, pwd) ? PasswordScrollOffsetX : 0f;
-        float relX = x - pwd.AbsoluteBounds.X - theme.TextInput.PaddingH + scrollX;
+        float relX = x - Live(pwd, pwd.AbsoluteBounds).X - theme.TextInput.PaddingH + scrollX;
         if (relX <= 0)
         {
             return 0;
@@ -4861,9 +4864,9 @@ internal sealed partial class InputDispatcher
     /// Computes caret position from mouse click coordinates on a TextArea.
     /// Uses the TextArea's AbsoluteBounds and the painter's line height.
     /// </summary>
-    private static void PositionTextAreaCaretFromMouse(TextArea ta, NativeMouseEvent evt)
+    private void PositionTextAreaCaretFromMouse(TextArea ta, NativeMouseEvent evt)
     {
-        var bounds = ta.AbsoluteBounds;
+        var bounds = Live(ta, ta.AbsoluteBounds);
         if (bounds.Width <= 0)
         {
             return;
@@ -4900,9 +4903,9 @@ internal sealed partial class InputDispatcher
     /// Places the caret where a click lands on a TextInput: the click is measured against the text
     /// laid out exactly as the painter draws it (same font, size, content origin and scroll).
     /// </summary>
-    private static void PositionTextInputCaretFromMouse(TextInput ti, NativeMouseEvent evt)
+    private void PositionTextInputCaretFromMouse(TextInput ti, NativeMouseEvent evt)
     {
-        if (ti.AbsoluteBounds.Width <= 0)
+        if (Live(ti, ti.AbsoluteBounds).Width <= 0)
         {
             return;
         }
@@ -4910,9 +4913,9 @@ internal sealed partial class InputDispatcher
     }
 
     /// <summary>The caret index for a click at window x <paramref name="x"/> on <paramref name="ti"/> showing <paramref name="buf"/>.</summary>
-    internal static int CaretIndexAt(TextInput ti, string buf, float x)
+    internal int CaretIndexAt(TextInput ti, string buf, float x)
     {
-        var bounds = ti.AbsoluteBounds;
+        var bounds = Live(ti, ti.AbsoluteBounds);
         if (buf.Length == 0)
         {
             return 0;
@@ -5433,7 +5436,7 @@ internal sealed partial class InputDispatcher
             case PasswordInput pwdTap when pwdTap.ShowToggleButton:
             {
                 // Only intercept if click is on the eye toggle icon area
-                var pwdBounds = pwdTap.AbsoluteBounds;
+                var pwdBounds = Live(pwdTap, pwdTap.AbsoluteBounds);
                 if (pwdBounds.Width > 0 && lastMousePosition.X >= pwdBounds.X + pwdBounds.Width - 36f)
                 {
                     PasswordRevealed = !PasswordRevealed;
@@ -5464,7 +5467,7 @@ internal sealed partial class InputDispatcher
                 // Use AbsoluteBounds (set by painter) for correct viewport-coordinate math.
                 // The arrow opens the shared menu anchored below the button; a click on the
                 // arrow while it is open is taken by the menu (outside its panel) and closes it.
-                var absBounds = sb.AbsoluteBounds;
+                var absBounds = Live(sb, sb.AbsoluteBounds);
                 float clickLocalX = lastMousePosition.X - absBounds.X;
                 if (clickLocalX >= sb.ArrowZoneX)
                 {
@@ -5639,7 +5642,7 @@ internal sealed partial class InputDispatcher
     private void HandleRatingClick(Rating rating, Bindable<float> bind)
     {
         // AbsoluteBounds is set by the painter in viewport coordinates
-        var bounds = rating.AbsoluteBounds;
+        var bounds = Live(rating, rating.AbsoluteBounds);
         float iconSize = rating.SizeValue ?? 24f;
         float gap = 4f;
         int max = rating.Max;
@@ -5726,11 +5729,11 @@ internal sealed partial class InputDispatcher
     {
         int newRow = -1;
         Node? treeNode = null;
-        if (hitNode is ITreeView tv && tv.AbsoluteBounds.Height > 0)
+        if (hitNode is ITreeView tv && Live(tv, tv.AbsoluteBounds).Height > 0)
         {
             treeNode = hitNode;
             const float rowHeight = 28f;
-            float relY = lastMousePosition.Y - tv.AbsoluteBounds.Y;
+            float relY = lastMousePosition.Y - Live(tv, tv.AbsoluteBounds).Y;
             if (relY >= 0)
             {
                 int idx = (int)(relY / rowHeight);
@@ -5759,7 +5762,7 @@ internal sealed partial class InputDispatcher
 
     private void HandleTreeViewClick(ITreeView tv)
     {
-        var bounds = tv.AbsoluteBounds;
+        var bounds = Live(tv, tv.AbsoluteBounds);
         if (bounds.Width <= 0 || bounds.Height <= 0)
         {
             return;
@@ -5783,7 +5786,7 @@ internal sealed partial class InputDispatcher
 
     private void HandleTabularDataClick(ITabularDataNode tdn)
     {
-        var bounds = tdn.AbsoluteBounds;
+        var bounds = Live(tdn, tdn.AbsoluteBounds);
         if (bounds.Width <= 0 || bounds.Height <= 0)
         {
             return;
@@ -6716,9 +6719,9 @@ internal sealed partial class InputDispatcher
     /// the border tolerance of a column's right edge, and that column allows resizing. Kept
     /// identical on purpose — the cursor must promise exactly what a press will do.
     /// </summary>
-    private static bool IsOverResizableColumnBorder(ITabularDataNode tdn, float x, float y)
+    private bool IsOverResizableColumnBorder(ITabularDataNode tdn, float x, float y)
     {
-        var bounds = tdn.AbsoluteBounds;
+        var bounds = Live(tdn, tdn.AbsoluteBounds);
         if (bounds.Width <= 0f)
         {
             return false;
@@ -6752,9 +6755,9 @@ internal sealed partial class InputDispatcher
         return -1;
     }
 
-    private static int HitTestTabularRow(ITabularDataNode tdn, float mouseX, float mouseY)
+    private int HitTestTabularRow(ITabularDataNode tdn, float mouseX, float mouseY)
     {
-        var bounds = tdn.AbsoluteBounds;
+        var bounds = Live(tdn, tdn.AbsoluteBounds);
         if (bounds.Width <= 0 || bounds.Height <= 0)
         {
             return -1;
@@ -6768,7 +6771,7 @@ internal sealed partial class InputDispatcher
 
     private void HandleSegmentedControlClick(ISegmentedControl sc)
     {
-        var bounds = sc.AbsoluteBounds;
+        var bounds = Live(sc, sc.AbsoluteBounds);
         int count = sc.SegmentCount;
         if (count == 0)
         {
@@ -6931,7 +6934,7 @@ internal sealed partial class InputDispatcher
         // A stepper/scroll interaction cancels any in-progress typing (its value wins).
         NumberEditBuffer = null;
 
-        var bounds = ni.AbsoluteBounds;
+        var bounds = Live(ni, ni.AbsoluteBounds);
         float relX = lastMousePosition.X - bounds.X;
         float relY = lastMousePosition.Y - bounds.Y;
         float buttonWidth = 28f;
@@ -6967,9 +6970,9 @@ internal sealed partial class InputDispatcher
     /// <summary>
     /// Returns which stepper button the mouse is over: 0 = decrement, 1 = increment, -1 = none.
     /// </summary>
-    private static int ComputeNumberInputHoveredButton(INumberInput ni, float mouseX, float mouseY)
+    private int ComputeNumberInputHoveredButton(INumberInput ni, float mouseX, float mouseY)
     {
-        var bounds = ni.AbsoluteBounds;
+        var bounds = Live(ni, ni.AbsoluteBounds);
         float relX = mouseX - bounds.X;
         float relY = mouseY - bounds.Y;
         float buttonWidth = 28f;
@@ -7002,7 +7005,7 @@ internal sealed partial class InputDispatcher
 
     private void HandleBreadcrumbClick(Breadcrumb bc)
     {
-        var absBounds = bc.AbsoluteBounds;
+        var absBounds = Live(bc, bc.AbsoluteBounds);
         if (absBounds.Width <= 0)
         {
             return;
@@ -7027,7 +7030,7 @@ internal sealed partial class InputDispatcher
 
     private void HandleToggleGroupClick(IToggleGroup tg)
     {
-        var bounds = tg.AbsoluteBounds;
+        var bounds = Live(tg, tg.AbsoluteBounds);
         int count = tg.OptionCount;
         if (count == 0)
         {
@@ -7402,7 +7405,7 @@ internal sealed partial class InputDispatcher
 
     private void HandleStepIndicatorClick(StepIndicator si)
     {
-        var bounds = si.AbsoluteBounds;
+        var bounds = Live(si, si.AbsoluteBounds);
         int stepCount = si.Steps.Count;
         if (stepCount == 0)
         {
@@ -8485,7 +8488,7 @@ internal sealed partial class InputDispatcher
 
     private void HandlePinInputClick(PinInput pin)
     {
-        var abs = pin.AbsoluteBounds;
+        var abs = Live(pin, pin.AbsoluteBounds);
         if (abs.Width <= 0)
         {
             return;
@@ -8631,9 +8634,9 @@ internal sealed partial class InputDispatcher
 
     // ── ToolBar helpers ──────────────────────────────────────────────
 
-    private static int ComputeToolBarItemIndex(ToolBar tb, float mouseX, float mouseY)
+    private int ComputeToolBarItemIndex(ToolBar tb, float mouseX, float mouseY)
     {
-        var bounds = tb.AbsoluteBounds;
+        var bounds = Live(tb, tb.AbsoluteBounds);
         return tb.ItemAt(mouseX - bounds.X, mouseY - bounds.Y, bounds.Width, bounds.Height);
     }
 
@@ -8643,7 +8646,7 @@ internal sealed partial class InputDispatcher
         if (idx == ToolBar.OverflowIndex)
         {
             // The "more" button: the items that didn't fit, as a menu below it (beside it when vertical).
-            var bounds = tb.AbsoluteBounds;
+            var bounds = Live(tb, tb.AbsoluteBounds);
             var arrangement = tb.Arrange(bounds.Width, bounds.Height);
             if (arrangement.OverflowButton is { } more)
             {
@@ -8690,7 +8693,7 @@ internal sealed partial class InputDispatcher
 
     private void HandlePropertyGridClick(PropertyGrid pg)
     {
-        var abs = pg.AbsoluteBounds;
+        var abs = Live(pg, pg.AbsoluteBounds);
         float relX = lastMousePosition.X - abs.X;
         float relY = lastMousePosition.Y - abs.Y;
         float groupHeaderH = pg.GroupHeaderHeight;
@@ -8768,9 +8771,9 @@ internal sealed partial class InputDispatcher
         CancelPropertyGridEdit();
     }
 
-    private static int ComputePropertyGridRow(PropertyGrid pg, float mouseX, float mouseY)
+    private int ComputePropertyGridRow(PropertyGrid pg, float mouseX, float mouseY)
     {
-        var abs = pg.AbsoluteBounds;
+        var abs = Live(pg, pg.AbsoluteBounds);
         float relY = mouseY - abs.Y;
         float groupHeaderH = pg.GroupHeaderHeight;
         float rowH = pg.RowHeight;
@@ -8903,7 +8906,7 @@ internal sealed partial class InputDispatcher
 
     private void HandleEmojiPickerClick(EmojiPicker ep)
     {
-        var abs = ep.AbsoluteBounds;
+        var abs = Live(ep, ep.AbsoluteBounds);
         int hit = ep.HitTest(lastMousePosition.X - abs.X, lastMousePosition.Y - abs.Y, abs.Width, abs.Height);
         if (hit == EmojiPicker.ToneButtonHover)
         {
@@ -8920,9 +8923,9 @@ internal sealed partial class InputDispatcher
         }
     }
 
-    private static int ComputeEmojiPickerHover(EmojiPicker ep, float mouseX, float mouseY)
+    private int ComputeEmojiPickerHover(EmojiPicker ep, float mouseX, float mouseY)
     {
-        var abs = ep.AbsoluteBounds;
+        var abs = Live(ep, ep.AbsoluteBounds);
         return ep.HitTest(mouseX - abs.X, mouseY - abs.Y, abs.Width, abs.Height);
     }
 

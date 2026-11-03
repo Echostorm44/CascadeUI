@@ -60,7 +60,7 @@ internal sealed partial class InputDispatcher
 
         // The bar stays the active one while its own menu replaces the open one.
         activeMenuBar = null;
-        var anchor = index < bar.MenuLabelBounds.Length ? bar.MenuLabelBounds[index] : bar.AbsoluteBounds;
+        var anchor = index < bar.MenuLabelBounds.Length ? bar.MenuLabelBounds[index] : Live(bar, bar.AbsoluteBounds);
         bool keepAccessKeys = bar.ShowAccessKeys;
         OpenMenu(bar.Menus[index].ToContextMenuItems(), MenuPlacement.Below(anchor), highlightFirst, owner: bar);
         if (highlightLast && menu is { IsOpen: true } open)

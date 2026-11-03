@@ -656,6 +656,90 @@ public class ModifierRenderTests
         await Assert.That(After("s", Key.Up)).IsEqualTo("s");
     }
 
+    // Six buttons recording their index when clicked.
+    private static ToolBarItem[] SixButtons(List<int> clicks) =>
+        [.. Enumerable.Range(0, 6).Select(i => ToolBarItem.Button(Icons.Star, $"Item {i}", () => clicks.Add(i)))];
+
+    private const float Slot = ToolBar.ButtonSize + ToolBar.ItemGap;
+
+    [Test]
+    public async Task VerticalToolBar_StacksItsButtons()
+    {
+        var clicks = new List<int>();
+        ToolBar? bar = null;
+        using var app = new RenderHarness(() => bar = new ToolBar(SixButtons(clicks)).Orientation(Orientation.Vertical));
+        app.Frame();
+
+        await Assert.That(bar!.LayoutData.Bounds.Width).IsEqualTo(ToolBar.ButtonSize);
+        await Assert.That(bar.LayoutData.Bounds.Height).IsEqualTo(6 * ToolBar.ButtonSize + 5 * ToolBar.ItemGap);
+        app.Click(16, Slot * 2 + 16);
+        await Assert.That(string.Join(",", clicks)).IsEqualTo("2");
+    }
+
+    [Test]
+    public async Task ToolBarOverflowMenu_KeepsWhatFits_AndListsTheRestBehindAMoreButton()
+    {
+        var clicks = new List<int>();
+        using var app = new RenderHarness(() => new ToolBar(SixButtons(clicks)).Width(120));
+        app.Frame();
+
+        // 120px: two buttons and the "more" button at the end.
+        app.Click(120 - 16, 16);
+        await Assert.That(app.Input.IsMenuOpen).IsTrue();
+        var items = app.Input.Menu!.Levels[0].Items;
+        await Assert.That(string.Join(",", items.Select(i => i.Label))).IsEqualTo("Item 2,Item 3,Item 4,Item 5");
+
+        // Choosing one runs that button.
+        items[1].OnClick!();
+        await Assert.That(string.Join(",", clicks)).IsEqualTo("3");
+    }
+
+    [Test]
+    public async Task ToolBarOverflowWrap_StartsASecondRow()
+    {
+        var clicks = new List<int>();
+        ToolBar? bar = null;
+        using var app = new RenderHarness(() => new Column(children: [bar = new ToolBar(SixButtons(clicks)).Overflow(OverflowMode.Wrap)]).Width(120));
+        app.Frame();
+
+        // Three to a 120px row.
+        await Assert.That(bar!.LayoutData.Bounds.Height).IsEqualTo(2 * ToolBar.ButtonSize + ToolBar.ItemGap);
+        app.Click(16, Slot + 16);
+        await Assert.That(string.Join(",", clicks)).IsEqualTo("3");
+    }
+
+    [Test]
+    public async Task ToolBarOverflowScroll_TheWheelScrollsTheButtons()
+    {
+        var clicks = new List<int>();
+        using var app = new RenderHarness(() => new ToolBar(SixButtons(clicks)).Overflow(OverflowMode.Scroll).Width(120));
+        app.Frame();
+
+        app.Click(16, 16);
+        // Scroll to the end: the last button is now at the right edge.
+        for (int i = 0; i < 5; i++)
+        {
+            app.Wheel(60, 16, -1f);
+        }
+        app.Click(120 - 16, 16);
+        await Assert.That(string.Join(",", clicks)).IsEqualTo("0,5");
+    }
+
+    [Test]
+    public async Task ToolBarCustomItem_IsLaidOut_Drawn_AndClickable()
+    {
+        int pressed = 0;
+        using var app = new RenderHarness(() => new ToolBar(
+            ToolBarItem.Button(Icons.Star, "Star", () => { }),
+            ToolBarItem.Custom(new Button("Go", () => pressed++))));
+        var frame = app.Frame();
+
+        // The button sits after the first slot and takes a click.
+        await Assert.That(frame.Count(p => p.X > Slot && p.R + p.G + p.B > 300)).IsGreaterThan(20);
+        app.Click(Slot + 20, 16);
+        await Assert.That(pressed).IsEqualTo(1);
+    }
+
     // Ink below the 32px band where tick marks go.
     private static int TickInk(Func<Node> build)
     {
@@ -842,6 +926,17 @@ internal sealed class RenderHarness : IDisposable
     }
 
     public void Tick() => orchestrator.Tick();
+
+    /// <summary>The window's input dispatcher (its open menu, say).</summary>
+    public InputDispatcher Input => orchestrator.Input;
+
+    /// <summary>One wheel step at (x, y): positive <paramref name="deltaY"/> scrolls up.</summary>
+    public void Wheel(float x, float y, float deltaY, float deltaX = 0f)
+    {
+        orchestrator.Input.HandleMouseEvent(new NativeMouseEvent { X = x, Y = y, Type = NativeMouseEventType.MouseMove });
+        orchestrator.Input.HandleScrollEvent(new NativeScrollEvent { X = x, Y = y, DeltaX = deltaX, DeltaY = deltaY });
+        orchestrator.Tick();
+    }
 
     public void Click(float x, float y)
     {

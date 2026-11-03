@@ -165,8 +165,6 @@ public class ModifierCoverageTests
         "TimePicker.PopupDisplayStyle",
         "Toggle.ValidationTriggerMode",
         "ToggleGroup.ValidationTriggerMode",
-        "ToolBar.OrientationSetting",
-        "ToolBar.OverflowSetting",
         "VideoPlayer.AudioTracksEnabled",
         "VideoPlayer.AutoPlayEnabled",
         "VideoPlayer.ChapterList",

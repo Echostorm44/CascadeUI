@@ -344,6 +344,7 @@ internal static class HitTester
             Stack stack => stack.Children,
             Grid grid => grid.Children,
             Accordion acc => acc.Sections,
+            ToolBar tb => tb.ShownCustomNodes,
             _ => null
         };
     }

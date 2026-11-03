@@ -564,6 +564,12 @@ internal sealed partial class InputDispatcher
             openMenu.Owner = newNode;
         }
 
+        // A scrolling toolbar keeps its place across a re-render.
+        if (oldNode is ToolBar oldToolBar && newNode is ToolBar newToolBar)
+        {
+            newToolBar.ScrollOffset = oldToolBar.ScrollOffset;
+        }
+
         // A menu bar keeps its open menu, keyboard focus and underlines across a re-render.
         if (oldNode is MenuBar oldBar && newNode is MenuBar newBar)
         {
@@ -1054,7 +1060,7 @@ internal sealed partial class InputDispatcher
         // Update per-button hover index on ToolBar
         if (hitNode is ToolBar tbHover)
         {
-            int newIdx = ComputeToolBarItemIndex(tbHover, evt.X);
+            int newIdx = ComputeToolBarItemIndex(tbHover, evt.X, evt.Y);
             if (newIdx != tbHover.HoveredItemIndex)
             {
                 tbHover.HoveredItemIndex = newIdx;
@@ -2060,7 +2066,7 @@ internal sealed partial class InputDispatcher
             hitNode.IsPressed = true;
             if (hitNode is ToolBar tbPress)
             {
-                tbPress.PressedItemIndex = ComputeToolBarItemIndex(tbPress, evt.X);
+                tbPress.PressedItemIndex = ComputeToolBarItemIndex(tbPress, evt.X, evt.Y);
             }
             if (hitNode is INumberInput niPress && !niPress.IsDisabled)
             {
@@ -2851,6 +2857,26 @@ internal sealed partial class InputDispatcher
                 }
 
                 LastScroll = new ScrollOutcome(ScrollTargetKind.TextArea, FocusManager.FocusedElement, newOffset, TextAreaMaxScrollY, moved);
+                return;
+            }
+        }
+
+        // A toolbar in OverflowMode.Scroll scrolls its items along its axis.
+        if (HitTester.HitTest(rootNode, evt.X, evt.Y) is ToolBar { OverflowSetting: OverflowMode.Scroll } scrollBar)
+        {
+            var barBounds = scrollBar.AbsoluteBounds;
+            float view = scrollBar.IsVertical ? barBounds.Height : barBounds.Width;
+            float max = Math.Max(0f, scrollBar.NaturalLength - view);
+            if (max > 0f)
+            {
+                // Either wheel axis moves it, so an ordinary wheel scrolls a horizontal toolbar too.
+                float wheel = Math.Abs(evt.DeltaX) > Math.Abs(evt.DeltaY) ? evt.DeltaX : -evt.DeltaY;
+                float next = Math.Clamp(scrollBar.ScrollOffset + wheel * 48f, 0f, max);
+                if (Math.Abs(next - scrollBar.ScrollOffset) > 0.001f)
+                {
+                    scrollBar.ScrollOffset = next;
+                    RequestRepaint?.Invoke();
+                }
                 return;
             }
         }
@@ -7265,44 +7291,29 @@ internal sealed partial class InputDispatcher
 
     // ── ToolBar helpers ──────────────────────────────────────────────
 
-    private static int ComputeToolBarItemIndex(ToolBar tb, float mouseX)
+    private static int ComputeToolBarItemIndex(ToolBar tb, float mouseX, float mouseY)
     {
         var bounds = tb.AbsoluteBounds;
-        float relX = mouseX - bounds.X;
-
-        const float buttonSize = 32f;
-        const float gap = 4f;
-        const float separatorWidth = 12f;
-
-        float x = 0f;
-        for (int i = 0; i < tb.Items.Count; i++)
-        {
-            var item = tb.Items[i];
-            if (i > 0)
-            {
-                x += gap;
-            }
-
-            if (item.IsSeparator)
-            {
-                x += separatorWidth;
-                continue;
-            }
-
-            if (relX >= x && relX < x + buttonSize)
-            {
-                return i;
-            }
-
-            x += buttonSize;
-        }
-
-        return -1;
+        return tb.ItemAt(mouseX - bounds.X, mouseY - bounds.Y, bounds.Width, bounds.Height);
     }
 
     private void HandleToolBarClick(ToolBar tb)
     {
-        int idx = ComputeToolBarItemIndex(tb, lastMousePosition.X);
+        int idx = ComputeToolBarItemIndex(tb, lastMousePosition.X, lastMousePosition.Y);
+        if (idx == ToolBar.OverflowIndex)
+        {
+            // The "more" button: the items that didn't fit, as a menu below it (beside it when vertical).
+            var bounds = tb.AbsoluteBounds;
+            var arrangement = tb.Arrange(bounds.Width, bounds.Height);
+            if (arrangement.OverflowButton is { } more)
+            {
+                var anchor = new Rect(bounds.X + more.X, bounds.Y + more.Y, more.Width, more.Height);
+                OpenMenu(tb.OverflowMenu(arrangement.Overflowed),
+                    tb.IsVertical ? MenuPlacement.AtPoint(new Point(anchor.Right, anchor.Y)) : MenuPlacement.Below(anchor),
+                    highlightFirst: LastInputWasKeyboard, owner: tb);
+            }
+            return;
+        }
         if (idx < 0 || idx >= tb.Items.Count)
         {
             return;

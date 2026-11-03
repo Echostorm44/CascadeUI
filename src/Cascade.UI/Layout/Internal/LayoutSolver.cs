@@ -2287,31 +2287,46 @@ internal static class LayoutSolver
 
     private static Size MeasureToolBar(ToolBar tb, LayoutConstraints constraints)
     {
-        const float buttonSize = 32f;
-        const float gap = 4f;
-        const float separatorWidth = 12f;
-
-        float totalWidth = 0f;
-        for (int i = 0; i < tb.Items.Count; i++)
+        // Custom items are children: lay them out first, their sizes size their slots.
+        foreach (var content in tb.CustomNodes)
         {
-            if (i > 0)
-            {
-                totalWidth += gap;
-            }
-
-            if (tb.Items[i].IsSeparator)
-            {
-                totalWidth += separatorWidth;
-            }
-            else
-            {
-                totalWidth += buttonSize;
-            }
+            MeasureChild(content, new LayoutConstraints(0f, float.PositiveInfinity, 0f, float.PositiveInfinity));
         }
 
-        return new Size(
-            constraints.ConstrainWidth(totalWidth),
-            constraints.ConstrainHeight(buttonSize));
+        bool vertical = tb.IsVertical;
+        float length = tb.NaturalLength;
+        float thickness = tb.Thickness;
+        float available = vertical ? constraints.MaxHeight : constraints.MaxWidth;
+        if (tb.OverflowSetting == OverflowMode.Wrap && length > available)
+        {
+            int lines = tb.LineCount(available);
+            length = available;
+            thickness = lines * thickness + (lines - 1) * ToolBar.ItemGap;
+        }
+
+        var size = vertical
+            ? new Size(constraints.ConstrainWidth(thickness), constraints.ConstrainHeight(length))
+            : new Size(constraints.ConstrainWidth(length), constraints.ConstrainHeight(thickness));
+
+        // Place the custom content where its item lands; hidden (overflowed) content is not hit-tested.
+        var arrangement = tb.Arrange(size.Width, size.Height);
+        var shownNodes = new List<Node>();
+        for (int i = 0; i < tb.Items.Count; i++)
+        {
+            var content = tb.Items[i].CustomContent;
+            if (tb.Items[i].IsSeparator || content.IsLayoutEmpty)
+            {
+                continue;
+            }
+            var slot = arrangement.Items[i];
+            PositionChild(content, slot.X, slot.Y);
+            if (arrangement.Shown[i])
+            {
+                shownNodes.Add(content);
+            }
+        }
+        tb.ShownCustomNodes = shownNodes;
+        return size;
     }
 
     private static Size MeasureMenuBar(MenuBar mb, LayoutConstraints constraints)

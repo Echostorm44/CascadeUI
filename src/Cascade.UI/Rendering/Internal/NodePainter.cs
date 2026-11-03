@@ -13304,9 +13304,7 @@ internal sealed partial class NodePainter
 
     private void PaintToolBar(ToolBar tb, Rect bounds)
     {
-        const float buttonSize = 32f;
-        const float gap = 4f;
-        const float separatorWidth = 12f;
+        const float buttonSize = ToolBar.ButtonSize;
 
         tb.AbsoluteBounds = new Rect(absoluteX, absoluteY, bounds.Width, bounds.Height);
 
@@ -13315,43 +13313,24 @@ internal sealed partial class NodePainter
         var pressBg = theme.Colors.Text.Opacity(0.14f);
         var borderColor = theme.Colors.Border;
         float radius = 6f;
+        bool vertical = tb.IsVertical;
 
         // Background with subtle rounded container
         ctx.DrawRect(bounds, bg, radius: radius);
         ctx.DrawRect(bounds, stroke: new Stroke(borderColor.Opacity(0.3f), 1f), radius: radius);
 
-        // Center items vertically when bounds are taller than intrinsic height
-        float x = bounds.X;
-        float y = bounds.Y + (bounds.Height - buttonSize) / 2f;
+        // Laid out by the toolbar's own arrangement (shared with layout and input), in its coordinates.
+        var arrangement = tb.Arrange(bounds.Width, bounds.Height);
+        Rect At(Rect local) => new(bounds.X + local.X, bounds.Y + local.Y, local.Width, local.Height);
 
-        for (int i = 0; i < tb.Items.Count; i++)
+        // A scrolling toolbar clips what has scrolled out of it.
+        using var scrollClip = tb.OverflowSetting == OverflowMode.Scroll
+            ? ctx.PushRoundedClip(bounds, radius)
+            : default;
+
+        void PaintButtonChrome(Rect btnRect, int index)
         {
-            var item = tb.Items[i];
-
-            if (i > 0)
-            {
-                x += gap;
-            }
-
-            if (item.IsSeparator)
-            {
-                // Subtle separator with rounded ends
-                float sepX = MathF.Round(x + separatorWidth / 2f);
-                float sepTop = y + buttonSize * 0.25f;
-                float sepBot = y + buttonSize * 0.75f;
-                ctx.DrawLine(
-                    new Point(sepX, sepTop),
-                    new Point(sepX, sepBot),
-                    new Stroke(borderColor.Opacity(0.5f), 1f, StrokeCap.Round, StrokeJoin.Round));
-                x += separatorWidth;
-                continue;
-            }
-
-            var btnRect = new Rect(x, y, buttonSize, buttonSize);
-            var iconColor = item.Enabled ? theme.Colors.Text : theme.Colors.TextMuted;
-
-            // Per-button hover/press highlighting
-            if (tb.PressedItemIndex == i && tb.IsPressed)
+            if (tb.PressedItemIndex == index && tb.IsPressed)
             {
                 ctx.DrawRect(btnRect, pressBg, radius: radius - 1f);
                 // Inner shadow for pressed/depressed feel
@@ -13360,32 +13339,87 @@ internal sealed partial class NodePainter
                     new Point(btnRect.X + btnRect.Width - 2f, btnRect.Y + 1f),
                     new Stroke(new ColorValue("#000000").Opacity(0.10f), 1f));
             }
-            else if (tb.HoveredItemIndex == i && tb.IsHovered)
+            else if (tb.HoveredItemIndex == index && tb.IsHovered)
             {
                 ctx.DrawRect(btnRect, hoverBg, radius: radius - 1f);
             }
+        }
+
+        void PaintGlyph(Icon icon, Rect btnRect, ColorValue color)
+        {
+            if (icon.Paths.Length == 0)
+            {
+                return;
+            }
+            float drawSize = buttonSize * 0.58f;
+            float viewW = icon.ViewBox.Width > 0 ? icon.ViewBox.Width : 24f;
+            // Lucide draws a 2-unit stroke in a 24-unit view box.
+            PaintIconBitmap(icon, btnRect.X + btnRect.Width / 2f, btnRect.Y + btnRect.Height / 2f,
+                drawSize, 1f, color, 2f * drawSize / viewW);
+        }
+
+        for (int i = 0; i < tb.Items.Count; i++)
+        {
+            if (!arrangement.Shown[i])
+            {
+                continue;
+            }
+
+            var item = tb.Items[i];
+            var slot = At(arrangement.Items[i]);
+
+            if (item.IsSeparator)
+            {
+                // A short rule across the toolbar, centred in its slot.
+                var stroke = new Stroke(borderColor.Opacity(0.5f), 1f, StrokeCap.Round, StrokeJoin.Round);
+                if (vertical)
+                {
+                    float sepY = MathF.Round(slot.Y + slot.Height / 2f);
+                    ctx.DrawLine(new Point(slot.X + slot.Width * 0.25f, sepY), new Point(slot.X + slot.Width * 0.75f, sepY), stroke);
+                }
+                else
+                {
+                    float sepX = MathF.Round(slot.X + slot.Width / 2f);
+                    ctx.DrawLine(new Point(sepX, slot.Y + slot.Height * 0.25f), new Point(sepX, slot.Y + slot.Height * 0.75f), stroke);
+                }
+                continue;
+            }
+
+            if (!item.CustomContent.IsLayoutEmpty)
+            {
+                // Custom content is a laid-out child.
+                PaintRecursive(item.CustomContent);
+                continue;
+            }
+
+            var iconColor = item.Enabled ? theme.Colors.Text : theme.Colors.TextMuted;
+            PaintButtonChrome(slot, i);
 
             // Toggle state — filled background for active toggles
             if (item.ToggleValue.Value)
             {
-                ctx.DrawRect(btnRect, theme.Colors.Primary.Opacity(0.15f), radius: radius - 1f);
+                ctx.DrawRect(slot, theme.Colors.Primary.Opacity(0.15f), radius: radius - 1f);
                 iconColor = theme.Colors.Primary;
             }
 
-            // Draw icon as a cached, anti-aliased bitmap (rasterized once per size/color).
-            var icon = item.Icon;
-            if (icon.Paths.Length > 0)
-            {
-                float drawSize = buttonSize * 0.58f;
-                float viewW = icon.ViewBox.Width > 0 ? icon.ViewBox.Width : 24f;
-                // Lucide draws a 2-unit stroke in a 24-unit view box.
-                float strokeLogical = 2f * drawSize / viewW;
-                PaintIconBitmap(icon,
-                    btnRect.X + buttonSize / 2f, btnRect.Y + buttonSize / 2f,
-                    drawSize, 1f, iconColor, strokeLogical);
-            }
+            PaintGlyph(item.Icon, slot, iconColor);
 
-            x += buttonSize;
+            // The tooltip of the hovered button.
+            if (tb.HoveredItemIndex == i && tb.IsHovered && !string.IsNullOrEmpty(item.Tooltip))
+            {
+                string tip = item.Tooltip;
+                var anchor = new Rect(absoluteX + slot.X - bounds.X, absoluteY + slot.Y - bounds.Y, slot.Width, slot.Height);
+                deferredOverlays ??= [];
+                deferredOverlays.Add(() => PaintTooltipOverlay(tip, anchor));
+            }
+        }
+
+        // The "more" button for the items that didn't fit (OverflowMode.Menu).
+        if (arrangement.OverflowButton is { } moreLocal)
+        {
+            var more = At(moreLocal);
+            PaintButtonChrome(more, ToolBar.OverflowIndex);
+            PaintGlyph(vertical ? Icons.ChevronsDown : Icons.ChevronsRight, more, theme.Colors.Text);
         }
     }
 

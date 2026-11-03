@@ -1297,6 +1297,12 @@ internal static class LayoutSolver
 
         float desiredWidth = cellWidth * cols + padding * 2;
         float desiredHeight = padding + navHeight + dayHeaderHeight + cellHeight * rows + padding;
+        cal.EnsureInitialized();
+        if (cal.ActiveView != CalendarView.Month)
+        {
+            // The hours (or the agenda) scroll inside: as tall as the month would be.
+            desiredHeight = float.IsFinite(constraints.MaxHeight) && constraints.MaxHeight > 0 ? constraints.MaxHeight : desiredHeight;
+        }
         return new Size(
             constraints.ConstrainWidth(desiredWidth),
             constraints.ConstrainHeight(desiredHeight));

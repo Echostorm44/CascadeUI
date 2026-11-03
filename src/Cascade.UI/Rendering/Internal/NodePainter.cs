@@ -4749,223 +4749,247 @@ internal sealed partial class NodePainter
     private void PaintCalendar(Calendar cal, Rect bounds)
     {
         cal.EnsureInitialized();
-        // Store viewport-space absolute position so InputDispatcher can convert
-        // viewport click coords to node-local coords for hit zone checking.
-        cal.AbsoluteBounds = new Rect(absoluteX, absoluteY, bounds.Width, bounds.Height);
+        var l = CalendarLayout.Arrange(cal, bounds.Width, bounds.Height);
         var colors = theme.Colors;
-        var t = theme.Select;
+        var culture = System.Globalization.CultureInfo.CurrentCulture;
+        using var shift = ctx.PushTranslate(bounds.X, bounds.Y);
+        var full = new Rect(0, 0, bounds.Width, bounds.Height);
 
-        const float padding = 16f;
-        const float navHeight = 40f;
-        const float dayHeaderHeight = 28f;
-        const int cols = 7;
-        const int rows = 6;
+        ctx.DrawRect(full, colors.SurfaceAlt, radius: 12f);
+        ctx.DrawRect(full, stroke: new Stroke(colors.Border, 1f), radius: 12f);
+        using var clip = ctx.PushClip(full);
 
-        float cellWidth = (bounds.Width - padding * 2) / cols;
-        float cellHeight = (bounds.Height - padding * 2 - navHeight - dayHeaderHeight) / rows;
-        cal.CellWidth = cellWidth;
-        cal.CellHeight = cellHeight;
-
-        // Background card
-        ctx.DrawRect(bounds, colors.SurfaceAlt, radius: 12f);
-        ctx.DrawRect(bounds, stroke: new Stroke(colors.Border, 1f), radius: 12f);
-
-        using var clip = ctx.PushClip(bounds);
-
-        float contentX = bounds.X + padding;
-        float contentY = bounds.Y + padding;
-        float contentW = bounds.Width - padding * 2;
-
-        // ── Navigation header ──
+        // Navigation: previous, next, the period, Today, and the view switch.
         if (cal.ShowNavigation)
         {
-            PaintCalendarNav(cal, colors, contentX, contentY, contentW, navHeight);
-        }
-
-        float bodyY = contentY + navHeight;
-
-        // ── Day-of-week headers ──
-        string[] dayAbbrs = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
-        for (int col = 0; col < cols; col++)
-        {
-            var cellBounds = new Rect(contentX + col * cellWidth, bodyY, cellWidth, dayHeaderHeight);
-            PaintCenteredText(dayAbbrs[col], cellBounds, 11f, colors.TextMuted);
-        }
-
-        // ── Day grid ──
-        float gridTop = bodyY + dayHeaderHeight;
-        cal.GridTop = gridTop;
-        cal.GridLeft = contentX;
-
-        var firstOfMonth = new DateOnly(cal.DisplayedYear, cal.DisplayedMonth, 1);
-        int startDayOfWeek = (int)firstOfMonth.DayOfWeek;
-        var gridStartDate = firstOfMonth.AddDays(-startDayOfWeek);
-        cal.GridStartDate = gridStartDate;
-
-        var today = DateOnly.FromDateTime(DateTime.Today);
-
-        // Build a map of events per date for this visible grid
-        var eventsByDate = new Dictionary<DateOnly, List<CalendarEvent>>();
-        var gridEnd = gridStartDate.AddDays(rows * cols);
-        for (int i = 0; i < cal.Events.Count; i++)
-        {
-            var evt = cal.Events[i];
-            var evtDate = DateOnly.FromDateTime(evt.Start.DateTime);
-            if (evtDate >= gridStartDate && evtDate < gridEnd)
+            PaintCalendarArrow(l.Prev, colors.TextMuted, isLeft: true);
+            PaintCalendarArrow(l.Next, colors.TextMuted, isLeft: false);
+            var titleSize = ctx.MeasureText(l.TitleText, 16f);
+            ctx.DrawText(l.TitleText, MathF.Round(l.Title.X), MathF.Round(l.Title.Y + (l.Title.Height - titleSize.Height) / 2f), 16f, colors.Text);
+            ctx.DrawRect(l.Today, stroke: new Stroke(colors.Border, 1f), radius: 6f);
+            PaintCenteredText("Today", l.Today, 12f, colors.Text);
+            for (int i = 0; i < l.ViewTabs.Count; i++)
             {
-                if (!eventsByDate.TryGetValue(evtDate, out var list))
-                {
-                    list = [];
-                    eventsByDate[evtDate] = list;
-                }
-
-                list.Add(evt);
+                var (view, tab) = l.ViewTabs[i];
+                bool on = view == cal.ActiveView;
+                ctx.DrawRect(tab, on ? colors.Primary : colors.Surface, radius: 6f);
+                PaintCenteredText(view.ToString(), tab, 12f, on ? colors.TextOnPrimary : colors.Text);
             }
         }
 
-        cal.EventHitZones.Clear();
-
-        // Max events per cell based on available height
-        float dayNumberHeight = 18f;
-        float eventChipHeight = 16f;
-        float eventGap = 2f;
-        int maxEvents = Math.Max(1, (int)((cellHeight - dayNumberHeight - 4f) / (eventChipHeight + eventGap)));
-        cal.MaxEventsPerCell = maxEvents;
-
-        for (int row = 0; row < rows; row++)
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        switch (l.View)
         {
-            for (int col = 0; col < cols; col++)
+            case CalendarView.Week:
+            case CalendarView.Day:
+                PaintCalendarTimeGrid(cal, l, colors, culture, today);
+                break;
+            case CalendarView.Agenda:
+                PaintCalendarAgenda(cal, l, colors, culture, today);
+                break;
+            default:
+                PaintCalendarMonth(cal, l, colors, culture, today);
+                break;
+        }
+
+        // What a drag will do: the days or times it covers, or where the event lands.
+        if (cal.DragPreview(l) is { } preview)
+        {
+            foreach (var rect in preview)
             {
-                int cellIndex = row * cols + col;
-                var date = gridStartDate.AddDays(cellIndex);
-                var cellBounds = new Rect(
-                    contentX + col * cellWidth,
-                    gridTop + row * cellHeight,
-                    cellWidth, cellHeight);
-
-                bool isCurrentMonth = date.Month == cal.DisplayedMonth && date.Year == cal.DisplayedYear;
-                bool isToday = date == today;
-                bool isSelected = cal.SelectedDate.HasValue && date == cal.SelectedDate.Value;
-                bool isHovered = cal.HighlightedDay == cellIndex;
-
-                // Cell border (grid lines)
-                ctx.DrawRect(cellBounds, stroke: new Stroke(colors.Border.Opacity(0.3f), 0.5f));
-
-                // Cell background
-                if (isSelected)
-                {
-                    ctx.DrawRect(cellBounds, colors.Primary.Opacity(0.1f));
-                }
-                else if (isHovered && isCurrentMonth)
-                {
-                    ctx.DrawRect(cellBounds, t.ItemHoverBackground.Opacity(0.5f));
-                }
-                else if (!isCurrentMonth)
-                {
-                    ctx.DrawRect(cellBounds, colors.Surface.Opacity(0.3f));
-                }
-
-                // Day number (top-right of cell)
-                string dayText = date.Day.ToString();
-                float dayFontSize = 12f;
-                var dayTextSize = ctx.MeasureText(dayText, dayFontSize);
-                float dayX = cellBounds.X + cellBounds.Width - dayTextSize.Width - 4f;
-                float dayY = cellBounds.Y + 2f;
-
-                if (isToday)
-                {
-                    // Today: number in a solid circle sized to fit the text
-                    float circleR = Math.Max(dayTextSize.Width, dayTextSize.Height) / 2f + 4f;
-                    float circleCX = dayX + dayTextSize.Width / 2f;
-                    float circleCY = dayY + dayTextSize.Height / 2f;
-                    ctx.DrawRect(
-                        new Rect(circleCX - circleR, circleCY - circleR, circleR * 2, circleR * 2),
-                        colors.Primary, radius: circleR);
-                    ctx.DrawText(dayText, dayX, dayY, dayFontSize, colors.TextOnPrimary);
-                }
-                else
-                {
-                    ColorValue textColor = isCurrentMonth ? colors.Text : colors.TextMuted.Opacity(0.4f);
-                    ctx.DrawText(dayText, dayX, dayY, dayFontSize, textColor);
-                }
-
-                // Event chips
-                if (isCurrentMonth && eventsByDate.TryGetValue(date, out var dayEvents))
-                {
-                    float chipY = cellBounds.Y + dayNumberHeight + 2f;
-                    int shown = Math.Min(dayEvents.Count, maxEvents);
-                    for (int ei = 0; ei < shown; ei++)
-                    {
-                        if (ei == maxEvents - 1 && dayEvents.Count > maxEvents)
-                        {
-                            // "+N more" indicator
-                            string moreText = $"+{dayEvents.Count - ei} more";
-                            var moreTextSize = ctx.MeasureText(moreText, 9f);
-                            float moreTextY = chipY + (eventChipHeight - moreTextSize.Height) / 2f;
-                            ctx.DrawText(moreText, cellBounds.X + 3f, moreTextY, 9f, colors.TextMuted);
-                            break;
-                        }
-
-                        var evt = dayEvents[ei];
-                        var chipColor = cal.GetEventColor(evt);
-                        if (chipColor == default)
-                        {
-                            chipColor = colors.Primary;
-                        }
-
-                        var chipBounds = new Rect(
-                            cellBounds.X + 2f, chipY,
-                            cellBounds.Width - 4f, eventChipHeight);
-                        ctx.DrawRect(chipBounds, chipColor.Opacity(0.85f), radius: 3f);
-
-                        // Chip title (clipped to chip bounds, vertically centered)
-                        using var chipClip = ctx.PushClip(chipBounds);
-                        var chipTextSize = ctx.MeasureText(evt.Title, 10f);
-                        float textY = chipBounds.Y + (chipBounds.Height - chipTextSize.Height) / 2f;
-                        ctx.DrawText(evt.Title, chipBounds.X + 3f, textY, 10f,
-                            new ColorValue("#FFFFFF"));
-
-                        cal.EventHitZones.Add((chipBounds, evt));
-
-                        chipY += eventChipHeight + eventGap;
-                    }
-                }
+                ctx.DrawRect(rect, colors.Primary.Opacity(0.25f), radius: 4f);
+                ctx.DrawRect(rect, stroke: new Stroke(colors.Primary, 1.5f), radius: 4f);
             }
         }
     }
 
-    private void PaintCalendarNav(Calendar cal, ColorSet colors,
-        float x, float y, float width, float height)
+    private ColorValue CalendarEventColor(Calendar cal, CalendarEvent e)
     {
-        float arrowSize = 28f;
-        float todayBtnWidth = 52f;
+        var color = cal.GetEventColor(e);
+        return color == default ? theme.Colors.Primary : color;
+    }
 
-        // Previous month arrow
-        var prevBounds = new Rect(x, y, arrowSize, height);
-        cal.PrevBounds = prevBounds;
-        PaintCalendarArrow(prevBounds, colors.TextMuted, isLeft: true);
+    // An event chip: its colour (hatched when tentative), its icon and its title.
+    private void PaintCalendarChip(Calendar cal, CalendarBox box, string text, float fontSize)
+    {
+        var r = box.Bounds;
+        var color = CalendarEventColor(cal, box.Event);
+        bool dragging = cal.Drag is { Moved: true } d && d.Event == box.Event;
+        ctx.DrawRect(r, color.Opacity(dragging ? 0.35f : box.Event.Tentative ? 0.45f : 0.88f), radius: 4f);
+        using var chipClip = ctx.PushClip(r);
+        if (box.Event.Tentative)
+        {
+            var hatch = new Stroke(ColorValue.FromRgba(1f, 1f, 1f, 0.35f), 2f);
+            for (float hx = r.X - r.Height; hx < r.Right; hx += 7f)
+            {
+                var line = new PathBuilder().MoveTo(new Point(hx, r.Bottom)).LineTo(new Point(hx + r.Height, r.Y)).Build();
+                ctx.DrawPath(line, stroke: hatch);
+            }
+        }
+        float tx = r.X + 4f;
+        if (box.Event.Icon is { IsLayoutEmpty: false } icon)
+        {
+            float s = MathF.Min(r.Height - 4f, 14f);
+            PaintOptionContent(icon, new Rect(tx, r.Y + (MathF.Min(r.Height, 18f) - s) / 2f, s, s), 0f);
+            tx += s + 3f;
+        }
+        var size = ctx.MeasureText(text, fontSize);
+        float ty = box.Timed && r.Height > 24f ? r.Y + 3f : r.Y + (r.Height - size.Height) / 2f;
+        ctx.DrawText(text, MathF.Round(tx), MathF.Round(ty), fontSize, ColorValue.FromRgba(1f, 1f, 1f));
+    }
 
-        // Next month arrow
-        var nextBounds = new Rect(x + arrowSize + 4f, y, arrowSize, height);
-        cal.NextBounds = nextBounds;
-        PaintCalendarArrow(nextBounds, colors.TextMuted, isLeft: false);
+    private void PaintCalendarMonth(Calendar cal, CalendarLayout l, ColorSet colors, System.Globalization.CultureInfo culture, DateOnly today)
+    {
+        var names = culture.DateTimeFormat.AbbreviatedDayNames;
+        for (int c = 0; c < 7; c++)
+        {
+            var dow = (int)(CalendarLayout.FirstDayOfWeek + c) % 7;
+            PaintCenteredText(names[dow], new Rect(l.GridLeft + c * l.CellWidth, l.GridTop - CalendarLayout.HeaderHeight, l.CellWidth, CalendarLayout.HeaderHeight), 11f, colors.TextMuted);
+        }
+        for (int i = 0; i < 42; i++)
+        {
+            var date = l.GridStart.AddDays(i);
+            var cell = new Rect(l.GridLeft + i % 7 * l.CellWidth, l.GridTop + i / 7 * l.CellHeight, l.CellWidth, l.CellHeight);
+            bool inMonth = date.Month == cal.Anchor.Month;
+            ctx.DrawRect(cell, stroke: new Stroke(colors.Border.Opacity(0.3f), 0.5f));
+            if (cal.SelectedDate == date)
+            {
+                ctx.DrawRect(cell, colors.Primary.Opacity(0.1f));
+            }
+            else if (cal.HoveredDate == date && inMonth)
+            {
+                ctx.DrawRect(cell, theme.Select.ItemHoverBackground.Opacity(0.5f));
+            }
+            else if (!inMonth)
+            {
+                ctx.DrawRect(cell, colors.Surface.Opacity(0.3f));
+            }
+            if (cal.KeyboardDate == date && FocusManager.LastFocusWasKeyboard && ReferenceEquals(FocusManager.FocusedElement, cal))
+            {
+                ctx.DrawRect(new Rect(cell.X + 1f, cell.Y + 1f, cell.Width - 2f, cell.Height - 2f), stroke: new Stroke(colors.Focus, 2f), radius: 2f);
+            }
 
-        // Month/Year label
-        string monthYearText = new DateOnly(cal.DisplayedYear, cal.DisplayedMonth, 1)
-            .ToString("MMMM yyyy", System.Globalization.CultureInfo.CurrentCulture);
-        float labelX = x + arrowSize * 2 + 12f;
-        var labelSize = ctx.MeasureText(monthYearText, 16f);
-        float labelY = y + (height - labelSize.Height) / 2f;
-        ctx.DrawText(monthYearText, labelX, labelY, 16f, colors.Text);
+            string number = date.Day.ToString(culture);
+            var ns = ctx.MeasureText(number, 12f);
+            float nx = cell.Right - ns.Width - 5f, ny = cell.Y + 3f;
+            if (date == today)
+            {
+                float rr = Math.Max(ns.Width, ns.Height) / 2f + 4f;
+                ctx.DrawRect(new Rect(nx + ns.Width / 2f - rr, ny + ns.Height / 2f - rr, rr * 2f, rr * 2f), colors.Primary, radius: rr);
+                ctx.DrawText(number, nx, ny, 12f, colors.TextOnPrimary);
+            }
+            else
+            {
+                ctx.DrawText(number, nx, ny, 12f, inMonth ? colors.Text : colors.TextMuted.Opacity(0.4f));
+            }
+        }
+        foreach (var box in l.Boxes)
+        {
+            string text = box.Event.AllDay || !box.StartsHere ? box.Event.Title
+                : box.Event.Start.ToString("t", culture) + " " + box.Event.Title;
+            PaintCalendarChip(cal, box, text, 10f);
+        }
+        foreach (var (_, rect, hidden) in l.More)
+        {
+            var ms = ctx.MeasureText($"+{hidden} more", 10f);
+            ctx.DrawText($"+{hidden} more", rect.X + 3f, rect.Y + (rect.Height - ms.Height) / 2f, 10f, colors.TextMuted);
+        }
+    }
 
-        // "Today" button (right-aligned)
-        float todayX = x + width - todayBtnWidth;
-        float todayY = y + (height - 28f) / 2f;
-        var todayBounds = new Rect(todayX, todayY, todayBtnWidth, 28f);
-        cal.TodayBounds = todayBounds;
+    private void PaintCalendarTimeGrid(Calendar cal, CalendarLayout l, ColorSet colors, System.Globalization.CultureInfo culture, DateOnly today)
+    {
+        // Day headers
+        for (int d = 0; d < l.DayCount; d++)
+        {
+            var day = l.FirstDay.AddDays(d);
+            var header = new Rect(l.ColumnLeft + d * l.ColumnWidth, l.AllDayStrip.Y - CalendarLayout.HeaderHeight, l.ColumnWidth, CalendarLayout.HeaderHeight);
+            string text = day.ToString(l.DayCount == 1 ? "dddd d" : "ddd d", culture);
+            PaintCenteredText(text, header, 12f, day == today ? colors.Primary : colors.TextMuted);
+        }
+        ctx.DrawRect(l.AllDayStrip, colors.Surface.Opacity(0.5f), radius: 4f);
+        foreach (var box in l.Boxes.Where(b => !b.Timed))
+        {
+            PaintCalendarChip(cal, box, box.Event.Title, 10f);
+        }
 
-        ctx.DrawRect(todayBounds, stroke: new Stroke(colors.Border, 1f), radius: 6f);
-        PaintCenteredText("Today", todayBounds, 12f, colors.Text);
+        // Hours, scrolled.
+        using (ctx.PushClip(l.Scroller))
+        {
+            for (int h = 0; h <= 24; h++)
+            {
+                float y = l.YAt(TimeSpan.FromHours(h));
+                if (y < l.Scroller.Y - CalendarLayout.HourHeight || y > l.Scroller.Bottom + 1f)
+                {
+                    continue;
+                }
+                ctx.DrawRect(new Rect(l.ColumnLeft, MathF.Round(y), l.ColumnWidth * l.DayCount, 1f), colors.Border.Opacity(0.35f));
+                if (h is > 0 and < 24)
+                {
+                    string label = DateTime.Today.AddHours(h).ToString("t", culture);
+                    var ls = ctx.MeasureText(label, 10f);
+                    ctx.DrawText(label, l.ColumnLeft - ls.Width - 6f, y - ls.Height / 2f, 10f, colors.TextMuted);
+                }
+            }
+            for (int d = 0; d <= l.DayCount; d++)
+            {
+                float x = l.ColumnLeft + d * l.ColumnWidth;
+                ctx.DrawRect(new Rect(MathF.Round(x), l.Scroller.Y, 1f, l.Scroller.Height), colors.Border.Opacity(0.35f));
+            }
+            for (int d = 0; d < l.DayCount; d++)
+            {
+                if (cal.SelectedDate == l.FirstDay.AddDays(d) && l.DayCount > 1)
+                {
+                    ctx.DrawRect(new Rect(l.ColumnLeft + d * l.ColumnWidth, l.Scroller.Y, l.ColumnWidth, l.Scroller.Height), colors.Primary.Opacity(0.05f));
+                }
+            }
+            foreach (var box in l.Boxes.Where(b => b.Timed))
+            {
+                string time = box.Event.Start.ToString("t", culture);
+                PaintCalendarChip(cal, box, box.Bounds.Height > 30f ? box.Event.Title : time + " " + box.Event.Title, 10f);
+                if (box.Bounds.Height > 30f)
+                {
+                    using var detailClip = ctx.PushClip(box.Bounds);
+                    ctx.DrawText(time + (box.Event.Location is { } where ? " · " + where : ""), MathF.Round(box.Bounds.X + 4f), MathF.Round(box.Bounds.Y + 16f), 9f,
+                        ColorValue.FromRgba(1f, 1f, 1f, 0.85f));
+                }
+            }
+
+            // Now
+            int todayColumn = today.DayNumber - l.FirstDay.DayNumber;
+            if (todayColumn >= 0 && todayColumn < l.DayCount)
+            {
+                float y = l.YAt(DateTime.Now.TimeOfDay);
+                ctx.DrawRect(new Rect(l.ColumnLeft + todayColumn * l.ColumnWidth, y - 1f, l.ColumnWidth, 2f), colors.Danger);
+                ctx.DrawCircle(new Point(l.ColumnLeft + todayColumn * l.ColumnWidth, y), 4f, colors.Danger);
+            }
+        }
+    }
+
+    private void PaintCalendarAgenda(Calendar cal, CalendarLayout l, ColorSet colors, System.Globalization.CultureInfo culture, DateOnly today)
+    {
+        using var clip = ctx.PushClip(l.Scroller);
+        if (l.AgendaHeaders.Count == 0)
+        {
+            PaintCenteredText("No upcoming events", l.Scroller, 13f, colors.TextMuted);
+            return;
+        }
+        foreach (var (day, rect) in l.AgendaHeaders)
+        {
+            string text = day == today ? "Today · " + day.ToString("D", culture) : day.ToString("D", culture);
+            var ts = ctx.MeasureText(text, 12f);
+            ctx.DrawText(text, rect.X + 2f, rect.Y + (rect.Height - ts.Height) / 2f, 12f, day == today ? colors.Primary : colors.TextMuted);
+            ctx.DrawRect(new Rect(rect.X, rect.Bottom - 1f, rect.Width, 1f), colors.Border.Opacity(0.4f));
+        }
+        foreach (var box in l.Boxes)
+        {
+            var r = box.Bounds;
+            var color = CalendarEventColor(cal, box.Event);
+            ctx.DrawRect(new Rect(r.X, r.Y + 4f, 4f, r.Height - 8f), color, radius: 2f);
+            string when = box.Event.AllDay ? "All day" : box.Event.Start.ToString("t", culture) + " – " + box.Event.End.ToString("t", culture);
+            ctx.DrawText(when, r.X + 14f, r.Y + 4f, 10f, colors.TextMuted);
+            string title = box.Event.Title + (box.Event.Tentative ? " (tentative)" : "") + (box.Event.Location is { } where ? " · " + where : "");
+            ctx.DrawText(title, r.X + 14f, r.Y + 18f, 13f, colors.Text, maxWidth: r.Width - 18f, noWrap: true, overflow: TextOverflow.Ellipsis);
+        }
     }
 
     // ── Checkbox ───────────────────────────────────────────────────────

@@ -1644,6 +1644,10 @@ internal sealed class RenderHarness : IDisposable
 
     private static Func<Node> content = () => Node.Empty;
     private readonly EtchBackendProvider provider = new();
+
+    // The window: 400 × 200 unless a test needs room (a full calendar, say).
+    private readonly uint frameWidth;
+    private readonly uint frameHeight;
     private readonly FrameOrchestrator orchestrator;
 
     private sealed class Host : Component
@@ -1651,8 +1655,10 @@ internal sealed class RenderHarness : IDisposable
         protected override Node Render() => content();
     }
 
-    public RenderHarness(Func<Node> build, bool crossAxisCenter = false)
+    public RenderHarness(Func<Node> build, bool crossAxisCenter = false, uint width = Width, uint height = Height)
     {
+        frameWidth = width;
+        frameHeight = height;
         content = () => new Column(
             crossAxisAlignment: crossAxisCenter ? CrossAxisAlignment.Center : CrossAxisAlignment.Start,
             children: [build()]);
@@ -1661,10 +1667,10 @@ internal sealed class RenderHarness : IDisposable
         {
             RenderBackend = provider.Backend,
         };
-        orchestrator.BeginFrameCallback = () => provider.BeginFrame(Width, Height);
+        orchestrator.BeginFrameCallback = () => provider.BeginFrame(frameWidth, frameHeight);
         orchestrator.PresentFrameCallback = (frame, background) => provider.PresentFrame(frame, ColorValue.FromRgba(0f, 0f, 0f));
         orchestrator.EndFrameCallback = frame => provider.EndFrame(frame);
-        orchestrator.MountRoot<Host>(Width, Height);
+        orchestrator.MountRoot<Host>(frameWidth, frameHeight);
         orchestrator.Tick();
     }
 

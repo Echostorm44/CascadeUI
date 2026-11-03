@@ -1263,9 +1263,7 @@ internal sealed partial class InputDispatcher
         // Update day cell hover on inline Calendar
         if (hitNode is Calendar calHover)
         {
-            UpdateCalendarInlineHover(calHover,
-                evt.X - calHover.AbsoluteBounds.X,
-                evt.Y - calHover.AbsoluteBounds.Y);
+            HoverCalendar(calHover, evt.X, evt.Y);
         }
 
         // Update hovered cell on EmojiPicker
@@ -1458,6 +1456,10 @@ internal sealed partial class InputDispatcher
                 MarkScrollViewLayersDirty(rootNode, rsDrag);
             }
             RequestRepaint?.Invoke();
+        }
+        else if (isMouseDown && pressedNode is Calendar { Drag: not null } calDrag)
+        {
+            DragCalendar(calDrag, evt.X, evt.Y);
         }
         else if (isMouseDown && pressedNode is ColorPicker cpDrag && !cpDrag.IsDisabled)
         {
@@ -2111,9 +2113,13 @@ internal sealed partial class InputDispatcher
         // viewport click coords to node-local by subtracting AbsoluteBounds origin.
         if (hitNode is Calendar calDown && evt.Button == NativeMouseButton.Left)
         {
-            float localX = evt.X - calDown.AbsoluteBounds.X;
-            float localY = evt.Y - calDown.AbsoluteBounds.Y;
-            HandleCalendarClick(calDown, localX, localY);
+            FocusManager.RequestFocus(calDown);
+            PressCalendar(calDown, evt.X, evt.Y);
+            pressedNode = calDown;
+            if (rootNode is not null)
+            {
+                MarkScrollViewLayersDirty(rootNode, calDown);
+            }
             RequestRepaint?.Invoke();
             return;
         }
@@ -2517,6 +2523,12 @@ internal sealed partial class InputDispatcher
 
     private void HandleMouseUp(Node? hitNode, NativeMouseEvent evt)
     {
+        // A calendar press ends: the drag it became, or a click on the event or day.
+        if (pressedNode is Calendar { Drag: not null } calUp)
+        {
+            ReleaseCalendar(calUp);
+        }
+
         // The end of a drag across a picker's colour surface makes that colour a recent one.
         if (pressedNode is ColorPicker { DragPart: not ColorPickerPart.None } pickerUp)
         {
@@ -2995,6 +3007,12 @@ internal sealed partial class InputDispatcher
             return;
         }
 
+        // A calendar scrolls its hours (or agenda).
+        if (HitTester.HitTest(rootNode, evt.X, evt.Y) is Calendar wheelCalendar && ScrollCalendar(wheelCalendar, evt))
+        {
+            return;
+        }
+
         // An emoji picker scrolls its grid.
         if (HitTester.HitTest(rootNode, evt.X, evt.Y) is EmojiPicker { IsDisabled: false } emojiPicker)
         {
@@ -3217,6 +3235,17 @@ internal sealed partial class InputDispatcher
             RequestRepaint?.Invoke();
             return;
         }
+        if (evt.Type == NativeKeyEventType.KeyDown && FocusManager.FocusedElement is Calendar focusedCalendar && evt.Modifiers == ModifierKeys.None
+            && HandleCalendarKey(focusedCalendar, evt))
+        {
+            if (rootNode is not null)
+            {
+                MarkScrollViewLayersDirty(rootNode, focusedCalendar);
+            }
+            RequestRepaint?.Invoke();
+            return;
+        }
+
         if (activeEyeDropper is { } dropping && evt.Key == Key.Escape)
         {
             FinishEyeDropper(dropping, take: false);
@@ -6423,6 +6452,10 @@ internal sealed partial class InputDispatcher
         {
             desiredCursor = 1;
         }
+        else if (hitNode is Calendar { OnDragResize: not null } cursorCalendar && CalendarCursor(cursorCalendar, x, y) is > 0 and var calendarCursor)
+        {
+            desiredCursor = calendarCursor;
+        }
         else if (hitNode is ITabularDataNode tdn && IsOverResizableColumnBorder(tdn, x, y))
         {
             desiredCursor = 1;
@@ -7550,94 +7583,236 @@ internal sealed partial class InputDispatcher
 
     // ── Calendar (full inline) helpers ────────────────────────────────
 
-    private void HandleCalendarClick(Calendar cal, float x, float y)
+    // ── Calendar ──────────────────────────────────────────────────────
+
+    // The calendar's arrangement and a window point in its coordinates, from where layout put it.
+    private CalendarLayout? CalendarAt(Calendar cal, float x, float y, out Point local)
     {
-        var clickPoint = new Point(x, y);
-
-        // Check navigation buttons first
-        if (cal.ShowNavigation)
+        local = default;
+        if (rootNode is null || !HitTester.TryGetAbsoluteBounds(rootNode, cal, out var bounds))
         {
-            if (cal.PrevBounds.Width > 0 && cal.PrevBounds.Contains(clickPoint))
-            {
-                cal.NavigateMonth(-1);
-                RequestRepaint?.Invoke();
-                return;
-            }
+            return null;
+        }
+        cal.EnsureInitialized();
+        local = new Point(x - bounds.X, y - bounds.Y);
+        return CalendarLayout.Arrange(cal, bounds.Width, bounds.Height);
+    }
 
-            if (cal.NextBounds.Width > 0 && cal.NextBounds.Contains(clickPoint))
-            {
-                cal.NavigateMonth(1);
-                RequestRepaint?.Invoke();
+    /// <summary>
+    /// A press on a calendar: navigation and the view switch act at once; on an event, a day or a
+    /// time it starts what a drag makes of it (moving, stretching, creating) or, released without
+    /// moving, a click on it.
+    /// </summary>
+    private void PressCalendar(Calendar cal, float x, float y)
+    {
+        if (CalendarAt(cal, x, y, out var p) is not { } l)
+        {
+            return;
+        }
+        var (part, index, day) = l.HitTest(p);
+        switch (part)
+        {
+            case CalendarPart.Prev:
+                cal.Navigate(-1);
                 return;
-            }
-
-            if (cal.TodayBounds.Width > 0 && cal.TodayBounds.Contains(clickPoint))
-            {
+            case CalendarPart.Next:
+                cal.Navigate(1);
+                return;
+            case CalendarPart.Today:
                 cal.GoToToday();
-                RequestRepaint?.Invoke();
+                return;
+            case CalendarPart.ViewTab:
+                cal.ActiveView = l.ViewTabs[index].View;
+                return;
+            case CalendarPart.More:
+                cal.ActiveView = CalendarView.Day;
+                cal.Anchor = day;
+                cal.KeyboardDate = day;
+                return;
+            case CalendarPart.Event or CalendarPart.EventEnd:
+            {
+                var box = l.Boxes[index];
+                bool timed = cal.IsTimeGrid && box.Timed;
+                var at = Calendar.TimeAt(l, p, timed);
+                var kind = part == CalendarPart.EventEnd && cal.OnDragResize is not null ? Calendar.DragKind.Resize : Calendar.DragKind.Move;
+                cal.Drag = new Calendar.DragState(kind, box.Event, at, at, p, false, timed);
                 return;
             }
-        }
-
-        // Check event chip click
-        for (int i = 0; i < cal.EventHitZones.Count; i++)
-        {
-            var (chipBounds, evt) = cal.EventHitZones[i];
-            if (chipBounds.Contains(clickPoint))
+            case CalendarPart.Day or CalendarPart.AllDay or CalendarPart.Slot:
             {
-                cal.OnEventClick?.Invoke(evt);
+                bool timed = part == CalendarPart.Slot;
+                var at = Calendar.TimeAt(l, p, timed);
+                cal.Drag = new Calendar.DragState(Calendar.DragKind.Create, null, at, at, p, false, timed);
                 return;
-            }
-        }
-
-        // Check day cell click
-        if (y >= cal.GridTop && cal.CellWidth > 0 && cal.CellHeight > 0)
-        {
-            int col = (int)((x - cal.GridLeft) / cal.CellWidth);
-            int row = (int)((y - cal.GridTop) / cal.CellHeight);
-            if (col >= 0 && col < 7 && row >= 0 && row < 6)
-            {
-                int cellIndex = row * 7 + col;
-                var date = cal.GridStartDate.AddDays(cellIndex);
-                if (date.Month == cal.DisplayedMonth && date.Year == cal.DisplayedYear)
-                {
-                    cal.SelectedDate = date;
-                    cal.OnDayClick?.Invoke(date);
-                    if (cal.Date.OnChange is not null)
-                    {
-                        cal.Date.OnChange(date);
-                    }
-
-                    RequestRepaint?.Invoke();
-                }
             }
         }
     }
 
-    private void UpdateCalendarInlineHover(Calendar cal, float x, float y)
+    private void DragCalendar(Calendar cal, float x, float y)
     {
-        if (cal.CellWidth <= 0 || cal.CellHeight <= 0 || y < cal.GridTop)
+        if (cal.Drag is not { } d || CalendarAt(cal, x, y, out var p) is not { } l)
         {
-            if (cal.HighlightedDay != -1)
-            {
-                cal.HighlightedDay = -1;
-                RequestRepaint?.Invoke();
-            }
-
             return;
         }
-
-        int col = (int)((x - cal.GridLeft) / cal.CellWidth);
-        int row = (int)((y - cal.GridTop) / cal.CellHeight);
-        int cellIndex = (col >= 0 && col < 7 && row >= 0 && row < 6)
-            ? row * 7 + col
-            : -1;
-
-        if (cellIndex != cal.HighlightedDay)
+        // Only a drag something listens for counts; without one, the press stays a click.
+        bool wanted = d.Kind switch
         {
-            cal.HighlightedDay = cellIndex;
+            Calendar.DragKind.Create => cal.OnDragCreate is not null,
+            Calendar.DragKind.Move => cal.OnDragMove is not null,
+            _ => cal.OnDragResize is not null,
+        };
+        if (!wanted)
+        {
+            return;
+        }
+        bool moved = d.Moved || MathF.Abs(p.X - d.PressedAt.X) > 4f || MathF.Abs(p.Y - d.PressedAt.Y) > 4f;
+        cal.Drag = d with { Current = Calendar.TimeAt(l, p, d.Timed), Moved = moved };
+        if (rootNode is not null)
+        {
+            MarkScrollViewLayersDirty(rootNode, cal);
+        }
+        RequestRepaint?.Invoke();
+    }
+
+    private void ReleaseCalendar(Calendar cal)
+    {
+        if (cal.Drag is not { } d)
+        {
+            return;
+        }
+        if (d.Moved)
+        {
+            cal.FinishDrag();
+        }
+        else
+        {
+            cal.Drag = null;
+            if (d.Event is { } clicked)
+            {
+                cal.OnEventClick?.Invoke(clicked);
+            }
+            else
+            {
+                cal.ChooseDay(DateOnly.FromDateTime(d.Origin.DateTime));
+            }
+        }
+        if (rootNode is not null)
+        {
+            MarkScrollViewLayersDirty(rootNode, cal);
+        }
+        RequestRepaint?.Invoke();
+    }
+
+    private void HoverCalendar(Calendar cal, float x, float y)
+    {
+        if (CalendarAt(cal, x, y, out var p) is not { } l)
+        {
+            return;
+        }
+        var day = l.View == CalendarView.Month && p.Y >= l.GridTop ? l.DayAt(p) : null;
+        if (day != cal.HoveredDate)
+        {
+            cal.HoveredDate = day;
             RequestRepaint?.Invoke();
         }
+    }
+
+    // The resize cursor over the end of an event that can be stretched.
+    private int CalendarCursor(Calendar cal, float x, float y)
+    {
+        if (cal.OnDragResize is null || CalendarAt(cal, x, y, out var p) is not { } l)
+        {
+            return 0;
+        }
+        if (cal.Drag is { Kind: Calendar.DragKind.Resize } resizing)
+        {
+            return resizing.Timed ? 2 : 1;
+        }
+        var (part, index, _) = l.HitTest(p);
+        return part == CalendarPart.EventEnd ? (l.Boxes[index].Timed && cal.IsTimeGrid ? 2 : 1) : 0;
+    }
+
+    private bool ScrollCalendar(Calendar cal, NativeScrollEvent evt)
+    {
+        if (cal.ActiveView == CalendarView.Month || CalendarAt(cal, evt.X, evt.Y, out var p) is not { } l || !l.Scroller.Contains(p))
+        {
+            return false;
+        }
+        float next = Math.Clamp(l.ScrollY - evt.DeltaY * 48f, 0f, l.MaxScroll);
+        if (Math.Abs(next - l.ScrollY) > 0.001f)
+        {
+            cal.ScrollY = next;
+            if (rootNode is not null)
+            {
+                MarkScrollViewLayersDirty(rootNode, cal);
+            }
+            RequestRepaint?.Invoke();
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Keys on a focused calendar: arrows move the day (a week up or down), Page Up/Down the period,
+    /// Home goes to today, Enter or Space chooses the day; in the day view Up/Down scroll the hours.
+    /// </summary>
+    private bool HandleCalendarKey(Calendar cal, NativeKeyEvent evt)
+    {
+        cal.EnsureInitialized();
+        var day = cal.KeyboardDate;
+        switch (evt.Key)
+        {
+            case Key.Left:
+                day = day.AddDays(-1);
+                break;
+            case Key.Right:
+                day = day.AddDays(1);
+                break;
+            case Key.Up when cal.ActiveView == CalendarView.Day:
+                cal.ScrollY = Math.Max(0f, (cal.ScrollY ?? CalendarLayout.HourHeight * 8f) - CalendarLayout.HourHeight);
+                return true;
+            case Key.Down when cal.ActiveView == CalendarView.Day:
+                cal.ScrollY = Math.Min(CalendarLayout.HourHeight * 23f, (cal.ScrollY ?? CalendarLayout.HourHeight * 8f) + CalendarLayout.HourHeight);
+                return true;
+            case Key.Up:
+                day = day.AddDays(-7);
+                break;
+            case Key.Down:
+                day = day.AddDays(7);
+                break;
+            case Key.PageUp:
+                cal.Navigate(-1);
+                return true;
+            case Key.PageDown:
+                cal.Navigate(1);
+                return true;
+            case Key.Home:
+                cal.GoToToday();
+                return true;
+            case Key.Enter or Key.Space:
+                cal.ChooseDay(day);
+                return true;
+            default:
+                return false;
+        }
+
+        // The shown period follows the keyboard day.
+        cal.KeyboardDate = day;
+        bool outside = cal.ActiveView switch
+        {
+            CalendarView.Month => day.Month != cal.Anchor.Month || day.Year != cal.Anchor.Year,
+            CalendarView.Week => CalendarLayout.WeekStart(day) != CalendarLayout.WeekStart(cal.Anchor),
+            CalendarView.Day => day != cal.Anchor,
+            _ => false,
+        };
+        if (outside)
+        {
+            cal.Anchor = day;
+        }
+        if (cal.ActiveView != CalendarView.Month)
+        {
+            cal.SelectedDate = day;
+        }
+        return true;
     }
 
     // ── ColorPicker helpers ───────────────────────────────────────────
@@ -8884,7 +9059,7 @@ internal sealed partial class InputDispatcher
     private static bool IsFocusableControl(Node node) =>
         node is Button or LinkButton or IconButton
             or TextInput or TextArea or PasswordInput or PinInput
-            or MentionInput or TagInput or ColorPicker
+            or MentionInput or TagInput or ColorPicker or Calendar
             or Checkbox or Toggle or Slider or HotkeyPicker or TabBar
             or ISelectNode or IMultiSelectNode or IComboboxNode
             or IToggleGroup or ISegmentedControl

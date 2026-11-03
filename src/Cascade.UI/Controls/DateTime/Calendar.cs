@@ -65,11 +65,12 @@ public record CalendarEvent
 public record CalendarCategory(string Name, ColorValue Color);
 
 /// <summary>
-/// A full interactive calendar control for embedding directly in a page.
-/// Supports month, week, day, and agenda views with event display,
-/// drag-to-create, drag-to-move, and drag-to-resize.
+/// A full interactive calendar control for embedding directly in a page: month, week, day and
+/// agenda views (switchable from the navigation row), multi-day events spanning days, overlapping
+/// events side by side, tentative events hatched, the week starting on the culture's first day;
+/// drag-to-create, drag-to-move and drag-to-resize; arrow keys, Page Up/Down, Home and Enter.
 /// </summary>
-public sealed class Calendar : Node
+public sealed class Calendar : Node, IPumpedNode
 {
     public Calendar(
         CalendarView view = CalendarView.Month,
@@ -121,57 +122,117 @@ public sealed class Calendar : Node
     /// <summary>Callback invoked when the user resizes an event by dragging its edge.</summary>
     internal Action<CalendarEvent, DateTimeOffset>? OnDragResize { get; set; }
 
-    // ── Runtime state for rendering and input ─────────────────────
+    // ── Runtime state (kept across re-renders) ─────────────────────
 
-    internal Rect AbsoluteBounds { get; set; }
-    internal int DisplayedMonth { get; set; }
-    internal int DisplayedYear { get; set; }
-    internal int HighlightedDay { get; set; } = -1;
+    /// <summary>The view shown: the one given, until the view switch changes it.</summary>
+    internal CalendarView ActiveView { get; set; }
+
+    /// <summary>The date the shown period is around (its month, week, day, or the agenda's first day).</summary>
+    internal DateOnly Anchor { get; set; }
+
     internal DateOnly? SelectedDate { get; set; }
+    internal DateOnly? HoveredDate { get; set; }
 
-    // Navigation hit zones
-    internal Rect PrevBounds { get; set; }
-    internal Rect NextBounds { get; set; }
-    internal Rect TodayBounds { get; set; }
+    /// <summary>The day the arrow keys are on.</summary>
+    internal DateOnly KeyboardDate { get; set; }
 
-    // Grid layout (set by painter, read by input dispatcher)
-    internal float GridTop { get; set; }
-    internal float GridLeft { get; set; }
-    internal float CellWidth { get; set; }
-    internal float CellHeight { get; set; }
-    internal DateOnly GridStartDate { get; set; }
-    internal int MaxEventsPerCell { get; set; }
+    /// <summary>How far the hours (or the agenda) are scrolled; null until first shown (then 8 am).</summary>
+    internal float? ScrollY { get; set; }
 
-    // Event chip hit zones (populated during painting)
-    internal List<(Rect Bounds, CalendarEvent Event)> EventHitZones { get; } = [];
+    private bool initialized;
+    private DateOnly lastBoundDate;
+
+    /// <summary>The views the navigation row can switch between.</summary>
+    internal IReadOnlyList<CalendarView> SwitchableViews => ShowNavigation ? AllViews : [];
+    private static readonly CalendarView[] AllViews = [CalendarView.Month, CalendarView.Week, CalendarView.Day, CalendarView.Agenda];
+
+    // Kept for the code that thinks in months.
+    internal int DisplayedMonth => Anchor.Month;
+    internal int DisplayedYear => Anchor.Year;
 
     internal void EnsureInitialized()
     {
-        if (DisplayedYear == 0)
+        var bound = Date.Value;
+        if (!initialized)
         {
-            var d = Date.Value != default ? Date.Value : DateOnly.FromDateTime(DateTime.Today);
-            DisplayedMonth = d.Month;
-            DisplayedYear = d.Year;
+            initialized = true;
+            ActiveView = View;
+            Anchor = bound != default ? bound : DateOnly.FromDateTime(DateTime.Today);
+            KeyboardDate = Anchor;
+            lastBoundDate = bound;
+            return;
+        }
+
+        // The app moved the date: show it.
+        if (bound != lastBoundDate)
+        {
+            lastBoundDate = bound;
+            if (bound != default)
+            {
+                Anchor = bound;
+                KeyboardDate = bound;
+            }
         }
     }
 
-    internal void NavigateMonth(int delta)
+    /// <summary>The period shown, as the navigation row titles it.</summary>
+    internal string TitleText()
     {
-        var current = new DateOnly(DisplayedYear, DisplayedMonth, 1).AddMonths(delta);
-        DisplayedMonth = current.Month;
-        DisplayedYear = current.Year;
-        HighlightedDay = -1;
-        // Propagate to binding so navigation survives re-render
-        Date.OnChange?.Invoke(new DateOnly(current.Year, current.Month, 1));
+        var culture = System.Globalization.CultureInfo.CurrentCulture;
+        switch (ActiveView)
+        {
+            case CalendarView.Week:
+            {
+                var start = CalendarLayout.WeekStart(Anchor);
+                var end = start.AddDays(6);
+                return start.Month == end.Month
+                    ? $"{start.ToString("MMMM d", culture)} – {end.Day.ToString(culture)}, {end.Year.ToString(culture)}"
+                    : $"{start.ToString("MMM d", culture)} – {end.ToString("MMM d", culture)}, {end.Year.ToString(culture)}";
+            }
+            case CalendarView.Day:
+                return Anchor.ToString("D", culture);
+            case CalendarView.Agenda:
+                return $"{Anchor.ToString("MMM d", culture)} – {Anchor.AddDays(CalendarLayout.AgendaDays - 1).ToString("MMM d, yyyy", culture)}";
+            default:
+                return Anchor.ToString("MMMM yyyy", culture);
+        }
     }
+
+    /// <summary>Moves a period back or on (a month, a week, a day, the agenda's span).</summary>
+    internal void Navigate(int delta)
+    {
+        Anchor = ActiveView switch
+        {
+            CalendarView.Week => Anchor.AddDays(7 * delta),
+            CalendarView.Day => Anchor.AddDays(delta),
+            CalendarView.Agenda => Anchor.AddDays(CalendarLayout.AgendaDays * delta),
+            _ => new DateOnly(Anchor.Year, Anchor.Month, 1).AddMonths(delta),
+        };
+        KeyboardDate = Anchor;
+        HoveredDate = null;
+        lastBoundDate = Anchor;
+        Date.OnChange?.Invoke(Anchor);
+    }
+
+    internal void NavigateMonth(int delta) => Navigate(delta);
 
     internal void GoToToday()
     {
-        var today = DateOnly.FromDateTime(DateTime.Today);
-        DisplayedMonth = today.Month;
-        DisplayedYear = today.Year;
-        HighlightedDay = -1;
-        Date.OnChange?.Invoke(today);
+        Anchor = DateOnly.FromDateTime(DateTime.Today);
+        KeyboardDate = Anchor;
+        HoveredDate = null;
+        lastBoundDate = Anchor;
+        Date.OnChange?.Invoke(Anchor);
+    }
+
+    /// <summary>A day chosen (clicked, or Enter on it).</summary>
+    internal void ChooseDay(DateOnly day)
+    {
+        SelectedDate = day;
+        KeyboardDate = day;
+        OnDayClick?.Invoke(day);
+        lastBoundDate = day;
+        Date.OnChange?.Invoke(day);
     }
 
     internal ColorValue GetEventColor(CalendarEvent evt)
@@ -194,6 +255,158 @@ public sealed class Calendar : Node
 
         // Default event color — use primary
         return default;
+    }
+
+    // ── Dragging ───────────────────────────────────────────────────
+
+    internal enum DragKind
+    {
+        Create,
+        Move,
+        Resize,
+    }
+
+    /// <summary>
+    /// A drag in progress: creating over days or times, moving an event, or stretching its end.
+    /// <see cref="Moved"/> stays false for a press that has not moved yet, which is a click.
+    /// </summary>
+    internal sealed record DragState(DragKind Kind, CalendarEvent? Event, DateTimeOffset Origin, DateTimeOffset Current, Point PressedAt, bool Moved, bool Timed);
+
+    internal DragState? Drag { get; set; }
+
+    /// <summary>Whether the view places events by time (a press-drag there picks times, not days).</summary>
+    internal bool IsTimeGrid => ActiveView is CalendarView.Week or CalendarView.Day;
+
+    /// <summary>The time a point is at: a day (month, all-day strip) or a snapped time (the hours).</summary>
+    internal static DateTimeOffset TimeAt(CalendarLayout l, Point p, bool timed)
+    {
+        var day = l.ClampedDayAt(p);
+        var time = timed ? l.TimeAt(p.Y) : TimeSpan.Zero;
+        var local = day.ToDateTime(TimeOnly.MinValue) + time;
+        return new DateTimeOffset(local, TimeZoneInfo.Local.GetUtcOffset(local));
+    }
+
+    /// <summary>
+    /// What the drag would give if released now. Creating: the range covered (whole days, or
+    /// 15-minute slots in the hours). Moving: the event's span shifted by how far the pointer went
+    /// (by days, keeping its times, or by snapped minutes). Resizing: the end moved the same way,
+    /// never before a slot (or day) after the start.
+    /// </summary>
+    internal (DateTimeOffset Start, DateTimeOffset End)? DragResult()
+    {
+        if (Drag is not { Moved: true } d)
+        {
+            return null;
+        }
+        var delta = d.Current - d.Origin;
+        var unit = d.Timed ? TimeSpan.FromMinutes(15) : TimeSpan.FromDays(1);
+        switch (d.Kind)
+        {
+            case DragKind.Create:
+            {
+                var (a, b) = d.Origin <= d.Current ? (d.Origin, d.Current) : (d.Current, d.Origin);
+                return (a, b + unit);
+            }
+            case DragKind.Move when d.Event is { } e:
+                return (e.Start + delta, e.End + delta);
+            case DragKind.Resize when d.Event is { } e:
+            {
+                var end = e.End + delta;
+                var min = e.Start + unit;
+                return (e.Start, end < min ? min : end);
+            }
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>The rectangles a drag in progress covers, for its preview.</summary>
+    internal List<Rect>? DragPreview(CalendarLayout l)
+    {
+        if (DragResult() is not { } r || Drag is not { } d)
+        {
+            return null;
+        }
+        var rects = new List<Rect>();
+        bool timed = d.Timed;
+        var first = DateOnly.FromDateTime(r.Start.DateTime);
+        var last = DateOnly.FromDateTime(r.End.DateTime.TimeOfDay == TimeSpan.Zero ? r.End.DateTime.AddTicks(-1) : r.End.DateTime);
+        for (var day = first; day <= last; day = day.AddDays(1))
+        {
+            if (l.View == CalendarView.Month)
+            {
+                int index = day.DayNumber - l.GridStart.DayNumber;
+                if (index is >= 0 and < 42)
+                {
+                    rects.Add(new Rect(l.GridLeft + index % 7 * l.CellWidth + 1f, l.GridTop + index / 7 * l.CellHeight + 1f, l.CellWidth - 2f, l.CellHeight - 2f));
+                }
+                continue;
+            }
+            int column = day.DayNumber - l.FirstDay.DayNumber;
+            if (column < 0 || column >= l.DayCount)
+            {
+                continue;
+            }
+            float x = l.ColumnLeft + column * l.ColumnWidth + 1f;
+            if (!timed)
+            {
+                rects.Add(new Rect(x, l.AllDayStrip.Y + 1f, l.ColumnWidth - 2f, l.AllDayStrip.Height - 2f));
+                continue;
+            }
+            var from = day == first ? r.Start.TimeOfDay : TimeSpan.Zero;
+            var to = day == last && r.End.TimeOfDay != TimeSpan.Zero ? r.End.TimeOfDay : TimeSpan.FromHours(24);
+            float top = Math.Max(l.Scroller.Y, l.YAt(from));
+            float bottom = Math.Min(l.Scroller.Bottom, l.YAt(to));
+            if (bottom > top)
+            {
+                rects.Add(new Rect(x, top, l.ColumnWidth - 2f, bottom - top));
+            }
+        }
+        return rects;
+    }
+
+    /// <summary>Ends a drag: reports what it did, or (for a press that never moved) a click.</summary>
+    internal void FinishDrag()
+    {
+        var d = Drag;
+        var result = DragResult();
+        Drag = null;
+        if (d is null || result is not { } r)
+        {
+            return;
+        }
+        switch (d.Kind)
+        {
+            case DragKind.Create:
+                OnDragCreate?.Invoke(r.Start, r.End);
+                break;
+            case DragKind.Move when d.Event is { } e && r.Start != e.Start:
+                OnDragMove?.Invoke(e, r.Start);
+                break;
+            case DragKind.Resize when d.Event is { } e && r.End != e.End:
+                OnDragResize?.Invoke(e, r.End);
+                break;
+        }
+    }
+
+    void IPumpedNode.Pump() => EnsureInitialized();
+
+    void IPumpedNode.AdoptFrom(Node previous)
+    {
+        if (previous is not Calendar old || ReferenceEquals(old, this) || !old.initialized)
+        {
+            return;
+        }
+        initialized = true;
+        ActiveView = old.View == View ? old.ActiveView : View;
+        Anchor = old.Anchor;
+        lastBoundDate = old.lastBoundDate;
+        SelectedDate = old.SelectedDate;
+        HoveredDate = old.HoveredDate;
+        KeyboardDate = old.KeyboardDate;
+        ScrollY = old.ScrollY;
+        Drag = old.Drag;
+        EnsureInitialized();
     }
 }
 

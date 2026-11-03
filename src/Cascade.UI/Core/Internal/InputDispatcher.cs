@@ -1457,6 +1457,23 @@ internal sealed partial class InputDispatcher
             }
             RequestRepaint?.Invoke();
         }
+        else if (isMouseDown && pressedNode is TagInput { DragIndex: >= 0 } tagDrag && TryGetAbsoluteBounds(tagDrag, out var tagDragBounds))
+        {
+            var local = new Point(evt.X - tagDragBounds.X, evt.Y - tagDragBounds.Y);
+            if (!tagDrag.Dragging && (MathF.Abs(local.X - tagDrag.DragStart.X) > 4f || MathF.Abs(local.Y - tagDrag.DragStart.Y) > 4f))
+            {
+                tagDrag.Dragging = true;
+            }
+            if (tagDrag.Dragging)
+            {
+                tagDrag.DropIndex = tagDrag.InsertionIndexAt(local);
+                if (rootNode is not null)
+                {
+                    MarkScrollViewLayersDirty(rootNode, tagDrag);
+                }
+                RequestRepaint?.Invoke();
+            }
+        }
         else if (isMouseDown && pressedNode is Calendar { Drag: not null } calDrag)
         {
             DragCalendar(calDrag, evt.X, evt.Y);
@@ -1520,6 +1537,15 @@ internal sealed partial class InputDispatcher
         lastMouseModifiers = evt.Modifiers;
         mouseDownX = evt.X;
         mouseDownY = evt.Y;
+
+        // Typed time applies when the press goes elsewhere (or is dropped if it is not a time).
+        if (FocusManager.FocusedElement is TimePicker { InputText: not null } typingTime && !ReferenceEquals(hitNode, typingTime))
+        {
+            if (!typingTime.CommitInput())
+            {
+                typingTime.InputText = null;
+            }
+        }
 
         // The eye dropper is waiting: this press takes the colour under the pointer, wherever it is.
         if (activeEyeDropper is { } dropper && evt.Button == NativeMouseButton.Left)
@@ -2202,6 +2228,17 @@ internal sealed partial class InputDispatcher
             RequestRepaint?.Invoke();
         }
 
+        // A press on a tag (not its ×) of a reorderable tag input may become a drag.
+        if (hitNode is TagInput { IsReorderEnabled: true, IsDisabled: false, IsReadOnly: false } tagPress && evt.Button == NativeMouseButton.Left
+            && TryGetAbsoluteBounds(tagPress, out var tagBounds))
+        {
+            var local = new Point(evt.X - tagBounds.X, evt.Y - tagBounds.Y);
+            tagPress.DragIndex = tagPress.PillAt(local);
+            tagPress.DragStart = local;
+            tagPress.Dragging = false;
+            tagPress.DropIndex = -1;
+        }
+
         if (hitNode is ColorPicker { IsDisabled: false } pickerPress && evt.Button == NativeMouseButton.Left)
         {
             PressColorPicker(pickerPress, evt.X, evt.Y);
@@ -2523,6 +2560,19 @@ internal sealed partial class InputDispatcher
 
     private void HandleMouseUp(Node? hitNode, NativeMouseEvent evt)
     {
+        // A tag dragged within a reorderable tag input lands where it was dropped.
+        if (pressedNode is TagInput { DragIndex: >= 0 } tagUp)
+        {
+            if (tagUp.Dragging && tagUp.DropIndex >= 0)
+            {
+                tagUp.MoveTag(tagUp.DragIndex, tagUp.DropIndex);
+            }
+            tagUp.DragIndex = -1;
+            tagUp.Dragging = false;
+            tagUp.DropIndex = -1;
+            RequestRepaint?.Invoke();
+        }
+
         // A calendar press ends: the drag it became, or a click on the event or day.
         if (pressedNode is Calendar { Drag: not null } calUp)
         {
@@ -3007,6 +3057,12 @@ internal sealed partial class InputDispatcher
             return;
         }
 
+        // An open time picker's wheels turn.
+        if (ScrollTimePickerPopup(evt))
+        {
+            return;
+        }
+
         // A calendar scrolls its hours (or agenda).
         if (HitTester.HitTest(rootNode, evt.X, evt.Y) is Calendar wheelCalendar && ScrollCalendar(wheelCalendar, evt))
         {
@@ -3242,6 +3298,13 @@ internal sealed partial class InputDispatcher
             {
                 MarkScrollViewLayersDirty(rootNode, focusedCalendar);
             }
+            RequestRepaint?.Invoke();
+            return;
+        }
+
+        if (evt.Type == NativeKeyEventType.KeyDown && FocusManager.FocusedElement is TimePicker { IsDisabled: false } focusedTime
+            && HandleTimePickerKey(focusedTime, evt))
+        {
             RequestRepaint?.Invoke();
             return;
         }
@@ -5329,8 +5392,17 @@ internal sealed partial class InputDispatcher
             case TimePicker tp:
                 if (!tp.IsDisabled)
                 {
-                    tp.TogglePopup();
-                    openTimePicker = tp.IsPopupOpen ? tp : null;
+                    if (tp.PopupDisplayStyle == TimePickerPopupStyle.Input)
+                    {
+                        // Typed: the field takes focus and its text is ready to edit.
+                        FocusManager.RequestFocus(tp);
+                        tp.InputText ??= tp.Value.Value?.ToString(tp.DefaultFormat, System.Globalization.CultureInfo.CurrentCulture) ?? string.Empty;
+                    }
+                    else
+                    {
+                        tp.TogglePopup();
+                        openTimePicker = tp.IsPopupOpen ? tp : null;
+                    }
                     RequestRepaint?.Invoke();
                 }
                 return;
@@ -9059,7 +9131,7 @@ internal sealed partial class InputDispatcher
     private static bool IsFocusableControl(Node node) =>
         node is Button or LinkButton or IconButton
             or TextInput or TextArea or PasswordInput or PinInput
-            or MentionInput or TagInput or ColorPicker or Calendar
+            or MentionInput or TagInput or ColorPicker or Calendar or TimePicker
             or Checkbox or Toggle or Slider or HotkeyPicker or TabBar
             or ISelectNode or IMultiSelectNode or IComboboxNode
             or IToggleGroup or ISegmentedControl
@@ -9483,39 +9555,153 @@ internal sealed partial class InputDispatcher
 
     // ── TimePicker popup handling ─────────────────────────────────────
 
+    /// <summary>
+    /// A press in the popup: a wheel row turns its wheel to it; on the clock, the digits choose
+    /// which part to set, AM/PM sets the half, and the dial sets the hour (then moves on to the
+    /// minute) or the minute.
+    /// </summary>
     private static void HandleTimePickerPopupClick(TimePicker tp, float x, float y)
     {
-        var clickPoint = new Point(x, y);
-
-        if (tp.HourUpBounds.Width > 0 && tp.HourUpBounds.Contains(clickPoint))
+        var p = TimePickerPopup.Arrange(tp, tp.PopupBounds);
+        var point = new Point(x, y);
+        var (part, column, offset) = p.HitTest(point);
+        switch (part)
         {
-            tp.AdjustHour(1);
-            return;
-        }
-
-        if (tp.HourDownBounds.Width > 0 && tp.HourDownBounds.Contains(clickPoint))
-        {
-            tp.AdjustHour(-1);
-            return;
-        }
-
-        if (tp.MinuteUpBounds.Width > 0 && tp.MinuteUpBounds.Contains(clickPoint))
-        {
-            tp.AdjustMinute(1);
-            return;
-        }
-
-        if (tp.MinuteDownBounds.Width > 0 && tp.MinuteDownBounds.Contains(clickPoint))
-        {
-            tp.AdjustMinute(-1);
-            return;
-        }
-
-        if (tp.Format == TimeFormat.Hour12 && tp.AmPmBounds.Width > 0 && tp.AmPmBounds.Contains(clickPoint))
-        {
-            tp.ToggleAmPm();
+            case TimePickerPopupPart.WheelRow:
+                tp.ActiveColumn = column;
+                tp.Spin(column, offset);
+                break;
+            case TimePickerPopupPart.Header:
+                tp.ChoosingMinute = column == 1;
+                tp.ActiveColumn = column;
+                break;
+            case TimePickerPopupPart.AmPm when (column == 1) != tp.IsPm:
+                tp.ToggleAmPm();
+                break;
+            case TimePickerPopupPart.Dial when !tp.ChoosingMinute:
+                tp.SetHourFromDial((int)MathF.Round(p.TurnsAt(point) * 12f), tp.Format == TimeFormat.Hour24 && p.IsInner(point));
+                tp.ChoosingMinute = true;
+                tp.ActiveColumn = 1;
+                break;
+            case TimePickerPopupPart.Dial:
+                tp.SetMinuteFromTurns(p.TurnsAt(point));
+                break;
         }
     }
+
+    // The wheel over a wheel column turns it a row at a time.
+    private bool ScrollTimePickerPopup(NativeScrollEvent evt)
+    {
+        if (openTimePicker is not { PopupDisplayStyle: not TimePickerPopupStyle.Grid } tp || evt.DeltaY == 0f)
+        {
+            return false;
+        }
+        var p = TimePickerPopup.Arrange(tp, tp.PopupBounds);
+        var (part, column, _) = p.HitTest(new Point(evt.X, evt.Y));
+        if (part != TimePickerPopupPart.WheelRow)
+        {
+            return tp.PopupBounds.Contains(new Point(evt.X, evt.Y));
+        }
+        tp.ActiveColumn = column;
+        tp.Spin(column, evt.DeltaY > 0 ? -1 : 1);
+        RequestRepaint?.Invoke();
+        return true;
+    }
+
+    /// <summary>
+    /// Keys on a focused time picker. Typed (Input style): characters edit, Enter applies, Escape
+    /// gives up, Up/Down step the minutes (Shift: hours). Popup styles: Enter, Space or Down opens;
+    /// open, Left/Right choose the wheel (or clock part), Up/Down turn it, Enter keeps, Escape cancels.
+    /// </summary>
+    private bool HandleTimePickerKey(TimePicker tp, NativeKeyEvent evt)
+    {
+        if (tp.PopupDisplayStyle == TimePickerPopupStyle.Input)
+        {
+            if (tp.InputText is { } text)
+            {
+                switch (evt.Key)
+                {
+                    case Key.Enter:
+                        tp.CommitInput();
+                        return true;
+                    case Key.Escape:
+                        tp.InputText = null;
+                        return true;
+                    case Key.Backspace when evt.Character is null:
+                        return true;
+                }
+                if (evt.Character is '\b')
+                {
+                    tp.InputText = text.Length == 0 ? text : text[..^1];
+                    return true;
+                }
+                if (evt.Character is { } typed && !char.IsControl(typed))
+                {
+                    tp.InputText = text + typed;
+                    return true;
+                }
+            }
+            else if (evt.Character is { } first && (char.IsDigit(first)))
+            {
+                tp.InputText = first.ToString();
+                return true;
+            }
+            if (evt.Key is Key.Up or Key.Down)
+            {
+                var now = tp.Value.Value ?? new TimeOnly(tp.SelectedHour, tp.SelectedMinute);
+                int sign = evt.Key == Key.Up ? 1 : -1;
+                var next = evt.Modifiers.HasFlag(ModifierKeys.Shift) ? now.AddHours(sign) : now.AddMinutes(sign * tp.MinuteStep);
+                tp.InputText = null;
+                tp.SelectedHour = next.Hour;
+                tp.SelectedMinute = next.Minute;
+                tp.IsPm = next.Hour >= 12;
+                tp.Value.OnChange?.Invoke(next);
+                return true;
+            }
+            return false;
+        }
+
+        if (!tp.IsPopupOpen)
+        {
+            if (evt.Key is Key.Enter or Key.Space or Key.Down)
+            {
+                tp.OpenPopup();
+                openTimePicker = tp;
+                return true;
+            }
+            return false;
+        }
+
+        bool clock = tp.PopupDisplayStyle == TimePickerPopupStyle.Grid;
+        int columns = clock ? 2 : tp.Format == TimeFormat.Hour12 ? 3 : 2;
+        switch (evt.Key)
+        {
+            case Key.Left:
+                tp.ActiveColumn = Math.Max(0, tp.ActiveColumn - 1);
+                tp.ChoosingMinute = clock && tp.ActiveColumn == 1;
+                return true;
+            case Key.Right:
+                tp.ActiveColumn = Math.Min(columns - 1, tp.ActiveColumn + 1);
+                tp.ChoosingMinute = clock && tp.ActiveColumn == 1;
+                return true;
+            case Key.Up:
+                tp.Spin(tp.ActiveColumn, 1);
+                return true;
+            case Key.Down:
+                tp.Spin(tp.ActiveColumn, -1);
+                return true;
+            case Key.Enter:
+                tp.ClosePopup();
+                openTimePicker = null;
+                return true;
+            case Key.Escape:
+                tp.CancelPopup();
+                openTimePicker = null;
+                return true;
+        }
+        return false;
+    }
+
 
     // ── MonthPicker popup handling ────────────────────────────────────
 

@@ -2568,6 +2568,7 @@ internal sealed partial class NodePainter
             : null;
 
         bool reducedMotion2 = ControlStateAnimator.ReducedMotion;
+        (string Text, Rect Cell)? highlightTip = null;
 
         // Today indicator breathing — use timestamp-based sine wave
         float breathingOpacity = 1f;
@@ -2666,8 +2667,25 @@ internal sealed partial class NodePainter
                         ? colors.Primary
                         : dp.HighlightedDatesColor;
                     ctx.DrawRect(new Rect(dotX, dotY, dotR * 2, dotR * 2), dotColor, radius: dotR);
+
+                    // The hovered highlighted day says why it is highlighted (.HighlightedDates(tooltip:)).
+                    if (dp.HighlightedDay == cellIndex && dp.HighlightedDatesTooltip?.Invoke(date) is { Length: > 0 } tip)
+                    {
+                        highlightTip = (tip, cellBounds);
+                    }
                 }
             }
+        }
+
+        // Drawn after the grid so it sits over the neighbouring days (this is already the overlay pass).
+        if (highlightTip is { } shown)
+        {
+            dp.ShownHighlightTooltip = shown.Text;
+            PaintTooltipOverlay(shown.Text, shown.Cell);
+        }
+        else
+        {
+            dp.ShownHighlightTooltip = null;
         }
     }
 
@@ -3695,9 +3713,19 @@ internal sealed partial class NodePainter
             ctx.DrawRect(bounds, stroke: new Stroke(borderColor, t.BorderWidth), radius: t.Radius);
         }
 
-        // Display text — formatted time or placeholder
+        // Display text — what is being typed (Input style), the formatted time, or the placeholder
         TimeOnly? value = tp.WorkingValue;
-        if (value.HasValue)
+        bool focusedField = ReferenceEquals(FocusManager.FocusedElement, tp);
+        if (tp.InputText is { } typed)
+        {
+            var fieldText = FieldTextBounds(bounds);
+            PaintText(typed, fieldText, t.PaddingH, t.TextColor, overflow: TextOverflow.Ellipsis);
+            float caretX = fieldText.X + t.PaddingH + ctx.MeasureTextAdvance(typed, theme.Typography.Scale.Body.Size).Width + 1f;
+            ctx.DrawRect(new Rect(caretX, bounds.Y + 7f, 1.5f, bounds.Height - 14f), colors.Text);
+            bool valid = typed.Trim().Length == 0 || TimePicker.ParseTyped(typed) is not null;
+            ctx.DrawRect(bounds, stroke: new Stroke(valid ? colors.Focus : colors.Danger, 1.5f), radius: t.Radius);
+        }
+        else if (value.HasValue)
         {
             string formatted = value.Value.ToString(tp.DefaultFormat, System.Globalization.CultureInfo.CurrentCulture);
             PaintText(formatted, FieldTextBounds(bounds), t.PaddingH, t.TextColor,
@@ -3718,7 +3746,7 @@ internal sealed partial class NodePainter
         float iconSize = 14f;
         float iconX = bounds.X + bounds.Width - t.PaddingH - iconSize;
         float iconY = bounds.Y + (bounds.Height - iconSize) / 2f;
-        var iconColor = tp.IsPopupOpen ? colors.Primary : t.ChevronColor;
+        var iconColor = tp.IsPopupOpen || (focusedField && tp.PopupDisplayStyle == TimePickerPopupStyle.Input) ? colors.Primary : t.ChevronColor;
         PaintClockIcon(iconX, iconY, iconSize, iconColor);
 
         // Time popup — deferred to overlay pass
@@ -3774,16 +3802,10 @@ internal sealed partial class NodePainter
         var colors = theme.Colors;
         bool reducedMotion = ControlStateAnimator.ReducedMotion;
 
-        float padding = 12f;
-        float timeSectionHeight = 48f;
-        float popupWidth = triggerBounds.Width;
-        float popupHeight = padding * 2 + timeSectionHeight;
-
-        float popupX = triggerBounds.X;
-        float popupY = triggerBounds.Y + triggerBounds.Height + 4f;
-
-        var popupBounds = new Rect(popupX, popupY, popupWidth, popupHeight);
+        var size = TimePickerPopup.SizeFor(tp, triggerBounds.Width);
+        var popupBounds = new Rect(triggerBounds.X, triggerBounds.Bottom + 4f, size.Width, size.Height);
         tp.PopupBounds = popupBounds;
+        var p = TimePickerPopup.Arrange(tp, popupBounds);
 
         // Open animation: scale + opacity + slide
         ScopeGuard opacityScope4 = default;
@@ -3791,100 +3813,120 @@ internal sealed partial class NodePainter
         if (!reducedMotion && openT < 0.999f)
         {
             float scale4 = LerpF(0.95f, 1f, openT);
-            float slideY4 = LerpF(-4f, 0f, openT);
             opacityScope4 = ctx.PushOpacity(openT);
-            float cx4 = popupBounds.X + popupBounds.Width / 2f;
-            float cy4 = popupBounds.Y + popupBounds.Height / 2f;
-            transformScope4 = ctx.PushScale(scale4, scale4, new Point(cx4, cy4));
+            transformScope4 = ctx.PushScale(scale4, scale4, new Point(popupBounds.X + popupBounds.Width / 2f, popupBounds.Y + popupBounds.Height / 2f));
         }
 
-        // Shadow + background
-        ctx.DrawRect(new Rect(popupX + 2, popupY + 2, popupWidth, popupHeight),
+        ctx.DrawRect(new Rect(popupBounds.X + 2, popupBounds.Y + 2, popupBounds.Width, popupBounds.Height),
             new ColorValue("#000000").Opacity(0.15f), radius: t.Radius);
         ctx.DrawRect(popupBounds, colors.Surface, radius: t.Radius);
         ctx.DrawRect(popupBounds, stroke: new Stroke(colors.Border, 1f), radius: t.Radius);
 
-        // Time spinners centered in the popup
-        float spinnerW = 44f;
-        float spinnerH = timeSectionHeight;
-        float colonW = 16f;
-        bool is12h = tp.Format == TimeFormat.Hour12;
-        float ampmW = is12h ? 40f : 0f;
-        float totalTimeW = spinnerW * 2 + colonW + (is12h ? 8f + ampmW : 0f);
-        float timeCenterX = popupX + popupWidth / 2f;
-        float timeStartX = timeCenterX - totalTimeW / 2f;
-        float timeY = popupY + padding;
-
-        // Hour spinner
-        float hourX = timeStartX;
-        PaintTimePickerSpinner(tp, hourX, timeY, spinnerW, spinnerH, tp.DisplayHour,
-            isHour: true, colors);
-
-        // Colon
-        float colonX = hourX + spinnerW;
-        PaintCenteredText(":",
-            new Rect(colonX, timeY, colonW, spinnerH),
-            18f, colors.Text);
-
-        // Minute spinner
-        float minX = colonX + colonW;
-        PaintTimePickerSpinner(tp, minX, timeY, spinnerW, spinnerH, tp.SelectedMinute,
-            isHour: false, colors);
-
-        // AM/PM toggle
-        if (is12h)
+        if (tp.PopupDisplayStyle == TimePickerPopupStyle.Grid)
         {
-            float ampmX = minX + spinnerW + 8f;
-            var ampmBounds = new Rect(ampmX, timeY + 8f, ampmW, spinnerH - 16f);
-            tp.AmPmBounds = ampmBounds;
-
-            string ampmText = tp.IsPm ? "PM" : "AM";
-            ctx.DrawRect(ampmBounds, colors.Primary.Opacity(0.1f), radius: 4f);
-            ctx.DrawRect(ampmBounds, stroke: new Stroke(colors.Primary.Opacity(0.3f), 1f), radius: 4f);
-            PaintCenteredText(ampmText, ampmBounds, 12f, colors.Primary);
+            PaintTimePickerClock(tp, p, colors);
+        }
+        else
+        {
+            PaintTimePickerWheels(tp, p, colors);
         }
 
         transformScope4.Dispose();
         opacityScope4.Dispose();
     }
 
-    private void PaintTimePickerSpinner(TimePicker tp, float x, float y, float w, float h,
-        int value, bool isHour, ColorSet colors)
+    // Wheels: each column shows the chosen value in a band with its neighbours fading above and below.
+    private void PaintTimePickerWheels(TimePicker tp, TimePickerPopup p, ColorSet colors)
     {
-        float arrowH = 10f;
-        float gap = 4f;
-        float valueH = h - arrowH * 2 - gap * 2;
-
-        // Up arrow
-        var upBounds = new Rect(x, y, w, arrowH);
-        if (isHour)
+        var band = new Rect(p.Columns[0].X, p.Row(0, 0).Y, p.Columns[^1].Right - p.Columns[0].X, TimePickerPopup.RowHeight);
+        ctx.DrawRect(band, colors.Primary.Opacity(0.12f), radius: 8f);
+        bool keyboard = FocusManager.LastFocusWasKeyboard;
+        for (int c = 0; c < p.Columns.Count; c++)
         {
-            tp.HourUpBounds = upBounds;
+            if (keyboard && c == tp.ActiveColumn)
+            {
+                ctx.DrawRect(p.Row(c, 0), stroke: new Stroke(colors.Focus, 1.5f), radius: 8f);
+            }
+            for (int offset = -2; offset <= 2; offset++)
+            {
+                string text = c switch
+                {
+                    0 => tp.Format == TimeFormat.Hour12 ? tp.HourAt(offset).ToString(System.Globalization.CultureInfo.InvariantCulture) : tp.HourAt(offset).ToString("00", System.Globalization.CultureInfo.InvariantCulture),
+                    1 => tp.MinuteAt(offset).ToString("00", System.Globalization.CultureInfo.InvariantCulture),
+                    _ => offset switch { 0 => tp.IsPm ? "PM" : "AM", -1 when tp.IsPm => "AM", 1 when !tp.IsPm => "PM", _ => "" },
+                };
+                float fade = offset == 0 ? 1f : Math.Abs(offset) == 1 ? 0.55f : 0.25f;
+                PaintCenteredText(text, p.Row(c, offset), offset == 0 ? 18f : 15f, offset == 0 ? colors.Text : colors.TextMuted.Opacity(fade));
+            }
+        }
+    }
+
+    // The clock face: the time above (the part being chosen highlighted), then the hours or minutes around a dial.
+    private void PaintTimePickerClock(TimePicker tp, TimePickerPopup p, ColorSet colors)
+    {
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        bool minute = tp.ChoosingMinute;
+        string hourText = tp.Format == TimeFormat.Hour12 ? tp.DisplayHour.ToString(inv) : tp.SelectedHour.ToString("00", inv);
+        ctx.DrawRect(p.HourDigits, minute ? colors.SurfaceAlt : colors.Primary.Opacity(0.18f), radius: 8f);
+        ctx.DrawRect(p.MinuteDigits, minute ? colors.Primary.Opacity(0.18f) : colors.SurfaceAlt, radius: 8f);
+        PaintCenteredText(hourText, p.HourDigits, 24f, minute ? colors.Text : colors.Primary);
+        PaintCenteredText(":", new Rect(p.HourDigits.Right, p.HourDigits.Y, p.MinuteDigits.X - p.HourDigits.Right, p.HourDigits.Height), 24f, colors.Text);
+        PaintCenteredText(tp.SelectedMinute.ToString("00", inv), p.MinuteDigits, 24f, minute ? colors.Primary : colors.Text);
+        if (p.Am.Width > 0f)
+        {
+            ctx.DrawRect(p.Am, tp.IsPm ? colors.SurfaceAlt : colors.Primary, radius: 5f);
+            PaintCenteredText("AM", p.Am, 11f, tp.IsPm ? colors.Text : colors.TextOnPrimary);
+            ctx.DrawRect(p.Pm, tp.IsPm ? colors.Primary : colors.SurfaceAlt, radius: 5f);
+            PaintCenteredText("PM", p.Pm, 11f, tp.IsPm ? colors.TextOnPrimary : colors.Text);
+        }
+
+        ctx.DrawCircle(p.DialCenter, p.DialRadius, colors.SurfaceAlt);
+
+        // The hand, to the chosen hour or minute.
+        int position;
+        bool inner = false;
+        if (minute)
+        {
+            position = -1;
+        }
+        else if (tp.Format == TimeFormat.Hour12)
+        {
+            position = tp.SelectedHour % 12;
         }
         else
         {
-            tp.MinuteUpBounds = upBounds;
+            position = tp.SelectedHour % 12;
+            inner = tp.SelectedHour == 0 || tp.SelectedHour > 12;
         }
+        Point tip = minute
+            ? new Point(p.DialCenter.X + MathF.Sin(tp.SelectedMinute / 60f * 2f * MathF.PI) * p.DialRadius * 0.8f,
+                p.DialCenter.Y - MathF.Cos(tp.SelectedMinute / 60f * 2f * MathF.PI) * p.DialRadius * 0.8f)
+            : p.DialPoint(position, inner);
+        ctx.DrawLine(p.DialCenter, tip, new Stroke(colors.Primary, 2f));
+        ctx.DrawCircle(p.DialCenter, 3f, colors.Primary);
+        ctx.DrawCircle(tip, 16f, colors.Primary);
 
-        PaintChevronGlyph(upBounds, colors.TextMuted, pointUp: true);
-
-        // Value
-        string valueText = value.ToString(isHour && tp.Format == TimeFormat.Hour12 ? "0" : "00");
-        var valueBounds = new Rect(x, y + arrowH + gap, w, valueH);
-        PaintCenteredText(valueText, valueBounds, 20f, colors.Text);
-
-        // Down arrow
-        var downBounds = new Rect(x, y + arrowH + gap + valueH + gap, w, arrowH);
-        if (isHour)
+        for (int i = 0; i < 12; i++)
         {
-            tp.HourDownBounds = downBounds;
+            if (minute)
+            {
+                var at = p.DialPoint(i, false);
+                bool on = tp.SelectedMinute == i * 5;
+                PaintCenteredText((i * 5).ToString("00", inv), new Rect(at.X - 16f, at.Y - 10f, 32f, 20f), 13f, on ? colors.TextOnPrimary : colors.Text);
+                continue;
+            }
+            var outer = p.DialPoint(i, false);
+            int outerHour = i == 0 ? 12 : i;
+            bool outerOn = !inner && position == i;
+            PaintCenteredText(outerHour.ToString(inv), new Rect(outer.X - 16f, outer.Y - 10f, 32f, 20f), 14f, outerOn ? colors.TextOnPrimary : colors.Text);
+            if (tp.Format == TimeFormat.Hour24)
+            {
+                var innerAt = p.DialPoint(i, true);
+                int innerHour = i == 0 ? 0 : i + 12;
+                bool innerOn = inner && position == i;
+                PaintCenteredText(innerHour.ToString("00", inv), new Rect(innerAt.X - 14f, innerAt.Y - 9f, 28f, 18f), 11f, innerOn ? colors.TextOnPrimary : colors.TextMuted);
+            }
         }
-        else
-        {
-            tp.MinuteDownBounds = downBounds;
-        }
-
-        PaintChevronGlyph(downBounds, colors.TextMuted, pointUp: false);
     }
 
     // ── MonthPicker ──────────────────────────────────────────────────
@@ -4184,6 +4226,7 @@ internal sealed partial class NodePainter
         var colors = theme.Colors;
         var tags = ti.CurrentTags;
         ti.TagRemoveBounds.Clear();
+        ti.PillBounds.Clear();
 
         // Paint tag pills
         for (int i = 0; i < tags.Count; i++)
@@ -4210,6 +4253,10 @@ internal sealed partial class NodePainter
             pillW = Math.Max(pillW, minPillW);
 
             var pillBounds = new Rect(curX, curY, pillW, tagH);
+            ti.PillBounds.Add(new Rect(curX - bounds.X, curY - bounds.Y, pillW, tagH));
+
+            // The tag being dragged stays faded where it was until it is dropped.
+            using var dragFade = ti.Dragging && ti.DragIndex == i ? ctx.PushOpacity(0.4f) : default;
 
             // Pill background — neutral gray tint (matches Apple HIG chip style)
             ctx.DrawRect(pillBounds, colors.Text.Opacity(0.10f), radius: tagH / 2f);
@@ -4242,6 +4289,14 @@ internal sealed partial class NodePainter
                 new Stroke(xColor, 1.5f));
 
             curX += pillW + tagGap;
+        }
+
+        // Where a dragged tag would land: a caret before the tag it would precede (or after the last).
+        if (ti.Dragging && ti.DropIndex >= 0 && ti.PillBounds.Count > 0)
+        {
+            var anchor = ti.DropIndex < ti.PillBounds.Count ? ti.PillBounds[ti.DropIndex] : ti.PillBounds[^1];
+            float caretX = bounds.X + (ti.DropIndex < ti.PillBounds.Count ? anchor.X - tagGap / 2f : anchor.Right + tagGap / 2f);
+            ctx.DrawRect(new Rect(caretX - 1f, bounds.Y + anchor.Y - 2f, 2f, anchor.Height + 4f), colors.Primary, radius: 1f);
         }
 
         // Input area — remaining space on current row

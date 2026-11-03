@@ -145,7 +145,12 @@ public sealed class ScrollViewControl
         float eased = (float)(1.0 - Math.Pow(1.0 - t, 3.0)); // ease-out cubic
         if (t >= 1.0)
         {
-            MoveTo(to.X, to.Y, fromUser: false); // land exactly
+            // Land exactly: MoveTo ignores a step under 0.001, which a slow last frame can leave.
+            if (!MoveTo(to.X, to.Y, fromUser: false))
+            {
+                OffsetX = Math.Clamp(to.X, 0f, MaxX);
+                OffsetY = Math.Clamp(to.Y, 0f, MaxY);
+            }
         }
         else
         {

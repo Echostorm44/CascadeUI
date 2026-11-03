@@ -64,6 +64,9 @@ public sealed class DatePicker : Node
     /// <summary>Optional tooltip factory for highlighted dates.</summary>
     internal Func<DateOnly, string>? HighlightedDatesTooltip { get; set; }
 
+    /// <summary>The highlighted day's tooltip showing in the popup now, if any (set by the painter).</summary>
+    internal string? ShownHighlightTooltip { get; set; }
+
     // ── Internal calendar popup state (managed by InputDispatcher) ──
 
     /// <summary>Whether the calendar popup is currently open.</summary>

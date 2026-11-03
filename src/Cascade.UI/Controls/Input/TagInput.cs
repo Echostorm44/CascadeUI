@@ -210,6 +210,84 @@ public sealed class TagInput : Node, IValidatable, ISuggestionHost, IPumpedNode
         CaretIndex = 0;
     }
 
+    // ── Drag to reorder (.ReorderEnabled) ─────────────────────────
+
+    /// <summary>Each pill's rect in the control's own coordinates (set by the painter).</summary>
+    internal List<Rect> PillBounds { get; } = [];
+
+    /// <summary>The pill pressed (a drag may start from it), or -1.</summary>
+    internal int DragIndex { get; set; } = -1;
+
+    /// <summary>Where the press began, in the control's coordinates.</summary>
+    internal Point DragStart { get; set; }
+
+    /// <summary>The press has moved far enough to be a drag.</summary>
+    internal bool Dragging { get; set; }
+
+    /// <summary>Where the dragged tag would go: the index it would be inserted before.</summary>
+    internal int DropIndex { get; set; } = -1;
+
+    /// <summary>The pill at a point (not on its remove button), or -1.</summary>
+    internal int PillAt(Point local)
+    {
+        for (int i = 0; i < PillBounds.Count; i++)
+        {
+            var r = PillBounds[i];
+            if (r.Contains(local))
+            {
+                return local.X >= r.Right - 24f ? -1 : i; // the right end is the remove button
+            }
+        }
+        return -1;
+    }
+
+    /// <summary>The insertion index for a point: before the pill whose left half it is over, on the nearest row.</summary>
+    internal int InsertionIndexAt(Point local)
+    {
+        if (PillBounds.Count == 0)
+        {
+            return 0;
+        }
+        // The row nearest the point.
+        float rowY = PillBounds.Select(r => r.Y).Distinct().OrderBy(y => Math.Abs(local.Y - (y + PillBounds[0].Height / 2f))).First();
+        int last = -1;
+        for (int i = 0; i < PillBounds.Count; i++)
+        {
+            var r = PillBounds[i];
+            if (Math.Abs(r.Y - rowY) > 0.5f)
+            {
+                continue;
+            }
+            if (local.X < r.X + r.Width / 2f)
+            {
+                return i;
+            }
+            last = i;
+        }
+        return last + 1;
+    }
+
+    /// <summary>Moves the tag at <paramref name="from"/> to before the tag now at <paramref name="insertBefore"/>.</summary>
+    internal void MoveTag(int from, int insertBefore)
+    {
+        var current = CurrentTags;
+        if (from < 0 || from >= current.Count)
+        {
+            return;
+        }
+        int to = Math.Clamp(insertBefore > from ? insertBefore - 1 : insertBefore, 0, current.Count - 1);
+        if (to == from)
+        {
+            return;
+        }
+        var list = new List<string>(current);
+        string tag = list[from];
+        list.RemoveAt(from);
+        list.Insert(to, tag);
+        LiveTags = list;
+        Value.OnChange(list);
+    }
+
     internal void RemoveTagAt(int index)
     {
         var current = CurrentTags;
@@ -267,7 +345,7 @@ public static class TagInputExtensions
         return input;
     }
 
-    /// <summary>Enables drag-to-reorder for tags.</summary>
+    /// <summary>Enables drag-to-reorder for tags: drag a tag (not its ×) to where it should go.</summary>
     public static TagInput ReorderEnabled(this TagInput input, bool enabled = true)
     {
         input.IsReorderEnabled = enabled;

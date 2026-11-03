@@ -67,7 +67,7 @@ public interface ICommandProvider
 /// Register commands globally; the framework handles the overlay UI,
 /// search/filtering, keyboard navigation, and execution.
 /// </summary>
-public sealed class CommandPalette : Node
+public sealed class CommandPalette : Node, IPumpedNode
 {
     private static readonly List<Command> globalCommands = new();
     private static readonly Dictionary<object, List<Command>> scopedCommands = new();
@@ -98,6 +98,78 @@ public sealed class CommandPalette : Node
 
     /// <summary>Custom search providers attached to this instance.</summary>
     internal IReadOnlyList<ICommandProvider> CustomProviders { get; set; } = Array.Empty<ICommandProvider>();
+
+    // The providers are asked as the query settles; their answers follow the registered commands.
+    private OptionLoader<CommandResult> providerLoader = new();
+    private IReadOnlyList<CommandResult>? mergedResults;
+    private readonly HashSet<Command> providerCommands = [];
+
+    /// <summary>The providers' search for the current text is still running.</summary>
+    internal bool IsSearchingProviders => providerLoader.IsLoading;
+
+    /// <summary>How long the text must stay unchanged before the providers are asked.</summary>
+    internal static TimeSpan ProviderDelay { get; set; } = TimeSpan.FromMilliseconds(150);
+
+    void IPumpedNode.Pump()
+    {
+        if (CustomProviders.Count == 0)
+        {
+            return;
+        }
+        providerLoader.Pump(SearchProvidersAsync);
+        MergeProviderResults();
+    }
+
+    void IPumpedNode.AdoptFrom(Node previous)
+    {
+        if (previous is CommandPalette old && !ReferenceEquals(old, this))
+        {
+            providerLoader = old.providerLoader;
+            mergedResults = null;
+            MergeProviderResults();
+        }
+    }
+
+    // Every provider at once; one that fails or throws just adds nothing.
+    private async Task<IEnumerable<CommandResult>> SearchProvidersAsync(string query)
+    {
+        var searches = CustomProviders.Select(async provider =>
+        {
+            try
+            {
+                return await provider.SearchAsync(query).ConfigureAwait(false) ?? [];
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                return Enumerable.Empty<CommandResult>();
+            }
+        });
+        var answers = await Task.WhenAll(searches).ConfigureAwait(false);
+        return [.. answers.SelectMany(a => a)];
+    }
+
+    // The providers' latest answer for the text shown, after the matching registered commands.
+    private void MergeProviderResults()
+    {
+        var results = providerLoader.Results;
+        if (ReferenceEquals(results, mergedResults) || providerLoader.ResultsQuery != SearchText || string.IsNullOrEmpty(SearchText))
+        {
+            return;
+        }
+        FilteredCommands.RemoveAll(providerCommands.Contains);
+        providerCommands.Clear();
+        foreach (var result in results)
+        {
+            var command = new Command(result.Label, result.Icon, action: result.Execute, category: result.Description);
+            providerCommands.Add(command);
+            FilteredCommands.Add(command);
+        }
+        mergedResults = results;
+        if (HighlightedIndex < 0 && FilteredCommands.Count > 0)
+        {
+            HighlightedIndex = 0;
+        }
+    }
 
     /// <summary>Current search query text.</summary>
     internal string SearchText { get; set; } = "";
@@ -222,6 +294,15 @@ public sealed class CommandPalette : Node
 
         HighlightedIndex = FilteredCommands.Count > 0 ? 0 : -1;
         ScrollOffset = 0;
+
+        // Ask the providers once the text settles; an answer already in for this text shows now.
+        providerCommands.Clear();
+        mergedResults = null;
+        if (CustomProviders.Count > 0 && !string.IsNullOrEmpty(SearchText))
+        {
+            providerLoader.Want(SearchText, ProviderDelay);
+            MergeProviderResults();
+        }
     }
 
     /// <summary>Executes the currently highlighted command and closes the palette.</summary>
@@ -231,12 +312,15 @@ public sealed class CommandPalette : Node
         {
             var cmd = FilteredCommands[HighlightedIndex];
 
-            // Track in recents (move to front, cap at 5)
-            recentCommands.Remove(cmd);
-            recentCommands.Insert(0, cmd);
-            if (recentCommands.Count > 5)
+            // Track in recents (move to front, cap at 5); a provider's answer is a one-off, not a command.
+            if (!providerCommands.Contains(cmd))
             {
-                recentCommands.RemoveAt(recentCommands.Count - 1);
+                recentCommands.Remove(cmd);
+                recentCommands.Insert(0, cmd);
+                if (recentCommands.Count > 5)
+                {
+                    recentCommands.RemoveAt(recentCommands.Count - 1);
+                }
             }
 
             Close();

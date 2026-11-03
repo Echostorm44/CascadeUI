@@ -3215,6 +3215,13 @@ internal sealed partial class InputDispatcher
             }
         }
 
+        if (evt.Type == NativeKeyEventType.KeyDown && focusedNode is IToggleGroup { IsControlDisabled: false } focusedGroup
+            && evt.Modifiers == ModifierKeys.None && HandleToggleGroupKey(focusedGroup, evt))
+        {
+            RequestRepaint?.Invoke();
+            return;
+        }
+
         if (evt.Type == NativeKeyEventType.KeyDown && focusedNode is Slider focusedSlider && !focusedSlider.IsDisabled && !focusedSlider.IsReadOnly
             && evt.Modifiers == ModifierKeys.None && HandleSliderKey(focusedSlider, evt))
         {
@@ -6466,13 +6473,37 @@ internal sealed partial class InputDispatcher
             return;
         }
 
-        int clickedIndex = HitTestVariableWidthSegments(
-            bounds,
-            count,
-            i => tg.GetOptionLabel(i),
-            SegmentLayout.ToggleGroupPaddingH,
-            lastMousePosition.X);
+        int clickedIndex = tg.IsVertical
+            ? Math.Clamp((int)MathF.Floor((lastMousePosition.Y - bounds.Y - 2f) / IToggleGroup.VerticalRowHeight), 0, count - 1)
+            : HitTestVariableWidthSegments(
+                bounds,
+                count,
+                i => tg.GetOptionLabel(i),
+                SegmentLayout.ToggleGroupPaddingH,
+                lastMousePosition.X);
         tg.SelectIndex(clickedIndex);
+    }
+
+    /// <summary>Arrow keys move a focused toggle group's selection to the previous or next option.</summary>
+    private static bool HandleToggleGroupKey(IToggleGroup tg, NativeKeyEvent evt)
+    {
+        int count = tg.OptionCount;
+        int delta = evt.Key switch
+        {
+            Key.Left or Key.Up => -1,
+            Key.Right or Key.Down => 1,
+            _ => 0,
+        };
+        if (delta == 0 || count == 0)
+        {
+            return false;
+        }
+        int next = Math.Clamp(tg.SelectedIndex < 0 ? 0 : tg.SelectedIndex + delta, 0, count - 1);
+        if (next != tg.SelectedIndex)
+        {
+            tg.SelectIndex(next);
+        }
+        return true;
     }
 
     /// <summary>
@@ -6524,25 +6555,12 @@ internal sealed partial class InputDispatcher
             return;
         }
 
-        float circleSize = 28f;
-        float totalCircleWidth = stepCount * circleSize;
-        float availableGap = bounds.Width - totalCircleWidth;
-        float gap = stepCount > 1 ? availableGap / (stepCount - 1) : 0;
-
-        float relX = lastMousePosition.X - bounds.X;
-
-        for (int i = 0; i < stepCount; i++)
+        // The same arrangement the painter drew, for whichever style it is.
+        int step = StepIndicator.StepAt(si.StyleSetting, stepCount, bounds.Width, bounds.Height,
+            lastMousePosition.X - bounds.X, lastMousePosition.Y - bounds.Y);
+        if (step >= 0 && (si.ClickablePredicate == null || si.ClickablePredicate(step)))
         {
-            float cx = i * (circleSize + gap) + circleSize / 2f;
-            float hitRadius = circleSize;
-            if (Math.Abs(relX - cx) <= hitRadius)
-            {
-                if (si.ClickablePredicate == null || si.ClickablePredicate(i))
-                {
-                    si.StepClickHandler?.Invoke(i);
-                }
-                return;
-            }
+            si.StepClickHandler?.Invoke(step);
         }
     }
 

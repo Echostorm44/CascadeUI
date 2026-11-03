@@ -2048,11 +2048,36 @@ internal static class LayoutSolver
             return new Size(0, 0);
         }
 
-        float circleSize = 28f;
-        float gap = 40f;
+        var style = si.StyleSetting;
+        if (style == StepStyle.Checklist)
+        {
+            // A row per step: marker, gap, the longest label on one line.
+            float labelWidth = 0f;
+            if (DefaultFontPath != null)
+            {
+                foreach (var stepDef in si.Steps)
+                {
+                    var layout = TextLayoutEngine.Layout(stepDef.Label, new TextLayoutOptions
+                    {
+                        FontPath = DefaultFontPath,
+                        FontSize = BodyFontSize,
+                        MaxLines = 1,
+                        NoWrap = true,
+                    });
+                    labelWidth = Math.Max(labelWidth, layout.BoundingBox.Width);
+                }
+            }
+            return new Size(
+                constraints.ConstrainWidth(StepIndicator.ChecklistMarker + StepIndicator.ChecklistLabelGap + labelWidth + 2f),
+                constraints.ConstrainHeight(stepCount * StepIndicator.ChecklistRow));
+        }
+
+        // Markers in a row (40px apart at their natural width), labels below.
+        float marker = style == StepStyle.Bar ? 48f : StepIndicator.MarkerExtent(style);
+        float gap = style == StepStyle.Bar ? StepIndicator.BarGap : 40f;
         float labelHeight = BodyFontSize * 1.4f;
-        float totalWidth = stepCount * circleSize + (stepCount - 1) * gap;
-        float totalHeight = circleSize + 6f + labelHeight;
+        float totalWidth = stepCount * marker + (stepCount - 1) * gap;
+        float totalHeight = StepIndicator.MarkerExtent(style) + StepIndicator.LabelGap + labelHeight;
 
         return new Size(
             constraints.ConstrainWidth(Math.Max(totalWidth, 100f)),
@@ -2069,6 +2094,19 @@ internal static class LayoutSolver
 
         float buttonHeight = 36f;
         float totalWidth = 0;
+
+        if (tg.IsVertical)
+        {
+            // A column: as wide as the widest option, a row each (plus the 2px inset top and bottom).
+            float widest = 0f;
+            for (int i = 0; i < count; i++)
+            {
+                widest = Math.Max(widest, SegmentLayout.NaturalWidth(tg.GetOptionLabel(i), SegmentLayout.ToggleGroupPaddingH));
+            }
+            return new Size(
+                constraints.ConstrainWidth(Math.Max(widest, 80f)),
+                constraints.ConstrainHeight(count * IToggleGroup.VerticalRowHeight + 4f));
+        }
 
         for (int i = 0; i < count; i++)
         {

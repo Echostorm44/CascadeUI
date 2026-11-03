@@ -80,6 +80,8 @@ public sealed class ToggleGroup<T> : Node, IToggleGroup where T : notnull
 
     Rect IToggleGroup.AbsoluteBounds { get; set; }
 
+    bool IToggleGroup.IsVertical => OrientationValue == Orientation.Vertical;
+
     /// <summary>
     /// Runs all registered validation rules against the current value.
     /// Returns the first failing result or <see cref="ValidationResult.Ok"/>.
@@ -219,4 +221,10 @@ public interface IToggleGroup
     /// Absolute bounds set by the painter for click coordinate mapping.
     /// </summary>
     Rect AbsoluteBounds { get; set; }
+
+    /// <summary>Whether the options are stacked in a column rather than laid in a row.</summary>
+    bool IsVertical => false;
+
+    /// <summary>The height of one option when the group is vertical.</summary>
+    internal const float VerticalRowHeight = 32f;
 }

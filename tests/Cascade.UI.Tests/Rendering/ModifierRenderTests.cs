@@ -540,6 +540,100 @@ public class ModifierRenderTests
         await Assert.That(marked - plain).IsGreaterThan(11 * 3);
     }
 
+    private static readonly Step[] ThreeSteps = [new("Cart"), new("Pay"), new("Done")];
+
+    private static StepIndicator Steps(StepStyle style, int current = 1, Action<int>? onClick = null)
+    {
+        var indicator = new StepIndicator(new Bindable<int>(current, _ => { }), ThreeSteps).Style(style);
+        return onClick is null ? indicator : indicator.OnStepClick(onClick);
+    }
+
+    [Test]
+    public async Task StepIndicatorDotted_DrawsSmallDots_NotNumberedCircles()
+    {
+        // Between the current dot's ring (to 15) and the labels (from 18) a dotted indicator has no ink; the
+        // numbered one's 28px circles fill that band.
+        static int MidBandInk(StepStyle style)
+        {
+            using var app = new RenderHarness(() => Steps(style).Width(300));
+            return app.Frame().Count(p => p.Y >= 16 && p.Y <= 17 && p.R + p.G + p.B > 90);
+        }
+
+        await Assert.That(MidBandInk(StepStyle.Numbered)).IsGreaterThan(40);
+        await Assert.That(MidBandInk(StepStyle.Dotted)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task StepIndicatorBar_FillsTheSegmentsReached()
+    {
+        // Step 2 of 3 is current: two of three segments are in the accent colour.
+        using var app = new RenderHarness(() => Steps(StepStyle.Bar).Width(300));
+        var frame = app.Frame();
+        var primary = ThemeSwitcher.Current.Colors.Primary;
+        (byte r, byte g, byte b) = primary.ToSrgbBytes();
+        int filled = frame.Count(p => p.Y == 3 && Math.Abs(p.R - r) < 20 && Math.Abs(p.G - g) < 20 && Math.Abs(p.B - b) < 20);
+        await Assert.That(filled).IsBetween(180, 205);
+    }
+
+    [Test]
+    public async Task StepIndicatorChecklist_StacksARowPerStep_AndClicksSelectTheRow()
+    {
+        int clicked = -1;
+        StepIndicator? list = null;
+        using var app = new RenderHarness(() => list = Steps(StepStyle.Checklist, onClick: i => clicked = i));
+        app.Frame();
+
+        await Assert.That(list!.LayoutData.Bounds.Height).IsEqualTo(3 * StepIndicator.ChecklistRow);
+        app.Click(40, StepIndicator.ChecklistRow * 2 + 10);
+        await Assert.That(clicked).IsEqualTo(2);
+    }
+
+    private static readonly ToggleOption<string>[] Sizes = [new("s", "Small"), new("m", "Medium"), new("l", "Large")];
+
+    [Test]
+    public async Task VerticalToggleGroup_StacksTheOptions_AndAClickPicksTheRow()
+    {
+        string chosen = "s";
+        ToggleGroup<string>? group = null;
+        using var app = new RenderHarness(() => group = new ToggleGroup<string>(new Bindable<string>("s", v => chosen = v), Sizes)
+            .Orientation(Orientation.Vertical));
+        var frame = app.Frame();
+
+        float row = IToggleGroup.VerticalRowHeight;
+        await Assert.That(group!.LayoutData.Bounds.Height).IsEqualTo(3 * row + 4f);
+        await Assert.That(group.LayoutData.Bounds.Width).IsLessThan(150f);
+
+        // The selection (accent fill) is on the first row only.
+        var primary = ThemeSwitcher.Current.Colors.Primary;
+        (byte r, byte g, byte b) = primary.ToSrgbBytes();
+        bool Accent(RenderHarness.Pixel p) => Math.Abs(p.R - r) < 20 && Math.Abs(p.G - g) < 20 && Math.Abs(p.B - b) < 20;
+        await Assert.That(frame.Count(p => p.Y < 2 + row && Accent(p))).IsGreaterThan(500);
+        await Assert.That(frame.Count(p => p.Y > 4 + row && Accent(p))).IsEqualTo(0);
+
+        app.Click(30, 2 + row * 2 + row / 2);
+        await Assert.That(chosen).IsEqualTo("l");
+    }
+
+    [Test]
+    public async Task ToggleGroup_ArrowKeysMoveTheSelection()
+    {
+        static string After(string start, Key key)
+        {
+            string chosen = start;
+            var group = new ToggleGroup<string>(new Bindable<string>(start, v => chosen = v), Sizes);
+            using var app = new RenderHarness(() => group);
+            app.Frame();
+            FocusManager.RequestFocus(group);
+            app.Press(key);
+            return chosen;
+        }
+
+        await Assert.That(After("m", Key.Right)).IsEqualTo("l");
+        await Assert.That(After("m", Key.Down)).IsEqualTo("l");
+        await Assert.That(After("m", Key.Left)).IsEqualTo("s");
+        await Assert.That(After("s", Key.Up)).IsEqualTo("s");
+    }
+
     // Ink below the 32px band where tick marks go.
     private static int TickInk(Func<Node> build)
     {

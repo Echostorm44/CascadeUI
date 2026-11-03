@@ -12390,95 +12390,135 @@ internal sealed partial class NodePainter
             return;
         }
 
+        var style = si.StyleSetting;
         int currentStep = si.CurrentStep.Value;
-        float circleSize = 28f;
-        float circleRadius = circleSize / 2f;
-        float lineHeight = 2f;
-        float labelGap = 6f;
         float fontSize = theme.Typography.Body.Size * 0.75f;
-
-        var completedColor = theme.Colors.Primary;
-        var currentColor = theme.Colors.Primary;
+        var doneColor = theme.Colors.Primary;
         var pendingColor = theme.Colors.Border;
         var textColor = theme.Colors.Text;
-        var completedTextColor = theme.Colors.TextOnPrimary;
-
-        // Calculate spacing: circles are evenly distributed across the width
-        float totalCircleWidth = stepCount * circleSize;
-        float availableGap = bounds.Width - totalCircleWidth;
-        float gap = stepCount > 1 ? availableGap / (stepCount - 1) : 0;
+        var onPrimary = theme.Colors.TextOnPrimary;
+        var slots = StepIndicator.Arrange(style, stepCount, bounds.Width, bounds.Height);
 
         for (int i = 0; i < stepCount; i++)
         {
-            float cx = i * (circleSize + gap) + circleRadius;
-            float cy = circleRadius;
+            var slot = slots[i];
+            var marker = slot.Marker;
+            float cx = slot.CenterX;
+            float cy = slot.CenterY;
             bool isCompleted = i < currentStep;
             bool isCurrent = i == currentStep;
-
-            // Draw connecting line to next step
-            if (i < stepCount - 1)
-            {
-                float lineStartX = cx + circleRadius + 2f;
-                float lineEndX = (i + 1) * (circleSize + gap);
-                float lineY = cy;
-                var lineColor = isCompleted ? completedColor : pendingColor;
-                ctx.DrawLine(
-                    new Point(lineStartX, lineY),
-                    new Point(lineEndX, lineY),
-                    new Stroke(lineColor, lineHeight));
-            }
-
-            // Draw circle
-            var circleRect = new Rect(cx - circleRadius, cy - circleRadius, circleSize, circleSize);
-            if (isCompleted || isCurrent)
-            {
-                ctx.DrawRect(circleRect, isCompleted ? completedColor : currentColor,
-                    radius: circleRadius);
-
-                // Active step: no glow — solid circle only for clean, professional look
-            }
-            else
-            {
-                ctx.DrawRect(circleRect, pendingColor.Opacity(0.3f), radius: circleRadius);
-                ctx.DrawRect(circleRect, stroke: new Stroke(pendingColor, 1.5f), radius: circleRadius);
-            }
-
-            // Draw step content: checkmark for completed, number for others
-            if (isCompleted)
-            {
-                // Draw checkmark (✓) inside completed circle
-                float checkSize = circleSize * 0.35f;
-                float checkStroke = 2f;
-                var checkColor = completedTextColor;
-                // Checkmark path: short downstroke then longer upstroke
-                ctx.DrawLine(
-                    new Point(cx - checkSize * 0.5f, cy),
-                    new Point(cx - checkSize * 0.1f, cy + checkSize * 0.4f),
-                    new Stroke(checkColor, checkStroke, StrokeCap.Round, StrokeJoin.Round));
-                ctx.DrawLine(
-                    new Point(cx - checkSize * 0.1f, cy + checkSize * 0.4f),
-                    new Point(cx + checkSize * 0.5f, cy - checkSize * 0.35f),
-                    new Stroke(checkColor, checkStroke, StrokeCap.Round, StrokeJoin.Round));
-            }
-            else
-            {
-                string numberText = (i + 1).ToString();
-                var numColor = isCurrent ? completedTextColor : textColor;
-                float numFontSize = circleSize * 0.45f;
-                var numSize = ctx.MeasureText(numberText, numFontSize);
-                float numX = MathF.Round(cx - numSize.Width / 2f);
-                float numY = MathF.Round(cy - numSize.Height / 2f + numFontSize * 0.06f);
-                ctx.DrawText(numberText, numX, numY, numFontSize, numColor);
-            }
-
-            // Draw label below
+            bool reached = isCompleted || isCurrent;
             string label = si.Steps[i].Label;
-            var labelSize = ctx.MeasureText(label, fontSize);
-            float labelX = MathF.Round(cx - labelSize.Width / 2f);
-            float labelY = circleSize + labelGap;
-            ctx.DrawText(label, labelX, labelY, fontSize,
-                (isCompleted || isCurrent) ? textColor : textColor.Opacity(0.6f));
+            var labelColor = reached ? textColor : textColor.Opacity(0.6f);
+
+            switch (style)
+            {
+                case StepStyle.Bar:
+                {
+                    // A segment per step: done ones solid, the current one solid with a lighter tail,
+                    // pending ones in the border colour. The label sits under its segment.
+                    float radius = marker.Height / 2f;
+                    ctx.DrawRect(marker, reached ? doneColor : pendingColor.Opacity(0.6f), radius: radius);
+                    var labelSize = ctx.MeasureText(label, fontSize);
+                    ctx.DrawText(label, MathF.Round(marker.X), MathF.Round(marker.Bottom + StepIndicator.LabelGap), fontSize,
+                        isCurrent ? textColor : labelColor, maxWidth: Math.Max(labelSize.Width, marker.Width), maxLines: 1);
+                    break;
+                }
+
+                case StepStyle.Checklist:
+                {
+                    // One row per step, a line joining the markers.
+                    float r = marker.Width / 2f;
+                    if (i < stepCount - 1)
+                    {
+                        var next = slots[i + 1].Marker;
+                        ctx.DrawLine(new Point(cx, marker.Bottom + 2f), new Point(cx, next.Y - 2f),
+                            new Stroke(isCompleted ? doneColor : pendingColor, 2f));
+                    }
+                    if (isCompleted)
+                    {
+                        ctx.DrawRect(marker, doneColor, radius: r);
+                        PaintStepCheck(cx, cy, marker.Width, onPrimary);
+                    }
+                    else if (isCurrent)
+                    {
+                        ctx.DrawRect(marker, stroke: new Stroke(doneColor, 2f), radius: r);
+                        ctx.DrawCircle(new Point(cx, cy), r * 0.4f, fill: doneColor);
+                    }
+                    else
+                    {
+                        ctx.DrawRect(marker, stroke: new Stroke(pendingColor, 1.5f), radius: r);
+                    }
+                    var labelSize = ctx.MeasureText(label, theme.Typography.Body.Size);
+                    ctx.DrawText(label, MathF.Round(marker.Right + StepIndicator.ChecklistLabelGap),
+                        MathF.Round(cy - labelSize.Height / 2f), theme.Typography.Body.Size,
+                        isCompleted ? textColor.Opacity(0.6f) : labelColor, maxWidth: float.PositiveInfinity, maxLines: 1);
+                    break;
+                }
+
+                default:
+                {
+                    // Numbered circles or small dots, joined by lines, labels centred below.
+                    float r = marker.Width / 2f;
+                    if (i < stepCount - 1)
+                    {
+                        var next = slots[i + 1].Marker;
+                        ctx.DrawLine(new Point(marker.Right + 2f, cy), new Point(next.X - 2f, cy),
+                            new Stroke(isCompleted ? doneColor : pendingColor, 2f));
+                    }
+
+                    if (style == StepStyle.Dotted)
+                    {
+                        if (isCurrent)
+                        {
+                            // The current dot is ringed.
+                            ctx.DrawCircle(new Point(cx, cy), r + 3f, fill: doneColor.Opacity(0.25f));
+                        }
+                        ctx.DrawCircle(new Point(cx, cy), r, fill: reached ? doneColor : pendingColor);
+                    }
+                    else
+                    {
+                        if (reached)
+                        {
+                            ctx.DrawRect(marker, doneColor, radius: r);
+                        }
+                        else
+                        {
+                            ctx.DrawRect(marker, pendingColor.Opacity(0.3f), radius: r);
+                            ctx.DrawRect(marker, stroke: new Stroke(pendingColor, 1.5f), radius: r);
+                        }
+
+                        if (isCompleted)
+                        {
+                            PaintStepCheck(cx, cy, marker.Width, onPrimary);
+                        }
+                        else
+                        {
+                            string numberText = (i + 1).ToString(System.Globalization.CultureInfo.CurrentCulture);
+                            float numFontSize = marker.Width * 0.45f;
+                            var numSize = ctx.MeasureText(numberText, numFontSize);
+                            ctx.DrawText(numberText, MathF.Round(cx - numSize.Width / 2f),
+                                MathF.Round(cy - numSize.Height / 2f + numFontSize * 0.06f), numFontSize,
+                                isCurrent ? onPrimary : textColor);
+                        }
+                    }
+
+                    var labelSize = ctx.MeasureText(label, fontSize);
+                    ctx.DrawText(label, MathF.Round(cx - labelSize.Width / 2f), MathF.Round(marker.Bottom + StepIndicator.LabelGap),
+                        fontSize, labelColor);
+                    break;
+                }
+            }
         }
+    }
+
+    // A tick inside a step marker of the given size.
+    private void PaintStepCheck(float cx, float cy, float markerSize, ColorValue color)
+    {
+        float checkSize = markerSize * 0.35f;
+        var stroke = new Stroke(color, Math.Max(1.5f, markerSize / 14f), StrokeCap.Round, StrokeJoin.Round);
+        ctx.DrawLine(new Point(cx - checkSize * 0.5f, cy), new Point(cx - checkSize * 0.1f, cy + checkSize * 0.4f), stroke);
+        ctx.DrawLine(new Point(cx - checkSize * 0.1f, cy + checkSize * 0.4f), new Point(cx + checkSize * 0.5f, cy - checkSize * 0.35f), stroke);
     }
 
     // ── ToggleGroup ───────────────────────────────────────────────────
@@ -12496,6 +12536,12 @@ internal sealed partial class NodePainter
         var node = (Node)tg;
         bool disabled = tg.IsControlDisabled;
         bool reducedMotion = ControlStateAnimator.ReducedMotion;
+
+        if (tg.IsVertical)
+        {
+            PaintToggleGroupVertical(tg, node, bounds, count, disabled);
+            return;
+        }
 
         float outerRadius = bounds.Height / 2f;
         var bgColor = theme.Colors.SurfaceAlt;
@@ -12644,6 +12690,70 @@ internal sealed partial class NodePainter
                 float divBottom = bounds.Height * 0.75f;
                 ctx.DrawLine(new Point(divX, divTop), new Point(divX, divBottom),
                     new Stroke(borderColor.Opacity(divOpacity), 1f));
+            }
+        }
+    }
+
+    /// <summary>
+    /// A vertical toggle group: the options stacked in rows inside a rounded panel, the selection
+    /// sliding between rows, hairlines between the unselected ones.
+    /// </summary>
+    private void PaintToggleGroupVertical(IToggleGroup tg, Node node, Rect bounds, int count, bool disabled)
+    {
+        const float inset = 2f;
+        float row = IToggleGroup.VerticalRowHeight;
+        float radius = Math.Min(10f, row / 2f);
+        var borderColor = theme.Colors.Border;
+        float fontSize = theme.Typography.Body.Size * 0.85f;
+
+        var anim = ControlStateAnimator.Reconcile(
+            node, GetScrollViewAwareHoverModel(AnimationModel.Spring.Snappy),
+            GetScrollViewAwarePressModel(AnimationModel.Spring.Snappy), isDisabled: disabled);
+
+        ctx.DrawRect(bounds, theme.Colors.SurfaceAlt, radius: radius);
+        ctx.DrawRect(bounds, stroke: new Stroke(borderColor, 1f), radius: radius);
+
+        int selected = tg.SelectedIndex;
+        float animated = selected;
+        if (selected >= 0)
+        {
+            ControlStateAnimator.ReconcileValue(node, selected, AnimationModel.Spring.Bouncy);
+            animated = anim.Value.Current;
+            var selection = new Rect(bounds.X + inset, bounds.Y + inset + animated * row, bounds.Width - inset * 2f, row);
+            ctx.DrawRect(selection, theme.Colors.Primary, radius: radius - inset);
+        }
+
+        // Hovered row (not the selected one): a faint wash.
+        int hovered = -1;
+        if (node.IsHovered && !disabled)
+        {
+            hovered = (int)MathF.Floor((InputDispatcher.CurrentMousePosition.Y - absoluteY - inset) / row);
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            float top = bounds.Y + inset + i * row;
+            bool isSelected = i == selected;
+            if (i == hovered && !isSelected && anim.Hover.Current > 0.01f)
+            {
+                ctx.DrawRect(new Rect(bounds.X + inset, top, bounds.Width - inset * 2f, row),
+                    theme.Colors.Primary.Opacity(0.05f * anim.Hover.Current), radius: radius - inset);
+            }
+
+            var color = isSelected ? theme.Colors.TextOnPrimary : theme.Colors.Text;
+            if (disabled)
+            {
+                color = color.Opacity(isSelected ? 0.5f : 0.4f);
+            }
+            PaintText(tg.GetOptionLabel(i), new Rect(bounds.X, top, bounds.Width, row), SegmentLayout.ToggleGroupPaddingH, color,
+                fontSize: fontSize, alignment: TextAlignment.Center, overflow: TextOverflow.Ellipsis);
+
+            // A hairline between two unselected rows, fading as the selection passes.
+            if (i > 0 && i != selected && i - 1 != selected)
+            {
+                float opacity = 0.5f * Math.Clamp(MathF.Min(MathF.Abs(i - animated), MathF.Abs(i - 1 - animated)) - 0.2f, 0f, 1f);
+                ctx.DrawLine(new Point(bounds.X + bounds.Width * 0.15f, top), new Point(bounds.X + bounds.Width * 0.85f, top),
+                    new Stroke(borderColor.Opacity(selected < 0 ? 0.5f : opacity), 1f));
             }
         }
     }

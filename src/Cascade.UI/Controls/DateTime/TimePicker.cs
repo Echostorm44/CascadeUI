@@ -278,9 +278,9 @@ public sealed class TimePicker : Node
     /// </summary>
     internal static TimeOnly? ParseTyped(string text)
     {
-        string t = text.Trim().ToLowerInvariant();
+        string t = text.Trim().ToUpperInvariant();
         bool? pm = null;
-        foreach (var (suffix, isPm) in new[] { ("pm", true), ("am", false), ("p", true), ("a", false) })
+        foreach (var (suffix, isPm) in new[] { ("PM", true), ("AM", false), ("P", true), ("A", false) })
         {
             if (t.EndsWith(suffix, StringComparison.Ordinal))
             {

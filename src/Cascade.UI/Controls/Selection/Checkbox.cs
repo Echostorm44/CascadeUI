@@ -59,7 +59,7 @@ public sealed class Checkbox : Node, IValidatable
     ValidationTrigger IValidatable.ValidationTriggerMode => ValidationTriggerMode;
     bool IValidatable.HasValidationRules => ValidationRules.Count > 0;
     ValidationResult IValidatable.RunValidation() => RunValidation();
-    object? IValidatable.ValidationValue => (object?)BoolValue?.Value ?? ThreeStateValue;
+    object? IValidatable.ValidationValue => BoolValue is { } bound ? bound.Value : ThreeStateValue;
     TimeSpan? IValidatable.ValidationDebounce => null;
     ValidationState? IValidatable.ValidationState { get; set; }
     internal bool IsDisabled { get; set; }

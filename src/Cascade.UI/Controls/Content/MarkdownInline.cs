@@ -389,16 +389,16 @@ internal static class MarkdownInlineParser
         {
             tag = tag[..^1].TrimEnd();
         }
-        string name = tag.Split(' ', 2)[0].ToLowerInvariant();
+        string name = tag.Split(' ', 2)[0].ToUpperInvariant();
 
-        if (name is "br")
+        if (name is "BR")
         {
             flush();
             spans.Add(new MarkdownSpan("\n", style, link));
             end = close + 1;
             return true;
         }
-        if (name is "img")
+        if (name is "IMG")
         {
             string? src = Attribute(tag, "src");
             if (src is null)
@@ -413,12 +413,12 @@ internal static class MarkdownInlineParser
 
         MarkdownSpanStyle? add = name switch
         {
-            "b" or "strong" => MarkdownSpanStyle.Bold,
-            "i" or "em" => MarkdownSpanStyle.Italic,
-            "u" or "ins" => MarkdownSpanStyle.Underline,
-            "s" or "del" or "strike" => MarkdownSpanStyle.Strike,
-            "code" or "kbd" or "samp" => MarkdownSpanStyle.Code,
-            "a" => MarkdownSpanStyle.None,
+            "B" or "STRONG" => MarkdownSpanStyle.Bold,
+            "I" or "EM" => MarkdownSpanStyle.Italic,
+            "U" or "INS" => MarkdownSpanStyle.Underline,
+            "S" or "DEL" or "STRIKE" => MarkdownSpanStyle.Strike,
+            "CODE" or "KBD" or "SAMP" => MarkdownSpanStyle.Code,
+            "A" => MarkdownSpanStyle.None,
             _ => null,
         };
         if (add is null)
@@ -437,7 +437,7 @@ internal static class MarkdownInlineParser
         }
         flush();
         string inner = text[(close + 1)..endTag];
-        string? href = name == "a" ? Attribute(tag, "href") : null;
+        string? href = name == "A" ? Attribute(tag, "href") : null;
         if (add.Value == MarkdownSpanStyle.Code)
         {
             spans.Add(new MarkdownSpan(System.Net.WebUtility.HtmlDecode(inner), style | MarkdownSpanStyle.Code, link));

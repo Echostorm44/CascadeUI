@@ -42,22 +42,22 @@ internal static class MarkdownHighlighter
     private static readonly Language Css = new(Words("important inherit initial unset none auto"), [], ("/*", "*/"), "\"'");
     private static readonly Language Markup = new(Words(""), [], ("<!--", "-->"), "\"'", Markup: true);
 
-    private static Language? Find(string? language) => language?.Trim().ToLowerInvariant() switch
+    private static Language? Find(string? language) => language?.Trim().ToUpperInvariant() switch
     {
-        "c#" or "cs" or "csharp" => CSharp,
-        "js" or "javascript" or "jsx" or "ts" or "typescript" or "tsx" or "mjs" => JavaScript,
-        "py" or "python" => Python,
-        "rs" or "rust" => Rust,
-        "go" or "golang" => Go,
-        "java" or "kotlin" or "kt" or "scala" or "swift" => Java,
-        "c" or "h" or "cpp" or "c++" or "cc" or "hpp" or "objc" => C,
-        "sh" or "bash" or "zsh" or "shell" or "console" => Shell,
-        "ps" or "ps1" or "powershell" or "pwsh" => PowerShell,
-        "sql" => Sql,
-        "json" or "jsonc" => Json,
-        "yaml" or "yml" or "toml" or "ini" => Yaml,
-        "css" or "scss" or "less" => Css,
-        "xml" or "html" or "xaml" or "svg" or "csproj" or "axaml" => Markup,
+        "C#" or "CS" or "CSHARP" => CSharp,
+        "JS" or "JAVASCRIPT" or "JSX" or "TS" or "TYPESCRIPT" or "TSX" or "MJS" => JavaScript,
+        "PY" or "PYTHON" => Python,
+        "RS" or "RUST" => Rust,
+        "GO" or "GOLANG" => Go,
+        "JAVA" or "KOTLIN" or "KT" or "SCALA" or "SWIFT" => Java,
+        "C" or "H" or "CPP" or "C++" or "CC" or "HPP" or "OBJC" => C,
+        "SH" or "BASH" or "ZSH" or "SHELL" or "CONSOLE" => Shell,
+        "PS" or "PS1" or "POWERSHELL" or "PWSH" => PowerShell,
+        "SQL" => Sql,
+        "JSON" or "JSONC" => Json,
+        "YAML" or "YML" or "TOML" or "INI" => Yaml,
+        "CSS" or "SCSS" or "LESS" => Css,
+        "XML" or "HTML" or "XAML" or "SVG" or "CSPROJ" or "AXAML" => Markup,
         _ => null,
     };
 

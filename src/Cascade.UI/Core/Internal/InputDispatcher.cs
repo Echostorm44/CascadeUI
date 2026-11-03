@@ -8207,7 +8207,7 @@ internal sealed partial class InputDispatcher
     /// Keys on a focused calendar: arrows move the day (a week up or down), Page Up/Down the period,
     /// Home goes to today, Enter or Space chooses the day; in the day view Up/Down scroll the hours.
     /// </summary>
-    private bool HandleCalendarKey(Calendar cal, NativeKeyEvent evt)
+    private static bool HandleCalendarKey(Calendar cal, NativeKeyEvent evt)
     {
         cal.EnsureInitialized();
         var day = cal.KeyboardDate;

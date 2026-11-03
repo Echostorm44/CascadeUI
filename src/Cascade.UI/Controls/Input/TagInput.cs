@@ -5,7 +5,7 @@ namespace Cascade.UI;
 /// created by typing and pressing a delimiter key. Supports suggestions,
 /// drag-to-reorder, and per-tag validation.
 /// </summary>
-public sealed class TagInput : Node, IValidatable
+public sealed class TagInput : Node, IValidatable, ISuggestionHost, IPumpedNode
 {
     /// <summary>
     /// Creates a tag input bound to a list of strings.
@@ -75,6 +75,34 @@ public sealed class TagInput : Node, IValidatable
     }
     internal Func<string, IEnumerable<string>>? SuggestionSyncSource { get; set; }
     internal Func<string, Task<IEnumerable<string>>>? SuggestionAsyncSource { get; set; }
+
+    // ── Suggestions (see Suggestions) ──
+    private Suggestions suggestions = new();
+    Suggestions ISuggestionHost.Suggestions => suggestions;
+    bool ISuggestionHost.HasSuggestionSource => SuggestionSyncSource is not null || SuggestionAsyncSource is not null;
+    string ISuggestionHost.SuggestionQuery => InputBuffer;
+
+    // Tags already added aren't suggested again (unless duplicates are allowed).
+    IEnumerable<SuggestionItem>? ISuggestionHost.SuggestSync(string query) =>
+        SuggestionSyncSource is { } sync ? Fresh(sync(query) ?? []).Select(text => new SuggestionItem(text)) : null;
+    Task<IEnumerable<SuggestionItem>>? ISuggestionHost.SuggestAsync(string query) =>
+        SuggestionAsyncSource is { } source ? MapAsync(source(query)) : null;
+
+    private async Task<IEnumerable<SuggestionItem>> MapAsync(Task<IEnumerable<string>> texts) =>
+        [.. Fresh((await texts.ConfigureAwait(false)) ?? []).Select(text => new SuggestionItem(text))];
+
+    private IEnumerable<string> Fresh(IEnumerable<string> texts) =>
+        AllowDuplicateValues ? texts : texts.Where(text => !CurrentTags.Contains(text, StringComparer.OrdinalIgnoreCase));
+
+    void IPumpedNode.Pump() => suggestions.Update(this, ReferenceEquals(FocusManager.FocusedElement, this));
+
+    void IPumpedNode.AdoptFrom(Node previous)
+    {
+        if (previous is TagInput old)
+        {
+            suggestions = old.suggestions;
+        }
+    }
     internal bool AllowDuplicateValues { get; set; }
     internal Action<string>? OnDuplicateHandler { get; set; }
     internal bool IsReorderEnabled { get; set; }

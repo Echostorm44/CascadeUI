@@ -962,6 +962,109 @@ public class ModifierRenderTests
         await Assert.That(string.Join(",", chosen)).IsEqualTo("b");
     }
 
+    private static readonly string[] Cities = ["Amsterdam", "Athens", "Berlin", "Bern", "Boston"];
+
+    private static IEnumerable<string> CitiesStarting(string text) =>
+        Cities.Where(c => c.StartsWith(text, StringComparison.OrdinalIgnoreCase));
+
+    [Test]
+    public async Task TextInputAutocomplete_SuggestsAsYouType_AndEnterTakesTheHighlighted()
+    {
+        string value = "";
+        var input = new TextInput(new Bindable<string>("", v => value = v)).Autocomplete(CitiesStarting);
+        ISuggestionHost host = input;
+        using var app = new RenderHarness(() => input.Width(200));
+        app.Frame();
+        FocusManager.RequestFocus(input);
+
+        app.Press(Key.B, character: 'b');
+        app.Press(Key.E, character: 'e');
+        app.Frame();
+        await Assert.That(host.Suggestions.IsOpen).IsTrue();
+        await Assert.That(string.Join(",", host.Suggestions.Items.Select(s => s.Text))).IsEqualTo("Berlin,Bern");
+
+        app.Press(Key.Down);
+        app.Press(Key.Down);
+        app.Press(Key.Enter);
+        await Assert.That(value).IsEqualTo("Bern");
+        await Assert.That(InputDispatcher.ActiveEditBuffer).IsEqualTo("Bern");
+        app.Frame();
+        await Assert.That(host.Suggestions.IsOpen).IsFalse();
+    }
+
+    [Test]
+    public async Task TextInputAutocomplete_EscapeHidesIt_AndAClickTakesARow()
+    {
+        string value = "";
+        var input = new TextInput(new Bindable<string>("", v => value = v)).Autocomplete(CitiesStarting);
+        ISuggestionHost host = input;
+        using var app = new RenderHarness(() => input.Width(200));
+        app.Frame();
+        FocusManager.RequestFocus(input);
+
+        app.Press(Key.A, character: 'a');
+        app.Frame();
+        app.Frame();
+        await Assert.That(host.Suggestions.IsOpen).IsTrue();
+        app.Press(Key.Escape);
+        app.Frame();
+        await Assert.That(host.Suggestions.IsOpen).IsFalse();
+
+        // Typing again brings it back; a click on the second row takes it.
+        app.Press(Key.T, character: 't');
+        app.Frame();
+        app.Frame();
+        var popup = host.Suggestions.PopupBounds;
+        await Assert.That(popup.Height).IsGreaterThan(0f);
+        app.Click(popup.X + 20, popup.Y + host.Suggestions.RowHeight * 0.5f);
+        await Assert.That(value).IsEqualTo("Athens");
+    }
+
+    [Test]
+    public async Task TextInputAutocomplete_AsyncAndTyped_SourcesWork()
+    {
+        var queries = new List<string>();
+        var input = new TextInput(new Bindable<string>("", _ => { }))
+            .Autocomplete<(string Name, int Id)>(q =>
+            {
+                queries.Add(q);
+                return Task.FromResult<IEnumerable<(string, int)>>([("Bern", 1), ("Berlin", 2)]);
+            }, item => new Label(item.Name), item => $"{item.Name} #{item.Id}");
+        ISuggestionHost host = input;
+        using var app = new RenderHarness(() => input.Width(200));
+        app.Frame();
+        FocusManager.RequestFocus(input);
+
+        app.Press(Key.B, character: 'b');
+        app.Frame();
+        await Task.Delay(260);
+        app.Frame();
+        app.Frame();
+        await Assert.That(string.Join(",", queries)).IsEqualTo("b");
+        await Assert.That(string.Join(",", host.Suggestions.Items.Select(s => s.Text))).IsEqualTo("Bern #1,Berlin #2");
+        await Assert.That(host.Suggestions.Items[0].Render is not null).IsTrue();
+    }
+
+    [Test]
+    public async Task TagInputSuggestions_OfferUnusedTags_AndEnterAddsOne()
+    {
+        IReadOnlyList<string> tags = ["Berlin"];
+        var input = new TagInput(new Bindable<IReadOnlyList<string>>(["Berlin"], v => tags = v)).Suggestions(CitiesStarting);
+        ISuggestionHost host = input;
+        using var app = new RenderHarness(() => input.Width(300));
+        app.Frame();
+        FocusManager.RequestFocus(input);
+
+        app.Press(Key.B, character: 'b');
+        app.Frame();
+        // Berlin is already a tag, so it isn't offered again.
+        await Assert.That(string.Join(",", host.Suggestions.Items.Select(s => s.Text))).IsEqualTo("Bern,Boston");
+
+        app.Press(Key.Down);
+        app.Press(Key.Enter);
+        await Assert.That(string.Join(",", tags)).IsEqualTo("Berlin,Bern");
+    }
+
     // Six buttons recording their index when clicked.
     private static ToolBarItem[] SixButtons(List<int> clicks) =>
         [.. Enumerable.Range(0, 6).Select(i => ToolBarItem.Button(Icons.Star, $"Item {i}", () => clicks.Add(i)))];

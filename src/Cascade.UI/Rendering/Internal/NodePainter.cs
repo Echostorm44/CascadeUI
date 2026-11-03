@@ -1952,6 +1952,7 @@ internal sealed partial class NodePainter
 
         // Set absolute bounds for mouse hit-testing in InputDispatcher
         ti.AbsoluteBounds = new Rect(absoluteX, absoluteY, bounds.Width, bounds.Height);
+        DeferSuggestionList(ti, bounds);
 
         // FocusManager.NotifyNodeReplaced transfers focus to the replacement
         // node during reconciliation, so a simple reference check suffices.
@@ -3937,6 +3938,7 @@ internal sealed partial class NodePainter
         bool focused = ti.IsFocused;
 
         ti.AbsoluteBounds = new Rect(absoluteX, absoluteY, bounds.Width, bounds.Height);
+        DeferSuggestionList(ti, bounds);
 
         // Background
         var bg = disabled ? t.DisabledBackground : t.Background;
@@ -8294,6 +8296,61 @@ internal sealed partial class NodePainter
         }
 
         PaintDropdownScrollbar(dropdownBounds, optionCount, visibleCount, scrollOffset, openT, t.TextColor);
+    }
+
+    /// <summary>Queues the focused field's suggestion list to draw below it, over everything else.</summary>
+    private void DeferSuggestionList(ISuggestionHost host, Rect fieldBounds)
+    {
+        var list = host.Suggestions;
+        if (!list.IsOpen)
+        {
+            list.PopupBounds = default;
+            return;
+        }
+        var anchor = new Rect(absoluteX, absoluteY, fieldBounds.Width, fieldBounds.Height);
+        deferredOverlays ??= [];
+        deferredOverlays.Add(() => PaintSuggestionList(list, anchor));
+        ControlStateAnimator.SignalActiveTransition();
+    }
+
+    private void PaintSuggestionList(Suggestions list, Rect field)
+    {
+        var t = theme.Select;
+        float rowHeight = t.ItemHeight;
+        var items = list.Items;
+        var bounds = new Rect(field.X, field.Bottom + 4f, field.Width, rowHeight * items.Count);
+        list.PopupBounds = bounds;
+        list.RowHeight = rowHeight;
+
+        if (t.DropdownShadow is not null)
+        {
+            PaintShadow(t.DropdownShadow, bounds, t.DropdownRadius);
+        }
+        ctx.DrawRect(bounds, t.DropdownBackground, radius: t.DropdownRadius);
+        if (t.BorderWidth > 0)
+        {
+            ctx.DrawRect(bounds, stroke: new Stroke(t.BorderColor, t.BorderWidth), radius: t.DropdownRadius);
+        }
+
+        using var clip = ctx.PushRoundedClip(bounds, t.DropdownRadius);
+        for (int i = 0; i < items.Count; i++)
+        {
+            var row = new Rect(bounds.X, bounds.Y + i * rowHeight, bounds.Width, rowHeight);
+            bool highlighted = i == list.Highlight;
+            if (highlighted)
+            {
+                ctx.DrawRect(row, t.ItemHoverBackground);
+            }
+            if (items[i].Render is { } render)
+            {
+                PaintOptionContent(render(), row, t.ItemPaddingH);
+            }
+            else
+            {
+                PaintText(items[i].Text, row, t.ItemPaddingH, highlighted ? theme.Colors.PrimaryText : t.TextColor,
+                    overflow: TextOverflow.Ellipsis);
+            }
+        }
     }
 
     private LayoutEngine? optionContentLayout;

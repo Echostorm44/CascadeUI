@@ -1538,6 +1538,19 @@ internal sealed partial class InputDispatcher
             }
         }
 
+        // A click on a row of the focused field's suggestion list accepts it.
+        if (evt.Button == NativeMouseButton.Left && FocusManager.FocusedElement is ISuggestionHost { Suggestions.IsOpen: true } clickedHost)
+        {
+            int row = clickedHost.Suggestions.RowAt(evt.X, evt.Y);
+            if (row >= 0)
+            {
+                AcceptSuggestion(clickedHost, clickedHost.Suggestions.Items[row]);
+                swallowNextMouseUp = true;
+                RequestRepaint?.Invoke();
+                return;
+            }
+        }
+
         // If a Select dropdown is open, check if the click is within it
         if (openSelect != null && evt.Button == NativeMouseButton.Left)
         {
@@ -3067,6 +3080,13 @@ internal sealed partial class InputDispatcher
             return;
         }
 
+        // An open suggestion list (autocomplete) takes Up/Down/Enter/Tab/Escape before the field (and before Escape clears focus).
+        if (evt.Type == NativeKeyEventType.KeyDown && FocusManager.FocusedElement is ISuggestionHost { Suggestions.IsOpen: true } suggestionHost
+            && HandleSuggestionKey(suggestionHost, evt))
+        {
+            RequestRepaint?.Invoke();
+            return;
+        }
         // Select dropdown keyboard navigation (intercepts before normal key handling)
         if (openSelect != null)
         {
@@ -3226,6 +3246,7 @@ internal sealed partial class InputDispatcher
                 return;
             }
         }
+
 
         // TextInput character input — route typed characters, backspace, delete
         if (focusedNode is TextInput textInput && !textInput.IsDisabled && !textInput.IsReadOnly)
@@ -6667,6 +6688,55 @@ internal sealed partial class InputDispatcher
         }
         pendingChangeHandler = null;
         handler(pendingChangeValue);
+    }
+
+    /// <summary>
+    /// Keys for an open suggestion list: Up/Down move the highlight, Enter or Tab accepts the highlighted
+    /// suggestion (with none highlighted they go to the field as usual), Escape puts the list away.
+    /// </summary>
+    private bool HandleSuggestionKey(ISuggestionHost host, NativeKeyEvent evt)
+    {
+        var list = host.Suggestions;
+        switch (evt.Key)
+        {
+            case Key.Down:
+                list.Move(1);
+                return true;
+            case Key.Up:
+                list.Move(-1);
+                return true;
+            case Key.Enter or Key.Tab when list.Highlight >= 0 && list.Highlight < list.Items.Count && evt.Modifiers == ModifierKeys.None:
+                AcceptSuggestion(host, list.Items[list.Highlight]);
+                return true;
+            case Key.Escape:
+                list.Dismiss();
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Puts a suggestion in its field: a TextInput's text becomes it (caret at the end, OnChange
+    /// raised); a TagInput adds it as a tag.
+    /// </summary>
+    private void AcceptSuggestion(ISuggestionHost host, SuggestionItem item)
+    {
+        switch (host)
+        {
+            case TextInput input:
+                textInputBuffer = item.Text;
+                ActiveEditBuffer = item.Text;
+                TextInputCaretIndex = item.Text.Length;
+                TextInputSelectionAnchor = TextInputCaretIndex;
+                input.Value.OnChange(item.Text);
+                RaiseOnChange(input.OnChangeHandler, input.DebounceDelay, item.Text);
+                break;
+            case TagInput tags:
+                tags.AddTag(item.Text);
+                break;
+        }
+        host.Suggestions.Dismiss();
     }
 
     /// <summary>Arrow keys move a focused toggle group's selection to the previous or next option.</summary>

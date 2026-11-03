@@ -5,7 +5,7 @@ namespace Cascade.UI;
 /// the text editing engine with support for masking, validation, prefix/suffix
 /// slots, and autocomplete.
 /// </summary>
-public sealed class TextInput : Node, IValidatable
+public sealed class TextInput : Node, IValidatable, ISuggestionHost, IPumpedNode
 {
     /// <summary>
     /// Creates a text input bound to a string field via two-way binding.
@@ -76,6 +76,32 @@ public sealed class TextInput : Node, IValidatable
     internal Func<string, Task<IEnumerable<string>>>? AutocompleteAsyncSource { get; set; }
     internal ITypedAutocomplete? TypedAutocompleteSource { get; set; }
 
+    // ── Autocomplete (see Suggestions) ──
+    private Suggestions suggestions = new();
+    Suggestions ISuggestionHost.Suggestions => suggestions;
+    bool ISuggestionHost.HasSuggestionSource => AutocompleteSyncSource is not null || AutocompleteAsyncSource is not null || TypedAutocompleteSource is not null;
+    string ISuggestionHost.SuggestionQuery =>
+        ReferenceEquals(FocusManager.FocusedElement, this) && InputDispatcher.ActiveEditBuffer is { } editing ? editing : Value.Value ?? "";
+    IEnumerable<SuggestionItem>? ISuggestionHost.SuggestSync(string query) =>
+        AutocompleteSyncSource is { } sync ? (sync(query) ?? []).Select(text => new SuggestionItem(text)) : null;
+    Task<IEnumerable<SuggestionItem>>? ISuggestionHost.SuggestAsync(string query) =>
+        TypedAutocompleteSource is { } typed ? typed.Search(query)
+        : AutocompleteAsyncSource is { } source ? MapAsync(source(query))
+        : null;
+
+    private static async Task<IEnumerable<SuggestionItem>> MapAsync(Task<IEnumerable<string>> texts) =>
+        [.. ((await texts.ConfigureAwait(false)) ?? []).Select(text => new SuggestionItem(text))];
+
+    void IPumpedNode.Pump() => suggestions.Update(this, ReferenceEquals(FocusManager.FocusedElement, this));
+
+    void IPumpedNode.AdoptFrom(Node previous)
+    {
+        if (previous is TextInput old)
+        {
+            suggestions = old.suggestions;
+        }
+    }
+
     /// <summary>
     /// Runs all registered validation rules against the current value.
     /// Returns the first failing result or <see cref="ValidationResult.Ok"/>.
@@ -102,6 +128,8 @@ public sealed class TextInput : Node, IValidatable
 /// </summary>
 internal interface ITypedAutocomplete
 {
+    /// <summary>The source's results for <paramref name="query"/> as suggestions (each drawn by the app's renderer).</summary>
+    Task<IEnumerable<SuggestionItem>> Search(string query);
 }
 
 /// <summary>
@@ -122,6 +150,12 @@ internal sealed class TypedAutocomplete<T> : ITypedAutocomplete
     internal Func<string, Task<IEnumerable<T>>> Source { get; }
     internal Func<T, Node> Render { get; }
     internal Func<T, string> Select { get; }
+
+    public async Task<IEnumerable<SuggestionItem>> Search(string query)
+    {
+        var results = await Source(query).ConfigureAwait(false);
+        return [.. (results ?? []).Select(item => new SuggestionItem(Select(item), () => Render(item)))];
+    }
 }
 
 /// <summary>

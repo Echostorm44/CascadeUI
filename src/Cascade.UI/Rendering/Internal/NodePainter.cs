@@ -985,6 +985,14 @@ internal sealed partial class NodePainter
                 PaintRecursive(md.Tree);
                 break;
 
+            case NavigationBar navBar:
+                PaintNavigationBar(navBar, bounds);
+                break;
+
+            case NavItem navItem:
+                PaintNavItem(navItem, bounds);
+                break;
+
             case MarkdownText mdText:
                 PaintMarkdownText(mdText, bounds);
                 break;
@@ -4557,6 +4565,81 @@ internal sealed partial class NodePainter
 
             y += itemHeight;
         }
+    }
+
+    // ── NavigationBar ─────────────────────────────────────────────────
+
+    /// <summary>The bar's background (solid, frosted, none or a brush), its edge, then what it shows.</summary>
+    private void PaintNavigationBar(NavigationBar nb, Rect bounds)
+    {
+        var t = theme.NavBar;
+        var background = nb.Background;
+        if (ReferenceEquals(background, NavBarBackground.Solid))
+        {
+            ctx.DrawRect(bounds, t.Background);
+        }
+        else if (ReferenceEquals(background, NavBarBackground.Blur))
+        {
+            ctx.DrawBackdropBlur(bounds, t.Background.Opacity(t.BackgroundOpacity > 0f ? t.BackgroundOpacity : 0.7f), 0f, t.BlurRadius > 0f ? t.BlurRadius : 12f);
+        }
+        else if (background.CustomBrush is { } brush)
+        {
+            PaintBrush(brush, bounds, 0f);
+        }
+
+        // A sidebar or rail has an edge where the page begins.
+        if (nb.Mode == NavBarMode.SectionSwitching && nb.Style is NavBarStyle.Sidebar or NavBarStyle.Rail)
+        {
+            ctx.DrawRect(new Rect(bounds.Right - 1f, bounds.Y, 1f, bounds.Height), t.Border);
+        }
+        PaintRecursive(nb.Tree);
+    }
+
+    /// <summary>A section item: its highlight when active or hovered, the style's indicator, its focus ring, then its content.</summary>
+    private void PaintNavItem(NavItem item, Rect bounds)
+    {
+        var t = theme.NavBar;
+        using var fade = item.Enabled ? default : ctx.PushOpacity(0.45f);
+        bool hovered = item.IsHovered && item.Enabled && !item.IsActive;
+        switch (item.BarStyle)
+        {
+            case NavBarStyle.Top:
+                if (hovered)
+                {
+                    ctx.DrawRect(new Rect(bounds.X, bounds.Y + 6f, bounds.Width, bounds.Height - 12f), t.ItemHoverBg, radius: t.ItemRadius);
+                }
+                if (item.IsActive)
+                {
+                    ctx.DrawRect(new Rect(bounds.X + 8f, bounds.Bottom - 3f, Math.Max(0f, bounds.Width - 16f), 3f), t.IndicatorColor, radius: t.IndicatorRadius);
+                }
+                break;
+            case NavBarStyle.Bottom:
+                if (item.IsActive || hovered)
+                {
+                    float w = Math.Min(64f, bounds.Width - 8f);
+                    ctx.DrawRect(new Rect(bounds.X + (bounds.Width - w) / 2f, bounds.Y + 6f, w, 30f), item.IsActive ? t.ItemActiveBg : t.ItemHoverBg, radius: 15f);
+                }
+                break;
+            default:
+                if (item.IsActive)
+                {
+                    ctx.DrawRect(bounds, t.ItemActiveBg, radius: t.ItemRadius);
+                    if (t.IndicatorWidth > 0f)
+                    {
+                        ctx.DrawRect(new Rect(bounds.X, bounds.Y + bounds.Height * 0.25f, t.IndicatorWidth, bounds.Height * 0.5f), t.IndicatorColor, radius: t.IndicatorRadius);
+                    }
+                }
+                else if (hovered)
+                {
+                    ctx.DrawRect(bounds, t.ItemHoverBg, radius: t.ItemRadius);
+                }
+                break;
+        }
+        if (ReferenceEquals(FocusManager.FocusedElement, item) && FocusManager.LastFocusWasKeyboard)
+        {
+            ctx.DrawRect(new Rect(bounds.X + 1f, bounds.Y + 1f, bounds.Width - 2f, bounds.Height - 2f), stroke: new Stroke(theme.Colors.Focus, 2f), radius: t.ItemRadius);
+        }
+        PaintRecursive(item.Content);
     }
 
     // ── Markdown ──────────────────────────────────────────────────────

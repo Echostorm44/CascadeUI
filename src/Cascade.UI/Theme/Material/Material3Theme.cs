@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 
 namespace Cascade.UI;
 
@@ -556,6 +556,19 @@ public class Material3Theme : CascadeTheme
     protected override NavBarTheme CreateNavBar() => new()
     {
         // M3 TopAppBar: tonal surface, 64dp
+        // Section switching (sidebar, rail, bottom and top bars). Without these the items and
+        // their highlights were transparent: nothing ever drew a section bar to show it.
+        Border          = Colors.Border,
+        ItemHoverBg     = Colors.SurfaceAlt,
+        ItemActiveBg    = Colors.Primary.Opacity(0.16f),
+        ItemActiveText  = Colors.Primary,
+        ItemText        = Colors.TextMuted,
+        ItemIcon        = Colors.TextMuted,
+        ItemActiveIcon  = Colors.Primary,
+        ItemTextStyle   = Typography.Body,
+        ItemRadius      = 24,
+        IndicatorColor  = Colors.Primary,
+        IndicatorWidth  = 0,
         Height            = 64,
         Background        = Colors.Surface,
         BackgroundOpacity = 1.0f,

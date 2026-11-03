@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 
 namespace Cascade.UI;
 
@@ -583,6 +583,19 @@ public class FluentTheme : CascadeTheme
     protected override NavBarTheme CreateNavBar() => new()
     {
         // Fluent nav bar: flat, borderless. Mica sits behind the entire window chrome.
+        // Section switching (sidebar, rail, bottom and top bars). Without these the items and
+        // their highlights were transparent: nothing ever drew a section bar to show it.
+        Border          = Colors.Border,
+        ItemHoverBg     = Colors.SurfaceAlt,
+        ItemActiveBg    = Colors.SurfaceAlt,
+        ItemActiveText  = Colors.Primary,
+        ItemText        = Colors.Text,
+        ItemIcon        = Colors.TextMuted,
+        ItemActiveIcon  = Colors.Primary,
+        ItemTextStyle   = Typography.Body,
+        ItemRadius      = 4,
+        IndicatorColor  = Colors.Primary,
+        IndicatorWidth  = 3,
         Height            = 48,
         Background        = Colors.Surface,
         BackgroundOpacity = 1.0f,

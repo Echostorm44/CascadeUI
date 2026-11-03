@@ -28,7 +28,7 @@ namespace Cascade.UI;
 /// </code>
 /// </para>
 /// </remarks>
-public class NavigationBar : Node
+public class NavigationBar : Node, IPumpedNode
 {
     // ── Title-bar mode constructor ───────────────────────────────────
 
@@ -182,6 +182,143 @@ public class NavigationBar : Node
         ShowCollapseButton = true;
         CollapseButtonPos = position;
         return this;
+    }
+
+    /// <summary>
+    /// Connects a <see cref="NavigationBarRef"/>, through which the app can open and close the
+    /// search field (<see cref="NavigationBarRef.ExpandSearch"/>).
+    /// </summary>
+    public NavigationBar SearchRef(NavigationBarRef reference)
+    {
+        ArgumentNullException.ThrowIfNull(reference);
+        SearchReference = reference;
+        return this;
+    }
+
+    // ── What it shows (built from ordinary nodes; see NavigationBarBuilder) ──
+
+    private Node? tree;
+    private (string? Active, bool Collapsed, bool Search, CascadeTheme Theme)? builtFor;
+    private bool collapsedLocal;
+    private bool searchExpandedLocal;
+    private string? activeLocal;
+    private string? lastBoundActive;
+    private bool? lastBoundCollapsed;
+
+    internal NavigationBarRef? SearchReference { get; set; }
+
+    /// <summary>The text in the search field.</summary>
+    internal string SearchText { get; set; } = string.Empty;
+
+    internal bool IsSearchExpanded => SearchReference?.IsSearchExpanded ?? searchExpandedLocal;
+
+    internal void SetSearchExpanded(bool expanded)
+    {
+        if (SearchReference is { } reference)
+        {
+            if (expanded)
+            {
+                reference.ExpandSearch();
+            }
+            else
+            {
+                reference.CollapseSearch();
+            }
+        }
+        searchExpandedLocal = expanded;
+        if (!expanded && SearchText.Length > 0)
+        {
+            SearchText = string.Empty;
+            Search?.OnChanged?.Invoke(string.Empty);
+        }
+    }
+
+    /// <summary>The active section: the bound one, or the one last clicked when the app has not re-rendered yet.</summary>
+    internal string? ActiveId
+    {
+        get
+        {
+            string? bound = Active?.Value;
+            if (bound != lastBoundActive)
+            {
+                lastBoundActive = bound;
+                activeLocal = null; // the app moved it
+            }
+            return activeLocal ?? bound;
+        }
+    }
+
+    /// <summary>Whether the sidebar is collapsed now (the binding, or its own state without one).</summary>
+    internal bool IsCollapsedNow
+    {
+        get
+        {
+            if (!IsCollapsible)
+            {
+                return false;
+            }
+            if (Collapsed is { } bound)
+            {
+                if (bound.Value != lastBoundCollapsed)
+                {
+                    lastBoundCollapsed = bound.Value;
+                    collapsedLocal = bound.Value;
+                }
+            }
+            return collapsedLocal;
+        }
+    }
+
+    internal void ToggleCollapsed()
+    {
+        bool next = !IsCollapsedNow;
+        collapsedLocal = next;
+        Collapsed?.OnChange?.Invoke(next);
+    }
+
+    /// <summary>A section chosen (clicked, or Enter on it).</summary>
+    internal void Activate(NavItem item)
+    {
+        if (!item.Enabled)
+        {
+            return;
+        }
+        activeLocal = item.Id;
+        Active?.OnChange?.Invoke(item.Id);
+    }
+
+    /// <summary>The node tree the bar is drawn as, rebuilt when what it shows changes.</summary>
+    internal Node Tree
+    {
+        get
+        {
+            var theme = ThemeSwitcher.Current;
+            var key = (ActiveId, IsCollapsedNow, IsSearchExpanded, theme);
+            if (tree is null || builtFor != key)
+            {
+                builtFor = key;
+                tree = NavigationBarBuilder.Build(this, theme);
+            }
+            return tree;
+        }
+    }
+
+    void IPumpedNode.Pump()
+    {
+    }
+
+    void IPumpedNode.AdoptFrom(Node previous)
+    {
+        if (previous is not NavigationBar old || ReferenceEquals(old, this))
+        {
+            return;
+        }
+        collapsedLocal = old.collapsedLocal;
+        lastBoundCollapsed = old.lastBoundCollapsed;
+        searchExpandedLocal = old.searchExpandedLocal;
+        SearchText = old.SearchText;
+        activeLocal = old.activeLocal;
+        lastBoundActive = old.lastBoundActive;
     }
 }
 

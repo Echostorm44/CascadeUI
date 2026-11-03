@@ -47,6 +47,20 @@ public class NavItem : Node
 
     /// <summary>Whether this item is enabled.</summary>
     public bool Enabled { get; }
+
+    // ── Set by the NavigationBar that shows it ───────────────────────
+
+    /// <summary>The bar this item is in (clicking or Enter makes it the active section).</summary>
+    internal NavigationBar? Owner { get; set; }
+
+    /// <summary>The item's icon, label and badge as laid out for the bar's style.</summary>
+    internal Node Content { get; set; } = Node.Empty;
+
+    internal bool IsActive { get; set; }
+    internal NavBarStyle BarStyle { get; set; }
+
+    /// <summary>Shown icon-only (a collapsed sidebar).</summary>
+    internal bool Compact { get; set; }
 }
 
 /// <summary>

@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 
 namespace Cascade.UI;
 
@@ -583,7 +583,19 @@ public class AppleTheme : CascadeTheme
 
         ActionStyle = Typography.Body,
         ActionColor = Colors.Primary,
-
+        // Section switching (sidebar, rail, bottom and top bars). Without these the items and
+        // their highlights were transparent: nothing ever drew a section bar to show it.
+        Border          = Colors.Border,
+        ItemHoverBg     = Colors.SurfaceAlt,
+        ItemActiveBg    = Colors.Primary.Opacity(0.15f),
+        ItemActiveText  = Colors.Primary,
+        ItemText        = Colors.Text,
+        ItemIcon        = Colors.TextMuted,
+        ItemActiveIcon  = Colors.Primary,
+        ItemTextStyle   = Typography.Body,
+        ItemRadius      = 6,
+        IndicatorColor  = Colors.Primary,
+        IndicatorWidth  = 0,
         Transition = Motion.Default,
     };
 

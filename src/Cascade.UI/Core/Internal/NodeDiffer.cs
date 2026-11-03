@@ -205,6 +205,8 @@ internal static class NodeDiffer
             IToggleGroup tg => SegmentLayout.ToggleOptionNodes(tg),
             ToolBar tb => tb.CustomNodes,
             Markdown md => [md.Tree],
+            NavigationBar navBar => [navBar.Tree],
+            NavItem navItem => [navItem.Content],
             Image picture when !picture.PlaceholderNode.IsLayoutEmpty || !picture.ErrorNode.IsLayoutEmpty => Adornments(picture.PlaceholderNode, picture.ErrorNode),
             QrCode { HasLogo: true, LogoNode.IsLayoutEmpty: false } qrLogo => [qrLogo.LogoNode],
             TextInput adorned when !adorned.PrefixNode.IsLayoutEmpty || !adorned.SuffixNode.IsLayoutEmpty => Adornments(adorned.PrefixNode, adorned.SuffixNode),

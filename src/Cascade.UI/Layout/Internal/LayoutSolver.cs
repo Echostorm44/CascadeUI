@@ -432,6 +432,8 @@ internal static class LayoutSolver
             MentionInput mi => MeasureMentionInput(mi, constraints),
 
             Markdown md => MeasureMarkdown(md, constraints),
+            NavigationBar navBar => MeasureWrapped(navBar.Tree, constraints),
+            NavItem navItem => MeasureWrapped(navItem.Content, constraints),
             MarkdownText mdText => MeasureMarkdownText(mdText, constraints),
 
             CommandPalette => new Size(0, 0),
@@ -1245,6 +1247,14 @@ internal static class LayoutSolver
         var tree = md.Tree;
         var size = MeasureChild(tree, constraints);
         PositionChild(tree, 0, 0);
+        return size;
+    }
+
+    // A node drawn as a tree it builds: as big as that tree, which sits at its origin.
+    private static Size MeasureWrapped(Node content, LayoutConstraints constraints)
+    {
+        var size = MeasureChild(content, constraints);
+        PositionChild(content, 0, 0);
         return size;
     }
 

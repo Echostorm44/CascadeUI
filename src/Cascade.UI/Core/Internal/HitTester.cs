@@ -329,6 +329,7 @@ internal static class HitTester
                SplitView or
                Image { ZoomPanEnabled: true } or
                MarkdownText { HasLinks: true } or
+               NavItem { Enabled: true } or
                Expander or
                ISegmentedControl or
                IToggleGroup or
@@ -385,6 +386,8 @@ internal static class HitTester
             IListViewNode lvn   => lvn.GetContentNode(),
             ITreeView tv        => tv.GetContentNode(),
             Markdown md         => md.Tree,
+            NavigationBar navBar => navBar.Tree,
+            NavItem navItem     => navItem.Content,
             _ => null
         };
     }

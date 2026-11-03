@@ -3309,6 +3309,13 @@ internal sealed partial class InputDispatcher
             return;
         }
 
+        if (evt.Type == NativeKeyEventType.KeyDown && FocusManager.FocusedElement is NavItem { Owner: { } navOwner } focusedNav
+            && evt.Modifiers == ModifierKeys.None && HandleNavItemKey(navOwner, focusedNav, evt))
+        {
+            RequestRepaint?.Invoke();
+            return;
+        }
+
         if (activeEyeDropper is { } dropping && evt.Key == Key.Escape)
         {
             FinishEyeDropper(dropping, take: false);
@@ -5424,6 +5431,15 @@ internal sealed partial class InputDispatcher
 
             // Calendar is handled in HandleMouseDown (viewport→document coord conversion needed)
 
+            case NavItem { Enabled: true } navItem:
+                navItem.Owner?.Activate(navItem);
+                if (rootNode is not null)
+                {
+                    MarkScrollViewLayersDirty(rootNode, navItem);
+                }
+                RequestRepaint?.Invoke();
+                return;
+
             case MarkdownText mdText when MarkdownLinkAt(mdText, lastMousePosition.X, lastMousePosition.Y) is { } link:
                 mdText.Owner?.ActivateLink(link);
                 RequestRepaint?.Invoke();
@@ -5457,7 +5473,7 @@ internal sealed partial class InputDispatcher
             or Accordion or MenuBar or StatusBar
             or ProgressBar or ProgressRing or Gauge or Spinner
             or NotificationBell or CommandPalette or KeyHandler
-            or ScrollView or MarkdownText;
+            or ScrollView or MarkdownText or NavItem;
     }
 
     /// <summary>
@@ -7655,6 +7671,50 @@ internal sealed partial class InputDispatcher
 
     // ── Calendar (full inline) helpers ────────────────────────────────
 
+    // ── NavigationBar ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Keys on a focused section item: Enter or Space makes it active; the arrows along the bar
+    /// (Up/Down in a sidebar or rail, Left/Right in a top or bottom bar) move to the next enabled
+    /// item, wrapping, and Home/End to the first and last.
+    /// </summary>
+    private bool HandleNavItemKey(NavigationBar bar, NavItem item, NativeKeyEvent evt)
+    {
+        if (evt.Key is Key.Enter or Key.Space)
+        {
+            bar.Activate(item);
+            if (rootNode is not null)
+            {
+                MarkScrollViewLayersDirty(rootNode, item);
+            }
+            return true;
+        }
+        bool vertical = item.BarStyle is NavBarStyle.Sidebar or NavBarStyle.Rail;
+        var enabled = bar.Items.Where(i => i.Enabled).ToList();
+        int at = enabled.IndexOf(item);
+        if (at < 0 || enabled.Count == 0)
+        {
+            return false;
+        }
+        int next = evt.Key switch
+        {
+            Key.Up when vertical => (at - 1 + enabled.Count) % enabled.Count,
+            Key.Down when vertical => (at + 1) % enabled.Count,
+            Key.Left when !vertical => (at - 1 + enabled.Count) % enabled.Count,
+            Key.Right when !vertical => (at + 1) % enabled.Count,
+            Key.Home => 0,
+            Key.End => enabled.Count - 1,
+            _ => -1,
+        };
+        if (next < 0)
+        {
+            return false;
+        }
+        FocusManager.RequestFocus(enabled[next]);
+        FocusManager.LastFocusWasKeyboard = true;
+        return true;
+    }
+
     // ── Calendar ──────────────────────────────────────────────────────
 
     // The calendar's arrangement and a window point in its coordinates, from where layout put it.
@@ -9131,7 +9191,7 @@ internal sealed partial class InputDispatcher
     private static bool IsFocusableControl(Node node) =>
         node is Button or LinkButton or IconButton
             or TextInput or TextArea or PasswordInput or PinInput
-            or MentionInput or TagInput or ColorPicker or Calendar or TimePicker
+            or MentionInput or TagInput or ColorPicker or Calendar or TimePicker or NavItem { Enabled: true }
             or Checkbox or Toggle or Slider or HotkeyPicker or TabBar
             or ISelectNode or IMultiSelectNode or IComboboxNode
             or IToggleGroup or ISegmentedControl

@@ -524,6 +524,7 @@ internal static class NodeTreeWalker
 
             if (ancestor is ScrollView sv && !ReferenceEquals(ancestor, target))
             {
+                absX -= sv.OffsetX;
                 absY -= sv.OffsetY;
             }
         }

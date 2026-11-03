@@ -1231,6 +1231,8 @@ internal sealed partial class NodePainter
         float scrollY = sv.OffsetY;
         float maxScrollY = sv.MaxY;
         float contentHeight = bounds.Height + maxScrollY;
+        float scrollX = sv.OffsetX;
+        float contentWidth = bounds.Width + sv.MaxX;
 
         // If any descendant has active state-transition animations (hover, press,
         // check, toggle, etc.), we cannot composite the cached layer because the
@@ -1291,7 +1293,7 @@ internal sealed partial class NodePainter
             sv.IsLayerDirty
             || sv.LayerHandle == null
             || themeChanged
-            || Math.Abs(sv.LayerWidth - bounds.Width) > 0.5f
+            || Math.Abs(sv.LayerWidth - contentWidth) > 0.5f
             || Math.Abs(sv.LayerHeight - contentHeight) > 0.5f);
 
         if (needsRecapture)
@@ -1307,10 +1309,11 @@ internal sealed partial class NodePainter
             // Capture the full scrollable content into a retained layer texture.
             // Content is painted at origin (no scroll offset) so the texture can be
             // reused across scroll frames — only the UV offset changes during compositing.
-            using (ctx.PushLayerTexture(sv.LayerHandle.Value, bounds.Width, contentHeight))
+            using (ctx.PushLayerTexture(sv.LayerHandle.Value, contentWidth, contentHeight))
             {
                 // Adjust absoluteY as if scrollY = 0, matching the original PushTranslate behavior.
                 absoluteY -= scrollY;
+                absoluteX -= scrollX;
                 float prevScrollOffset = activeScrollOffsetY;
                 // Keep the scroll offset in scope so animation-identity hashes
                 // (separator/gauge/timeline/tree entrance) resolve to the same
@@ -1336,11 +1339,12 @@ internal sealed partial class NodePainter
                 currentViewportBottom = prevViewportBottom;
                 activeScrollOffsetY = prevScrollOffset;
                 absoluteY += scrollY;
+                absoluteX += scrollX;
             }
 
             // sv.LayerHandle was allocated above and is reused across recaptures —
             // no need to read it back from the backend.
-            sv.LayerWidth = bounds.Width;
+            sv.LayerWidth = contentWidth;
             sv.LayerHeight = contentHeight;
             sv.CapturedThemeVersion = ThemeSwitcher.Version;
             sv.CapturedFocusedEditable = hasFocusedEditable;
@@ -1354,15 +1358,16 @@ internal sealed partial class NodePainter
         if (sv.LayerHandle.HasValue && !hasActiveAnimations && !hasOpenPopups && !hasContinuousAnimation)
         {
             using var clip = ctx.PushClip(new Rect(0, 0, bounds.Width, bounds.Height));
-            ctx.DrawLayerTexture(sv.LayerHandle.Value, 0, -scrollY);
+            ctx.DrawLayerTexture(sv.LayerHandle.Value, -scrollX, -scrollY);
         }
         else
         {
             // Fallback if layer handle is not available (non-Etch backend or error),
             // or if active animations require direct painting.
             using var clip = ctx.PushClip(new Rect(0, 0, bounds.Width, bounds.Height));
-            using var translate = ctx.PushTranslate(0, -scrollY);
+            using var translate = ctx.PushTranslate(-scrollX, -scrollY);
             absoluteY -= scrollY;
+            absoluteX -= scrollX;
             float prevScrollOffset = activeScrollOffsetY;
             activeScrollOffsetY = scrollY;
 
@@ -1379,41 +1384,77 @@ internal sealed partial class NodePainter
             currentViewportBottom = prevViewportBottom;
             activeScrollOffsetY = prevScrollOffset;
             absoluteY += scrollY;
+            absoluteX += scrollX;
         }
 
-        // Paint scrollbar overlay (fixed to viewport, does not scroll with content)
-        if (maxScrollY > 0)
+        PaintScrollViewScrollbars(sv, bounds, contentWidth, contentHeight);
+    }
+
+    /// <summary>
+    /// The scrollbars, fixed to the viewport (.Scrollbar): Platform and Track show a track and thumb
+    /// whenever there is more to see; Overlay shows a thin thumb only while scrolling (or the pointer is
+    /// over it), fading out after; Hidden shows none (the view still scrolls).
+    /// </summary>
+    private void PaintScrollViewScrollbars(ScrollView sv, Rect bounds, float contentWidth, float contentHeight)
+    {
+        const float barWidth = 6f;
+        const float margin = 2f;
+        const float pad = 4f;
+        var mode = sv.ScrollbarMode;
+
+        float opacity = 1f;
+        if (mode == ScrollbarMode.Overlay)
         {
-            const float scrollbarWidth = 6f;
-            const float scrollbarMargin = 2f;
-            const float scrollbarPadV = 4f;
-            float scrollbarX = bounds.Width - scrollbarWidth - scrollbarMargin;
-            float trackHeight = bounds.Height - scrollbarPadV * 2;
+            // Visible while scrolling and for 0.8 s after, then fading over 0.3 s; full while hovered.
+            double idle = sv.Control.LastMoveTimestamp == 0 ? double.MaxValue : Stopwatch.GetElapsedTime(sv.Control.LastMoveTimestamp).TotalSeconds;
+            opacity = sv.IsHovered ? 1f : (float)Math.Clamp(1.0 - (idle - 0.8) / 0.3, 0.0, 1.0);
+            if (opacity > 0f && opacity < 1f)
+            {
+                ControlStateAnimator.SignalActiveTransition();
+            }
+        }
+        bool visible = mode != ScrollbarMode.Hidden && opacity > 0.001f;
+        bool showTrack = mode is ScrollbarMode.Platform or ScrollbarMode.Track;
+        bool both = sv.MaxY > 0 && sv.MaxX > 0;
 
-            float thumbRatio = bounds.Height / contentHeight;
-            float thumbHeight = Math.Max(24f, trackHeight * thumbRatio);
-            float trackRange = trackHeight - thumbHeight;
-            float thumbY = scrollbarPadV + (scrollY / maxScrollY) * trackRange;
-
-            // Track (subtle)
-            var trackBounds = new Rect(scrollbarX, scrollbarPadV, scrollbarWidth, trackHeight);
-            ctx.DrawRect(trackBounds, theme.Colors.Border.Opacity(0.15f), radius: 3f);
-
-            // Thumb
-            var thumbBounds = new Rect(scrollbarX, thumbY, scrollbarWidth, thumbHeight);
-            ctx.DrawRect(thumbBounds, theme.Colors.Text.Opacity(0.35f), radius: 3f);
-
-            // Store scrollbar geometry on the ScrollView instance for drag support
-            sv.ScrollbarTrackBounds = new Rect(
-                absoluteX + bounds.X + scrollbarX - scrollbarMargin,
-                absoluteY + bounds.Y + scrollbarPadV,
-                scrollbarWidth + scrollbarMargin * 2,
-                trackHeight);
+        // Down the right edge.
+        if (sv.MaxY > 0 && visible)
+        {
+            float x = bounds.Width - barWidth - margin;
+            float trackHeight = bounds.Height - pad * 2 - (both ? barWidth + margin : 0f);
+            float thumbHeight = Math.Max(24f, trackHeight * (bounds.Height / contentHeight));
+            float thumbY = pad + (sv.OffsetY / sv.MaxY) * (trackHeight - thumbHeight);
+            if (showTrack)
+            {
+                ctx.DrawRect(new Rect(x, pad, barWidth, trackHeight), theme.Colors.Border.Opacity(0.15f * opacity), radius: 3f);
+            }
+            ctx.DrawRect(new Rect(x, thumbY, barWidth, thumbHeight), theme.Colors.Text.Opacity(0.35f * opacity), radius: 3f);
+            sv.ScrollbarTrackBounds = new Rect(absoluteX + bounds.X + x - margin, absoluteY + bounds.Y + pad, barWidth + margin * 2, trackHeight);
             sv.ScrollbarThumbHeight = thumbHeight;
         }
         else
         {
             sv.ScrollbarTrackBounds = default;
+        }
+
+        // Along the bottom edge.
+        if (sv.MaxX > 0 && visible)
+        {
+            float y = bounds.Height - barWidth - margin;
+            float trackWidth = bounds.Width - pad * 2 - (both ? barWidth + margin : 0f);
+            float thumbWidth = Math.Max(24f, trackWidth * (bounds.Width / contentWidth));
+            float thumbX = pad + (sv.OffsetX / sv.MaxX) * (trackWidth - thumbWidth);
+            if (showTrack)
+            {
+                ctx.DrawRect(new Rect(pad, y, trackWidth, barWidth), theme.Colors.Border.Opacity(0.15f * opacity), radius: 3f);
+            }
+            ctx.DrawRect(new Rect(thumbX, y, thumbWidth, barWidth), theme.Colors.Text.Opacity(0.35f * opacity), radius: 3f);
+            sv.HorizontalScrollbarTrackBounds = new Rect(absoluteX + bounds.X + pad, absoluteY + bounds.Y + y - margin, trackWidth, barWidth + margin * 2);
+            sv.HorizontalScrollbarThumbWidth = thumbWidth;
+        }
+        else
+        {
+            sv.HorizontalScrollbarTrackBounds = default;
         }
     }
 

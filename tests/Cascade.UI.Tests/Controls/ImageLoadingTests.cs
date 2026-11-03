@@ -158,10 +158,25 @@ public class ImageLoadingTests
     {
         // A one-shot local server handing out a 12×6 PNG.
         byte[] png = await File.ReadAllBytesAsync(SolidPng(TempDir(), 12, 6, 0, 0, 255));
-        int port = System.Security.Cryptography.RandomNumberGenerator.GetInt32(49152, 65000);
-        using var listener = new System.Net.HttpListener();
-        listener.Prefixes.Add($"http://localhost:{port}/");
-        listener.Start();
+        // A free port: a random one can be taken (other tests open sockets too), so try a few.
+        System.Net.HttpListener? started = null;
+        int port = 0;
+        for (int attempt = 0; attempt < 10 && started is null; attempt++)
+        {
+            port = System.Security.Cryptography.RandomNumberGenerator.GetInt32(49152, 65000);
+            var candidate = new System.Net.HttpListener();
+            candidate.Prefixes.Add($"http://localhost:{port}/");
+            try
+            {
+                candidate.Start();
+                started = candidate;
+            }
+            catch (System.Net.HttpListenerException)
+            {
+                candidate.Close();
+            }
+        }
+        using var listener = started ?? throw new InvalidOperationException("No free port for the test server.");
         _ = Task.Run(async () =>
         {
             var context = await listener.GetContextAsync();

@@ -139,19 +139,14 @@ internal sealed class Reconciler
         // re-render reads as the same slot (data change) rather than a fresh entrance.
         ChartAnimationTracker.TransferState(from, to);
 
-        // Preserve scroll position and layer state across re-renders
+        // A ScrollView's position, layer and event state live in its control, which the new node
+        // took over above (IPumpedNode.AdoptFrom); the scrollbar geometry is per node.
         if (from is ScrollView oldSv && to is ScrollView newSv)
         {
-            newSv.OffsetY = oldSv.OffsetY;
-            newSv.MaxY = oldSv.MaxY;
             newSv.ScrollbarTrackBounds = oldSv.ScrollbarTrackBounds;
             newSv.ScrollbarThumbHeight = oldSv.ScrollbarThumbHeight;
-            newSv.Control.IsLayerDirty = oldSv.Control.IsLayerDirty;
-            newSv.Control.LayerHandle = oldSv.Control.LayerHandle;
-            newSv.Control.LayerWidth = oldSv.Control.LayerWidth;
-            newSv.Control.LayerHeight = oldSv.Control.LayerHeight;
-            newSv.Control.CapturedThemeVersion = oldSv.Control.CapturedThemeVersion;
-            newSv.Control.CapturedFocusedEditable = oldSv.Control.CapturedFocusedEditable;
+            newSv.HorizontalScrollbarTrackBounds = oldSv.HorizontalScrollbarTrackBounds;
+            newSv.HorizontalScrollbarThumbWidth = oldSv.HorizontalScrollbarThumbWidth;
         }
 
         // Preserve a virtualized ListView's scroll offset across re-renders so the

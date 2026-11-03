@@ -261,7 +261,7 @@ internal sealed class AccessibleTree
             case ScrollView scrollView:
                 if (scrollView.Content is { } content)
                 {
-                    Walk(content, contentX, contentY - scrollView.OffsetY, Intersect(clip, bounds), self);
+                    Walk(content, contentX - scrollView.OffsetX, contentY - scrollView.OffsetY, Intersect(clip, bounds), self);
                 }
                 return;
 

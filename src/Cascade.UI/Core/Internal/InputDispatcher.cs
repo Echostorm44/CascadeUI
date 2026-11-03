@@ -449,6 +449,9 @@ internal sealed partial class InputDispatcher
     private float scrollbarDragStartY;
     private float scrollbarDragStartOffset;
     private ScrollView? scrollbarDragTarget;
+
+    // Whether the scrollbar being dragged is the horizontal one (scrollbarDragStartY then holds the start x).
+    private bool scrollbarDragHorizontal;
     private IListViewNode? listScrollbarDragTarget;
 
     // TextArea scrollbar drag state
@@ -759,6 +762,17 @@ internal sealed partial class InputDispatcher
         // Scrollbar drag — intercept all mouse events while dragging
         if (scrollbarDragging && scrollbarDragTarget != null)
         {
+            if (evt.Type == NativeMouseEventType.MouseMove && scrollbarDragHorizontal)
+            {
+                var across = scrollbarDragTarget;
+                float range = across.HorizontalScrollbarTrackBounds.Width - across.HorizontalScrollbarThumbWidth;
+                if (range > 0 && across.Control.MoveTo(scrollbarDragStartOffset + (evt.X - scrollbarDragStartY) / range * across.MaxX, across.OffsetY))
+                {
+                    RequestRepaint?.Invoke();
+                }
+                return;
+            }
+
             if (evt.Type == NativeMouseEventType.MouseMove)
             {
                 float trackRange = scrollbarDragTarget.ScrollbarTrackBounds.Height - scrollbarDragTarget.ScrollbarThumbHeight;
@@ -927,9 +941,20 @@ internal sealed partial class InputDispatcher
         if (evt.Type == NativeMouseEventType.MouseDown)
         {
             var targetSv = HitTester.FindScrollViewAt(rootNode, evt.X, evt.Y);
+            if (targetSv != null && targetSv.HorizontalScrollbarTrackBounds.Width > 0
+                && targetSv.HorizontalScrollbarTrackBounds.Contains(new Point(evt.X, evt.Y)))
+            {
+                scrollbarDragging = true;
+                scrollbarDragHorizontal = true;
+                scrollbarDragStartY = evt.X;
+                scrollbarDragStartOffset = targetSv.OffsetX;
+                scrollbarDragTarget = targetSv;
+                return;
+            }
             if (targetSv != null && targetSv.ScrollbarTrackBounds.Width > 0
                 && targetSv.ScrollbarTrackBounds.Contains(new Point(evt.X, evt.Y)))
             {
+                scrollbarDragHorizontal = false;
                 scrollbarDragging = true;
                 scrollbarDragStartY = evt.Y;
                 scrollbarDragStartOffset = targetSv.OffsetY;
@@ -3054,25 +3079,20 @@ internal sealed partial class InputDispatcher
             return;
         }
 
-        // ScrollView handling — check if mouse is over a ScrollView and scroll it
-        var scrollView = HitTester.FindScrollViewAt(rootNode, evt.X, evt.Y);
-        if (scrollView != null && scrollView.MaxY > 0)
+        // ScrollView handling: offered to the ScrollViews under the pointer, innermost first
+        // (see ScrollWheelAlongChain).
+        var scrollChain = HitTester.FindScrollViewChainAt(rootNode, evt.X, evt.Y);
+        if (scrollChain.Count > 0 && ScrollWheelAlongChain(scrollChain, evt) is { } scrolled)
         {
-            // Scale by delta magnitude for smooth trackpad scrolling (one notch = 1.0)
-            const float pixelsPerNotch = 48f;
-            float delta = -evt.DeltaY * pixelsPerNotch;
-            float newOffset = Math.Clamp(scrollView.OffsetY + delta, 0f, scrollView.MaxY);
-            bool moved = Math.Abs(newOffset - scrollView.OffsetY) > 0.001f;
-            if (moved)
+            // Keep globals in sync for DevTools backward compatibility
+            ScrollViewOffsetY = scrolled.View.OffsetY;
+            ScrollViewMaxY = scrolled.View.MaxY;
+            if (scrolled.Moved)
             {
-                scrollView.OffsetY = newOffset;
-                // Keep globals in sync for DevTools backward compatibility
-                ScrollViewOffsetY = newOffset;
-                ScrollViewMaxY = scrollView.MaxY;
                 RequestRepaint?.Invoke();
             }
 
-            LastScroll = new ScrollOutcome(ScrollTargetKind.ScrollView, scrollView, scrollView.OffsetY, scrollView.MaxY, moved);
+            LastScroll = new ScrollOutcome(ScrollTargetKind.ScrollView, scrolled.View, scrolled.View.OffsetY, scrolled.View.MaxY, scrolled.Moved);
             return;
         }
 
@@ -3520,6 +3540,13 @@ internal sealed partial class InputDispatcher
 
         // Dispatch to KeyHandler bindings on the focused element's ancestor chain
         if (DispatchKeyBinding(evt))
+        {
+            suppressNextCharacter = true;
+            return;
+        }
+
+        // A key nothing used scrolls the ScrollView around the focus (or under the pointer).
+        if (HandleScrollViewKey(evt))
         {
             suppressNextCharacter = true;
         }
@@ -6935,6 +6962,105 @@ internal sealed partial class InputDispatcher
                 break;
         }
         host.Suggestions.Dismiss();
+    }
+
+    /// <summary>
+    /// Scrolls a wheel step along a chain of nested ScrollViews (outermost first): the innermost that
+    /// can still move in that direction takes it, unless one says otherwise (.NestedScroll):
+    /// <see cref="NestedScrollMode.ParentFirst"/> lets its parent move first, and
+    /// <see cref="NestedScrollMode.SelfOnly"/> keeps the wheel even at its edge. Shift turns the wheel
+    /// sideways, as does a view that only scrolls across. Returns the view that took it, or null.
+    /// </summary>
+    private static (ScrollView View, bool Moved)? ScrollWheelAlongChain(List<ScrollView> chain, NativeScrollEvent evt)
+    {
+        (float X, float Y) DeltaFor(ScrollView sv)
+        {
+            float step = sv.Physics.MouseWheelStepPx;
+            float dx = -evt.DeltaX * step, dy = -evt.DeltaY * step;
+            if (evt.Modifiers.HasFlag(ModifierKeys.Shift) || (!sv.ScrollsVertically && dx == 0f))
+            {
+                (dx, dy) = (dx == 0f ? dy : dx, 0f);
+            }
+            return (sv.ScrollsHorizontally ? dx : 0f, sv.ScrollsVertically ? dy : 0f);
+        }
+
+        static bool CanMove(ScrollView sv, (float X, float Y) d) =>
+            (d.Y < 0f && sv.OffsetY > 0f) || (d.Y > 0f && sv.OffsetY < sv.MaxY)
+            || (d.X < 0f && sv.OffsetX > 0f) || (d.X > 0f && sv.OffsetX < sv.MaxX);
+
+        static (ScrollView, bool) Move(ScrollView sv, (float X, float Y) d) =>
+            (sv, sv.Control.MoveTo(sv.OffsetX + d.X, sv.OffsetY + d.Y));
+
+        for (int i = chain.Count - 1; i >= 0; i--)
+        {
+            var sv = chain[i];
+            var parent = i > 0 ? chain[i - 1] : null;
+            if (sv.ParentScrollsFirst && parent is not null && CanMove(parent, DeltaFor(parent)))
+            {
+                return Move(parent, DeltaFor(parent));
+            }
+            if (CanMove(sv, DeltaFor(sv)))
+            {
+                return Move(sv, DeltaFor(sv));
+            }
+            if (sv.KeepsWheelAtEdge)
+            {
+                return (sv, false);
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Keyboard scrolling (.KeyboardScrolling, on by default) for keys no control used: arrows move
+    /// 40 px, Page Up/Down (and Space / Shift+Space) a viewport, Home/End to the ends. The ScrollView
+    /// is the nearest one around the focused control, else the one under the pointer.
+    /// </summary>
+    private bool HandleScrollViewKey(NativeKeyEvent evt)
+    {
+        if (rootNode is null || evt.Type != NativeKeyEventType.KeyDown || evt.Modifiers.HasFlag(ModifierKeys.Ctrl)
+            || evt.Modifiers.HasFlag(ModifierKeys.Alt))
+        {
+            return false;
+        }
+
+        ScrollView? sv = null;
+        if (FocusManager.FocusedElement is { } focused && TryGetAbsoluteBounds(focused, out var focusBounds))
+        {
+            sv = HitTester.FindScrollViewAt(rootNode, focusBounds.X + 1f, focusBounds.Y + 1f);
+        }
+        sv ??= HitTester.FindScrollViewAt(rootNode, lastMousePosition.X, lastMousePosition.Y);
+        if (sv is null || !sv.IsKeyboardScrollingEnabled)
+        {
+            return false;
+        }
+
+        var viewport = sv.Control.ViewportSize;
+        bool across = !sv.ScrollsVertically;
+        float page = (across ? viewport.Width : viewport.Height) * 0.9f;
+        bool shift = evt.Modifiers.HasFlag(ModifierKeys.Shift);
+        (float X, float Y)? target = evt.Key switch
+        {
+            Key.Down when sv.ScrollsVertically => (sv.OffsetX, sv.OffsetY + 40f),
+            Key.Up when sv.ScrollsVertically => (sv.OffsetX, sv.OffsetY - 40f),
+            Key.Right when sv.ScrollsHorizontally => (sv.OffsetX + 40f, sv.OffsetY),
+            Key.Left when sv.ScrollsHorizontally => (sv.OffsetX - 40f, sv.OffsetY),
+            Key.PageDown => across ? (sv.OffsetX + page, sv.OffsetY) : (sv.OffsetX, sv.OffsetY + page),
+            Key.PageUp => across ? (sv.OffsetX - page, sv.OffsetY) : (sv.OffsetX, sv.OffsetY - page),
+            Key.Space when evt.Character is null or ' ' => across
+                ? (sv.OffsetX + (shift ? -page : page), sv.OffsetY)
+                : (sv.OffsetX, sv.OffsetY + (shift ? -page : page)),
+            Key.Home => across ? (0f, sv.OffsetY) : (sv.OffsetX, 0f),
+            Key.End => across ? (sv.MaxX, sv.OffsetY) : (sv.OffsetX, sv.MaxY),
+            _ => null,
+        };
+        if (target is not { } to)
+        {
+            return false;
+        }
+        _ = sv.Control.ScrollToAsync(to.X, to.Y);
+        RequestRepaint?.Invoke();
+        return true;
     }
 
     /// <summary>Arrow keys move a focused toggle group's selection to the previous or next option.</summary>

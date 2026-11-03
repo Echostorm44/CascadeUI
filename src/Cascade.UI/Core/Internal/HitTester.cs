@@ -155,7 +155,7 @@ internal static class HitTester
                 // Content is translated by -scrollY during paint, so add scrollY
                 // to convert viewport coordinates back to content coordinates.
                 float scrollY = scrollView.OffsetY;
-                var hit = HitTestCore(content, localX, localY + scrollY, path);
+                var hit = HitTestCore(content, localX + scrollView.OffsetX, localY + scrollY, path);
                 if (hit != null)
                 {
                     return hit;
@@ -533,7 +533,7 @@ internal static class HitTester
 
         if (node is ScrollView scrollView && scrollView.Content is { } content)
         {
-            return TryGetAbsoluteBoundsCore(content, target, contentX, contentY - scrollView.OffsetY, out bounds);
+            return TryGetAbsoluteBoundsCore(content, target, contentX - scrollView.OffsetX, contentY - scrollView.OffsetY, out bounds);
         }
 
         if (node is SplitView splitView)
@@ -586,7 +586,7 @@ internal static class HitTester
 
         if (node is ScrollView scrollView && scrollView.Content is { } content)
         {
-            ForEachComponentBounds(content, contentX, contentY - scrollView.OffsetY, visit);
+            ForEachComponentBounds(content, contentX - scrollView.OffsetX, contentY - scrollView.OffsetY, visit);
             return;
         }
 
@@ -609,40 +609,52 @@ internal static class HitTester
     /// </summary>
     internal static ScrollView? FindScrollViewAt(Node root, float x, float y)
     {
-        if (root.IsLayoutEmpty || !root.LayoutData.IsVisible)
-        {
-            return null;
-        }
-
-        return FindScrollViewCore(root, x, y);
+        var chain = FindScrollViewChainAt(root, x, y);
+        return chain.Count > 0 ? chain[^1] : null;
     }
 
-    private static ScrollView? FindScrollViewCore(Node node, float x, float y)
+    /// <summary>
+    /// Every ScrollView containing the point, outermost first: the chain a wheel or key scroll is
+    /// offered along (see NestedScrollMode). It used to stop at the outermost, so the wheel over an
+    /// inner list scrolled the page around it.
+    /// </summary>
+    internal static List<ScrollView> FindScrollViewChainAt(Node root, float x, float y)
+    {
+        var chain = new List<ScrollView>();
+        if (!root.IsLayoutEmpty && root.LayoutData.IsVisible)
+        {
+            FindScrollViewCore(root, x, y, chain);
+        }
+        return chain;
+    }
+
+    private static bool FindScrollViewCore(Node node, float x, float y, List<ScrollView> chain)
     {
         // Component nodes: traverse into the rendered tree transparently
         if (node is Component comp && comp.RenderedTree is { } rendered)
         {
-            if (!rendered.IsLayoutEmpty && rendered.LayoutData.IsVisible)
-            {
-                return FindScrollViewCore(rendered, x, y);
-            }
-
-            return null;
+            return !rendered.IsLayoutEmpty && rendered.LayoutData.IsVisible && FindScrollViewCore(rendered, x, y, chain);
         }
 
         var bounds = node.LayoutData.Bounds;
         if (!bounds.Contains(new Point(x, y)))
         {
-            return null;
-        }
-
-        if (node is ScrollView sv)
-        {
-            return sv;
+            return false;
         }
 
         float localX = x - bounds.X - node.LayoutData.Padding.Left;
         float localY = y - bounds.Y - node.LayoutData.Padding.Top;
+
+        if (node is ScrollView sv)
+        {
+            chain.Add(sv);
+            // Look inside, through its scroll offset, for a ScrollView nested in it.
+            if (sv.Content is { IsLayoutEmpty: false } content && content.LayoutData.IsVisible)
+            {
+                FindScrollViewCore(content, localX + sv.OffsetX, localY + sv.OffsetY, chain);
+            }
+            return true;
+        }
 
         // Check multi-children (Row, Column, Stack, Grid)
         var children = GetChildren(node);
@@ -651,47 +663,29 @@ internal static class HitTester
             for (int i = children.Count - 1; i >= 0; i--)
             {
                 var child = children[i];
-                if (child.IsLayoutEmpty || !child.LayoutData.IsVisible)
+                if (!child.IsLayoutEmpty && child.LayoutData.IsVisible && FindScrollViewCore(child, localX, localY, chain))
                 {
-                    continue;
-                }
-
-                var found = FindScrollViewCore(child, localX, localY);
-                if (found != null)
-                {
-                    return found;
+                    return true;
                 }
             }
         }
 
         // Check single-child containers
         var singleChild = GetSingleChild(node);
-        if (singleChild != null && !singleChild.IsLayoutEmpty && singleChild.LayoutData.IsVisible)
+        if (singleChild != null && !singleChild.IsLayoutEmpty && singleChild.LayoutData.IsVisible
+            && FindScrollViewCore(singleChild, localX, localY, chain))
         {
-            var found = FindScrollViewCore(singleChild, localX, localY);
-            if (found != null)
-            {
-                return found;
-            }
+            return true;
         }
 
         // SplitView — check both panes for nested ScrollViews
         if (node is SplitView splitView)
         {
-            var found = FindScrollViewCore(splitView.Second, localX, localY);
-            if (found != null)
-            {
-                return found;
-            }
-
-            found = FindScrollViewCore(splitView.First, localX, localY);
-            if (found != null)
-            {
-                return found;
-            }
+            return FindScrollViewCore(splitView.Second, localX, localY, chain)
+                || FindScrollViewCore(splitView.First, localX, localY, chain);
         }
 
-        return null;
+        return false;
     }
 
     /// <summary>
@@ -757,8 +751,7 @@ internal static class HitTester
             var content = sv.Content;
             if (content != null && !content.IsLayoutEmpty && content.LayoutData.IsVisible)
             {
-                float scrollY = InputDispatcher.ScrollViewOffsetY;
-                var found = FindDraggableCore(content, localX, localY + scrollY);
+                var found = FindDraggableCore(content, localX + sv.OffsetX, localY + sv.OffsetY);
                 if (found != null)
                 {
                     return found;
@@ -864,8 +857,7 @@ internal static class HitTester
             var content = sv.Content;
             if (content != null && !content.IsLayoutEmpty && content.LayoutData.IsVisible)
             {
-                float scrollY = InputDispatcher.ScrollViewOffsetY;
-                var found = FindDropTargetCore(content, localX, localY + scrollY);
+                var found = FindDropTargetCore(content, localX + sv.OffsetX, localY + sv.OffsetY);
                 if (found != null)
                 {
                     return found;

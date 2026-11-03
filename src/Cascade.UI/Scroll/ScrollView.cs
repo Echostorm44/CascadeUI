@@ -6,7 +6,7 @@ namespace Cascade.UI;
 /// and free 2D scrolling with configurable physics, snap points, paging,
 /// nested scroll coordination, and scroll-driven animation integration.
 /// </summary>
-public sealed class ScrollView : Node
+public sealed class ScrollView : Node, IPumpedNode
 {
     /// <summary>
     /// Creates a scroll view wrapping the specified content.
@@ -29,7 +29,7 @@ public sealed class ScrollView : Node
     /// Imperative control interface for programmatic scrolling, position
     /// queries, and paging. Populated after mount.
     /// </summary>
-    public ScrollViewControl Control { get; } = new();
+    public ScrollViewControl Control { get; private set; } = new();
 
     // ── Configuration properties ─────────────────────────────────────
 
@@ -74,10 +74,151 @@ public sealed class ScrollView : Node
     // ── Per-instance scroll state (replaces the old global statics) ──
 
     /// <summary>Current vertical scroll offset in logical pixels.</summary>
-    internal float OffsetY { get; set; }
+    internal float OffsetY { get => Control.OffsetY; set => Control.OffsetY = value; }
+
+    /// <summary>Horizontal scroll offset (Direction Horizontal or Both).</summary>
+    internal float OffsetX { get => Control.OffsetX; set => Control.OffsetX = value; }
+
+    /// <summary>The furthest it scrolls across.</summary>
+    internal float MaxX { get => Control.MaxX; set => Control.MaxX = value; }
+
+    /// <summary>Whether its parent ScrollView takes the wheel first (NestedScrollMode.ParentFirst).</summary>
+    internal bool ParentScrollsFirst => NestedScrollMode == NestedScrollMode.ParentFirst;
+
+    /// <summary>Whether it keeps the wheel even at its edge (NestedScrollMode.SelfOnly).</summary>
+    internal bool KeepsWheelAtEdge => NestedScrollMode == NestedScrollMode.SelfOnly;
+
+    /// <summary>Whether it scrolls down (Vertical or Both).</summary>
+    internal bool ScrollsVertically => ScrollDirection is ScrollDirection.Vertical or ScrollDirection.Both;
+
+    /// <summary>Whether it scrolls across (Horizontal or Both).</summary>
+    internal bool ScrollsHorizontally => ScrollDirection is ScrollDirection.Horizontal or ScrollDirection.Both;
+
+    /// <summary>The horizontal scrollbar's track (window coordinates), for dragging; empty when none.</summary>
+    internal Rect HorizontalScrollbarTrackBounds { get; set; }
+
+    /// <summary>The horizontal scrollbar thumb's width.</summary>
+    internal float HorizontalScrollbarThumbWidth { get; set; }
+
+    /// <summary>How long after the last movement a scroll counts as ended (OnScrollEnd, overlay scrollbars).</summary>
+    internal static readonly TimeSpan ScrollEndDelay = TimeSpan.FromMilliseconds(150);
+
+    // PersistScroll: positions kept by key for the life of the process.
+    private static readonly Dictionary<string, (float X, float Y)> PersistedOffsets = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Once a frame (layout): advances an animated scroll, then reports what changed since the last
+    /// frame: OnScrollStart / OnScroll / OnScrollEnd, OnPageChanged, OnEndReached, and the position
+    /// for PersistScroll.
+    /// </summary>
+    void IPumpedNode.Pump()
+    {
+        var control = Control;
+        bool animating = control.Tick();
+        var position = (control.OffsetX, control.OffsetY);
+        bool moved = position != control.ReportedPosition;
+
+        if (moved)
+        {
+            if (!control.ScrollReported)
+            {
+                control.ScrollReported = true;
+                OnScrollStartHandler?.Invoke();
+            }
+            control.ReportedPosition = position;
+            OnScrollHandler?.Invoke(new ScrollPosition(position.OffsetX, position.OffsetY));
+            if (PersistScrollKey is { } key)
+            {
+                PersistedOffsets[key] = position;
+            }
+        }
+
+        if (control.ScrollReported && !animating && !moved
+            && System.Diagnostics.Stopwatch.GetElapsedTime(control.LastMoveTimestamp) >= ScrollEndDelay)
+        {
+            control.ScrollReported = false;
+            OnScrollEndHandler?.Invoke();
+        }
+
+        if (OnPageChangedHandler is { } pageChanged && control.TotalPages > 0)
+        {
+            int page = control.CurrentPage;
+            if (page != control.ReportedPage)
+            {
+                bool first = control.ReportedPage < 0;
+                control.ReportedPage = page;
+                if (!first)
+                {
+                    pageChanged(page);
+                }
+            }
+        }
+
+        // OnEndReached: once within the threshold of the end (and not while the last call is still
+        // running); scrolling back out of the threshold, or the content growing, arms it again.
+        if (OnEndReachedHandler is { } endReached)
+        {
+            float remaining = ScrollsVertically ? control.MaxY - control.OffsetY : control.MaxX - control.OffsetX;
+            bool scrollable = ScrollsVertically ? control.MaxY > 0 : control.MaxX > 0;
+            if (remaining > EndReachedThreshold)
+            {
+                control.EndReachedFired = false;
+            }
+            else if (scrollable && !control.EndReachedFired && control.EndReachedTask is not { IsCompleted: false })
+            {
+                control.EndReachedFired = true;
+                control.EndReachedTask = endReached();
+            }
+        }
+
+        if (animating || control.ScrollReported)
+        {
+            ControlStateAnimator.SignalActiveTransition();
+        }
+    }
+
+    void IPumpedNode.AdoptFrom(Node previous)
+    {
+        // The same control (position, layer, events state) lives on through a re-render.
+        if (previous is ScrollView old)
+        {
+            Control = old.Control;
+        }
+    }
+
+    /// <summary>
+    /// After layout has measured the content: restores a persisted position the first time, and keeps
+    /// the view at the bottom as content grows (AutoScroll).
+    /// </summary>
+    internal void AfterLayout(float contentHeight)
+    {
+        var control = Control;
+        if (PersistScrollKey is { } key && !control.PersistRestored)
+        {
+            control.PersistRestored = true;
+            if (PersistedOffsets.TryGetValue(key, out var saved))
+            {
+                control.OffsetX = Math.Clamp(saved.X, 0f, control.MaxX);
+                control.OffsetY = Math.Clamp(saved.Y, 0f, control.MaxY);
+                control.ReportedPosition = (control.OffsetX, control.OffsetY);
+            }
+        }
+
+        bool grew = control.LastContentHeight >= 0f && contentHeight > control.LastContentHeight + 0.5f;
+        if (grew && (AutoScrollMode == AutoScrollMode.Always || (AutoScrollMode == AutoScrollMode.WhenAtBottom && control.WasAtBottom)))
+        {
+            control.OffsetY = control.MaxY;
+        }
+        if (grew)
+        {
+            control.EndReachedFired = false; // more content: the end is somewhere new
+        }
+        control.LastContentHeight = contentHeight;
+        control.WasAtBottom = control.OffsetY >= control.MaxY - 1f;
+    }
 
     /// <summary>Maximum vertical scroll offset (contentHeight − viewportHeight).</summary>
-    internal float MaxY { get; set; }
+    internal float MaxY { get => Control.MaxY; set => Control.MaxY = value; }
 
     /// <summary>Absolute bounds of the scrollbar track, set by NodePainter for drag hit testing.</summary>
     internal Rect ScrollbarTrackBounds { get; set; }

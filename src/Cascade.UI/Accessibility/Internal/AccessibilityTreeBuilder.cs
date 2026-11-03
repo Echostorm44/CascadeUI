@@ -505,6 +505,7 @@ internal static class AccessibilityTreeBuilder
             ITabularDataNode => AccessibleRole.Table,
             ITreeView => AccessibleRole.Tree,
             Expander => AccessibleRole.Region,
+            ScrollView { AccessibleLabel.Length: > 0 } => AccessibleRole.Region,
             MenuBar => AccessibleRole.MenuBar,
             TabBar => AccessibleRole.TabList,
             Label => AccessibleRole.Text,
@@ -526,6 +527,12 @@ internal static class AccessibilityTreeBuilder
         if (node.LayoutData.A11yLabel is { } label)
         {
             return label;
+        }
+
+        // A scrolling region names itself with .AccessibleScrollLabel.
+        if (node is ScrollView { AccessibleLabel: { Length: > 0 } regionName })
+        {
+            return regionName;
         }
 
         return node switch

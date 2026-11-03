@@ -1,22 +1,27 @@
+using System.Diagnostics;
+
 namespace Cascade.UI;
 
 /// <summary>
-/// Imperative control interface for a <see cref="ScrollView"/>, accessed via
-/// <see cref="ScrollView.Control"/>. Provides reactive position/size properties
-/// and methods for programmatic scrolling, paging, and scroll-into-view.
+/// The scroll state of a <see cref="ScrollView"/>, and the app's handle for scrolling it: its
+/// position and extent, and methods to scroll (optionally animated). One control lives for the
+/// life of the ScrollView on screen: a re-render hands the same control to the new node, so a
+/// reference to it stays good.
 /// </summary>
 public sealed class ScrollViewControl
 {
     private readonly ScrollPhysicsEngine physicsEngine;
     private readonly VirtualizationManager virtualization;
-    private ScrollPosition position;
-    private ScrollPosition maxExtent;
     private Size viewportSize;
     private Size contentSize;
-    private bool isScrolling;
-    private int currentPage;
-    private int totalPages;
     private AnimationModel defaultModel;
+
+    // An animated scroll in progress: from where, to where, since when.
+    private (float X, float Y) tweenFrom;
+    private (float X, float Y)? tweenTo;
+    private long tweenStart;
+    private TaskCompletionSource? tweenDone;
+    private static readonly TimeSpan TweenDuration = TimeSpan.FromMilliseconds(300);
 
     // ── Layer texture state (persists across ScrollView node recreation) ──
 
@@ -25,23 +30,8 @@ public sealed class ScrollViewControl
     internal float LayerWidth { get; set; }
     internal float LayerHeight { get; set; }
 
-    /// <summary>
-    /// Whether the last layer capture included a focused keyboard-editable control
-    /// in this ScrollView's content. Used to force one more recapture when focus
-    /// leaves the content so a stale focus ring / caret is cleared (focus changes,
-    /// like text edits, do not otherwise mark the layer dirty). See
-    /// <see cref="Rendering.Internal.NodePainter"/> PaintScrollView.
-    /// </summary>
     internal bool CapturedFocusedEditable { get; set; }
 
-    /// <summary>
-    /// <see cref="ThemeSwitcher.Version"/> at which the layer texture was last
-    /// captured, or -1 if never captured. A theme switch recolours/restyles the
-    /// content without changing its size or structure, so it is invisible to the
-    /// size- and dirty-based recapture checks; comparing this against the current
-    /// theme version forces a recapture so the cached layer is not composited with
-    /// stale colours (which, in dark mode, can render nav text invisible).
-    /// </summary>
     internal int CapturedThemeVersion { get; set; } = -1;
 
     internal ScrollViewControl()
@@ -56,6 +46,102 @@ public sealed class ScrollViewControl
     internal ScrollPhysicsEngine PhysicsEngine => physicsEngine;
     internal VirtualizationManager Virtualization => virtualization;
 
+    // ── The scroll state itself (the ScrollView reads and writes these) ──
+
+    /// <summary>Horizontal offset, 0..<see cref="MaxX"/>.</summary>
+    internal float OffsetX { get; set; }
+
+    /// <summary>Vertical offset, 0..<see cref="MaxY"/>.</summary>
+    internal float OffsetY { get; set; }
+
+    /// <summary>The furthest it can scroll across.</summary>
+    internal float MaxX { get; set; }
+
+    /// <summary>The furthest it can scroll down.</summary>
+    internal float MaxY { get; set; }
+
+    /// <summary>When the position last changed (Stopwatch ticks), for scroll-end and overlay scrollbars.</summary>
+    internal long LastMoveTimestamp { get; private set; }
+
+    /// <summary>The position last reported to OnScroll, and whether a scroll is under way.</summary>
+    internal (float X, float Y) ReportedPosition { get; set; }
+    internal bool ScrollReported { get; set; }
+
+    /// <summary>The page last reported to OnPageChanged.</summary>
+    internal int ReportedPage { get; set; } = -1;
+
+    /// <summary>Whether OnEndReached has fired and not been re-armed (scrolling back away from the end re-arms it).</summary>
+    internal bool EndReachedFired { get; set; }
+
+    /// <summary>An OnEndReached or pull-to-refresh task still running.</summary>
+    internal Task? EndReachedTask { get; set; }
+
+    /// <summary>The content height at the last layout (for auto-scroll), and whether the view was at the bottom then.</summary>
+    internal float LastContentHeight { get; set; } = -1f;
+    internal bool WasAtBottom { get; set; } = true;
+
+    /// <summary>Whether a persisted position (PersistScroll) has been restored into this control.</summary>
+    internal bool PersistRestored { get; set; }
+
+    /// <summary>Moves to (<paramref name="x"/>, <paramref name="y"/>), clamped; returns whether it moved. Cancels an animated scroll.</summary>
+    internal bool MoveTo(float x, float y, bool fromUser = true)
+    {
+        if (fromUser)
+        {
+            CancelTween();
+        }
+        float nx = Math.Clamp(x, 0f, MaxX);
+        float ny = Math.Clamp(y, 0f, MaxY);
+        if (Math.Abs(nx - OffsetX) < 0.001f && Math.Abs(ny - OffsetY) < 0.001f)
+        {
+            return false;
+        }
+        OffsetX = nx;
+        OffsetY = ny;
+        LastMoveTimestamp = Stopwatch.GetTimestamp();
+        return true;
+    }
+
+    /// <summary>Advances an animated scroll. Called once a frame; returns whether one is running.</summary>
+    internal bool Tick()
+    {
+        if (tweenTo is not { } to)
+        {
+            return false;
+        }
+        double t = Math.Clamp(Stopwatch.GetElapsedTime(tweenStart).TotalSeconds / TweenDuration.TotalSeconds, 0.0, 1.0);
+        float eased = (float)(1.0 - Math.Pow(1.0 - t, 3.0)); // ease-out cubic
+        if (t >= 1.0)
+        {
+            MoveTo(to.X, to.Y, fromUser: false); // land exactly
+        }
+        else
+        {
+            MoveTo(tweenFrom.X + (to.X - tweenFrom.X) * eased, tweenFrom.Y + (to.Y - tweenFrom.Y) * eased, fromUser: false);
+        }
+        if (t >= 1.0)
+        {
+            tweenTo = null;
+            var done = tweenDone;
+            tweenDone = null;
+            done?.TrySetResult();
+            return false;
+        }
+        return true;
+    }
+
+    private void CancelTween()
+    {
+        if (tweenTo is null)
+        {
+            return;
+        }
+        tweenTo = null;
+        var done = tweenDone;
+        tweenDone = null;
+        done?.TrySetResult();
+    }
+
     // ── Internal configuration ────────────────────────────────────────
 
     internal void SetDefaultAnimationModel(AnimationModel model)
@@ -63,114 +149,71 @@ public sealed class ScrollViewControl
         defaultModel = model;
     }
 
-    internal void UpdatePosition(ScrollPosition pos)
-    {
-        position = pos;
-    }
-
-    internal void UpdateMaxExtent(ScrollPosition extent)
-    {
-        maxExtent = extent;
-    }
-
     internal void UpdateViewportSize(Size size)
     {
         viewportSize = size;
-        RecalculatePages();
     }
 
     internal void UpdateContentSize(Size size)
     {
         contentSize = size;
-        RecalculatePages();
-    }
-
-    internal void SetIsScrolling(bool scrolling)
-    {
-        isScrolling = scrolling;
     }
 
     // ── Reactive position and extent ─────────────────────────────────
 
-    /// <summary>
-    /// Current scroll position. Reactive — reading in <see cref="Component.Render"/>
-    /// registers a lightweight binding that updates only the dependent property.
-    /// </summary>
-    public ScrollPosition Position => position;
+    public ScrollPosition Position => new(OffsetX, OffsetY);
 
-    /// <summary>
-    /// Maximum scroll extent. Reactive — changes with content size.
-    /// </summary>
-    public ScrollPosition MaxExtent => maxExtent;
+    public ScrollPosition MaxExtent => new(MaxX, MaxY);
 
-    /// <summary>
-    /// Viewport size. Reactive — changes with container layout.
-    /// </summary>
     public Size ViewportSize => viewportSize;
 
-    /// <summary>
-    /// Content size. Reactive — changes when content is added or removed.
-    /// </summary>
     public Size ContentSize => contentSize;
 
-    /// <summary>
-    /// Whether the content is currently scrolling (user or programmatic).
-    /// </summary>
-    public bool IsScrolling => isScrolling;
+    /// <summary>Whether the view is scrolling now (moved within the last 150 ms, or animating).</summary>
+    public bool IsScrolling => tweenTo is not null
+        || (LastMoveTimestamp != 0 && Stopwatch.GetElapsedTime(LastMoveTimestamp) < ScrollView.ScrollEndDelay);
 
     // ── Scroll To ────────────────────────────────────────────────────
 
     /// <summary>
-    /// Scrolls to an absolute position. Pass <see cref="AnimationModel.None"/>
-    /// for an instant jump.
+    /// Scrolls to (<paramref name="x"/>, <paramref name="y"/>), clamped to the content. Animated unless
+    /// <paramref name="model"/> is <see cref="AnimationModel.None"/>; the task completes when it arrives
+    /// (or another scroll takes over).
     /// </summary>
-    /// <param name="x">Target horizontal offset in logical pixels.</param>
-    /// <param name="y">Target vertical offset in logical pixels.</param>
-    /// <param name="model">
-    /// Animation model. Default: <c>AnimationModel.EaseOut(300ms)</c>.
-    /// </param>
     public Task ScrollToAsync(float x, float y, AnimationModel? model = null)
     {
-        float clampedX = Math.Clamp(x, 0, maxExtent.X);
-        float clampedY = Math.Clamp(y, 0, maxExtent.Y);
-
+        float clampedX = Math.Clamp(x, 0, MaxX);
+        float clampedY = Math.Clamp(y, 0, MaxY);
         var effectiveModel = model ?? defaultModel;
 
-        if (effectiveModel == AnimationModel.None)
+        CancelTween();
+        if (ReferenceEquals(effectiveModel, AnimationModel.None) || ControlStateAnimator.ReducedMotion)
         {
+            MoveTo(clampedX, clampedY, fromUser: false);
             physicsEngine.SetPosition(clampedX, clampedY);
-            position = new ScrollPosition(clampedX, clampedY);
+            SharedScheduler.Instance.RequestFrame();
             return Task.CompletedTask;
         }
 
-        // Set up animated scroll
+        tweenFrom = (OffsetX, OffsetY);
+        tweenTo = (clampedX, clampedY);
+        tweenStart = Stopwatch.GetTimestamp();
+        tweenDone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         physicsEngine.SetPosition(clampedX, clampedY);
-        position = new ScrollPosition(clampedX, clampedY);
-        return Task.CompletedTask;
+        SharedScheduler.Instance.RequestFrame();
+        return tweenDone.Task;
     }
 
-    /// <summary>
-    /// Scrolls to the top-left origin (0, 0).
-    /// </summary>
     public Task ScrollToTopAsync(AnimationModel? model = null)
     {
-        return ScrollToAsync(0, 0, model);
+        return ScrollToAsync(OffsetX, 0, model);
     }
 
-    /// <summary>
-    /// Scrolls to the bottom of the content.
-    /// </summary>
     public Task ScrollToBottomAsync(AnimationModel? model = null)
     {
-        return ScrollToAsync(0, maxExtent.Y, model);
+        return ScrollToAsync(OffsetX, MaxY, model);
     }
 
-    /// <summary>
-    /// Scrolls so that the referenced node is visible within the viewport.
-    /// </summary>
-    /// <param name="target">The node to scroll into view.</param>
-    /// <param name="alignment">How the target is positioned within the viewport.</param>
-    /// <param name="model">Animation model. Default: <c>AnimationModel.EaseOut(300ms)</c>.</param>
     public Task ScrollIntoViewAsync(
         NodeRef<Node> target,
         ScrollIntoViewAlignment alignment = ScrollIntoViewAlignment.Nearest,
@@ -185,77 +228,60 @@ public sealed class ScrollViewControl
 
         var bounds = target.Bounds;
         float targetY = ComputeScrollIntoViewOffset(
-            bounds.Y, bounds.Height, position.Y, viewportSize.Height, alignment);
+            bounds.Y, bounds.Height, OffsetY, viewportSize.Height, alignment);
         float targetX = ComputeScrollIntoViewOffset(
-            bounds.X, bounds.Width, position.X, viewportSize.Width, alignment);
+            bounds.X, bounds.Width, OffsetX, viewportSize.Width, alignment);
 
         return ScrollToAsync(targetX, targetY, model);
     }
 
-    /// <summary>
-    /// Scrolls by a relative offset from the current position.
-    /// </summary>
-    /// <param name="deltaX">Horizontal delta in logical pixels.</param>
-    /// <param name="deltaY">Vertical delta in logical pixels.</param>
-    /// <param name="model">Animation model. Default: <c>AnimationModel.EaseOut(300ms)</c>.</param>
     public Task ScrollByAsync(float deltaX, float deltaY, AnimationModel? model = null)
     {
-        return ScrollToAsync(position.X + deltaX, position.Y + deltaY, model);
+        var (x, y) = tweenTo ?? (OffsetX, OffsetY);
+        return ScrollToAsync(x + deltaX, y + deltaY, model);
     }
 
     // ── Paging ───────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Navigates to a specific page. Only meaningful when the owning
-    /// <see cref="ScrollView"/> has paging enabled.
-    /// </summary>
-    /// <param name="pageIndex">Zero-based page index.</param>
-    /// <param name="model">Animation model for the page transition.</param>
+    /// <summary>Whether pages run across (a horizontal-only view) rather than down.</summary>
+    internal bool PagesAcross { get; set; }
+
     public Task ScrollToPageAsync(int pageIndex, AnimationModel? model = null)
     {
-        if (totalPages == 0)
+        if (TotalPages == 0)
         {
             return Task.CompletedTask;
         }
 
-        int clampedPage = Math.Clamp(pageIndex, 0, totalPages - 1);
-        float targetY = clampedPage * viewportSize.Height;
-        currentPage = clampedPage;
-        return ScrollToAsync(0, targetY, model);
+        int clampedPage = Math.Clamp(pageIndex, 0, TotalPages - 1);
+        return PagesAcross
+            ? ScrollToAsync(clampedPage * viewportSize.Width, OffsetY, model)
+            : ScrollToAsync(OffsetX, clampedPage * viewportSize.Height, model);
     }
 
-    /// <summary>
-    /// The current page index (zero-based). Reactive. Only meaningful
-    /// when the owning <see cref="ScrollView"/> has paging enabled.
-    /// </summary>
-    public int CurrentPage => currentPage;
+    /// <summary>The page in view: the position over the viewport's length, rounded.</summary>
+    public int CurrentPage
+    {
+        get
+        {
+            float page = PagesAcross ? viewportSize.Width : viewportSize.Height;
+            float offset = PagesAcross ? OffsetX : OffsetY;
+            return page > 0 && TotalPages > 0 ? Math.Clamp((int)MathF.Round(offset / page), 0, TotalPages - 1) : 0;
+        }
+    }
 
-    /// <summary>
-    /// The total number of pages. Reactive — changes if content size changes.
-    /// Only meaningful when the owning <see cref="ScrollView"/> has paging enabled.
-    /// </summary>
-    public int TotalPages => totalPages;
+    /// <summary>How many viewport-lengths the content spans.</summary>
+    public int TotalPages
+    {
+        get
+        {
+            float page = PagesAcross ? viewportSize.Width : viewportSize.Height;
+            float content = PagesAcross ? contentSize.Width : contentSize.Height;
+            return page > 0 ? Math.Max(1, (int)MathF.Ceiling(content / page - 0.001f)) : 0;
+        }
+    }
 
     // ── Private helpers ──────────────────────────────────────────────
-
-    private void RecalculatePages()
-    {
-        if (viewportSize.Height > 0)
-        {
-            totalPages = (int)MathF.Ceiling(contentSize.Height / viewportSize.Height);
-            if (totalPages > 0)
-            {
-                currentPage = Math.Clamp(
-                    (int)MathF.Round(position.Y / viewportSize.Height),
-                    0, totalPages - 1);
-            }
-        }
-        else
-        {
-            totalPages = 0;
-            currentPage = 0;
-        }
-    }
 
     private static float ComputeScrollIntoViewOffset(
         float targetPos, float targetSize, float currentScroll, float viewportExtent,

@@ -1647,10 +1647,13 @@ internal static class LayoutSolver
         float vpHeight = float.IsPositiveInfinity(constraints.MaxHeight)
             ? 0 : constraints.MaxHeight;
 
-        // Measure content with same width but unconstrained height (vertical scroll)
+        // Measure content unbounded along the axes it scrolls on (down, across, or both), and to the
+        // viewport on the others.
         var contentConstraints = new LayoutConstraints(
-            constraints.MinWidth, constraints.MaxWidth,
-            0, float.PositiveInfinity);
+            sv.ScrollsHorizontally ? 0 : constraints.MinWidth,
+            sv.ScrollsHorizontally ? float.PositiveInfinity : constraints.MaxWidth,
+            sv.ScrollsVertically ? 0 : constraints.MinHeight,
+            sv.ScrollsVertically ? float.PositiveInfinity : constraints.MaxHeight);
         var contentSize = MeasureChild(sv.Content, contentConstraints);
 
         // Apply horizontal alignment when content is narrower than viewport
@@ -1677,9 +1680,16 @@ internal static class LayoutSolver
         }
 
         // Store max scroll extent and clamp current offset on the ScrollView instance
-        float maxScrollY = Math.Max(0, contentSize.Height - vpHeight);
+        float maxScrollY = sv.ScrollsVertically ? Math.Max(0, contentSize.Height - vpHeight) : 0f;
+        float maxScrollX = sv.ScrollsHorizontally ? Math.Max(0, contentSize.Width - vpWidth) : 0f;
         sv.MaxY = maxScrollY;
+        sv.MaxX = maxScrollX;
         sv.OffsetY = Math.Clamp(sv.OffsetY, 0f, maxScrollY);
+        sv.OffsetX = Math.Clamp(sv.OffsetX, 0f, maxScrollX);
+        sv.Control.UpdateViewportSize(new Size(vpWidth, vpHeight));
+        sv.Control.UpdateContentSize(contentSize);
+        sv.Control.PagesAcross = sv.ScrollDirection == ScrollDirection.Horizontal;
+        sv.AfterLayout(contentSize.Height);
 
         // Keep global in sync for backward compatibility (last-laid-out wins)
         InputDispatcher.ScrollViewMaxY = maxScrollY;

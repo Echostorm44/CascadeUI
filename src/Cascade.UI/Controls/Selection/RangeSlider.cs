@@ -5,7 +5,7 @@ namespace Cascade.UI;
 /// same track. The track segment between the thumbs is filled. The thumbs
 /// cannot cross each other.
 /// </summary>
-public sealed class RangeSlider : Node, IValidatable
+public sealed class RangeSlider : Node, IValidatable, IPumpedNode
 {
     /// <summary>
     /// Creates a range slider with two bound values.
@@ -73,6 +73,49 @@ public sealed class RangeSlider : Node, IValidatable
     /// Used by InputDispatcher for accurate thumb hit detection.
     /// </summary>
     internal Rect AbsoluteBounds { get; set; }
+
+    /// <summary>The thumb the keyboard moves: 0 the low one, 1 the high one (Tab goes from one to the other).</summary>
+    internal int FocusedThumb { get; set; }
+
+    /// <summary>One arrow step: the step, or a hundredth of the range.</summary>
+    internal float KeyboardStep => Step is > 0f and var s ? s : (Max - Min) / 100f;
+
+    /// <summary>Moves a thumb to a value, snapped to the step and kept from crossing the other.</summary>
+    internal void MoveThumb(int thumb, float value)
+    {
+        if (Step is > 0f and var step)
+        {
+            value = Min + MathF.Round((value - Min) / step) * step;
+        }
+        if (thumb == 0)
+        {
+            value = Math.Clamp(value, Min, MaxBind.Value);
+            if (value != MinBind.Value)
+            {
+                MinBind.OnChange(value);
+            }
+        }
+        else
+        {
+            value = Math.Clamp(value, MinBind.Value, Max);
+            if (value != MaxBind.Value)
+            {
+                MaxBind.OnChange(value);
+            }
+        }
+    }
+
+    void IPumpedNode.Pump()
+    {
+    }
+
+    void IPumpedNode.AdoptFrom(Node previous)
+    {
+        if (previous is RangeSlider old)
+        {
+            FocusedThumb = old.FocusedThumb;
+        }
+    }
 
     /// <summary>
     /// Runs all registered validation rules against the current range values.

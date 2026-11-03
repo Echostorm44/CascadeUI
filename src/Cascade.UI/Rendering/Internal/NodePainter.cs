@@ -2549,7 +2549,7 @@ internal sealed partial class NodePainter
 
         // ── Day-of-week headers ──
         float headerY = contentY + headerHeight;
-        string[] dayAbbrs = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+        string[] dayAbbrs = CalendarLayout.ShortDayNames(); // the culture's week
         for (int col = 0; col < cols; col++)
         {
             var cellBounds = new Rect(contentX + col * cellSize, headerY, cellSize, dayHeaderHeight);
@@ -2564,8 +2564,7 @@ internal sealed partial class NodePainter
         // Compute the first date in the grid (Sunday of the week containing the 1st)
         var firstOfMonth = new DateOnly(dp.DisplayedYear, dp.DisplayedMonth, 1);
         int daysInMonth = DateTime.DaysInMonth(dp.DisplayedYear, dp.DisplayedMonth);
-        int startDayOfWeek = (int)firstOfMonth.DayOfWeek; // Sunday = 0
-        var gridStartDate = firstOfMonth.AddDays(-startDayOfWeek);
+        var gridStartDate = CalendarLayout.WeekStart(firstOfMonth); // the culture's first day of the week
         dp.CalendarGridStartDate = gridStartDate;
         dp.CalendarGridCellCount = rows * cols;
 
@@ -3203,7 +3202,7 @@ internal sealed partial class NodePainter
 
         // ── Day-of-week headers for both calendars ──
         float headerY = contentY + headerHeight;
-        string[] dayAbbrs = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+        string[] dayAbbrs = CalendarLayout.ShortDayNames(); // the culture's week
         for (int col = 0; col < cols; col++)
         {
             var leftCell = new Rect(leftCalX + col * cellSize, headerY, cellSize, dayHeaderHeight);
@@ -3221,12 +3220,10 @@ internal sealed partial class NodePainter
 
         // Compute grid start dates
         var leftFirst = new DateOnly(drp.DisplayedYear, drp.DisplayedMonth, 1);
-        int leftStartDow = (int)leftFirst.DayOfWeek;
-        drp.LeftGridStartDate = leftFirst.AddDays(-leftStartDow);
+        drp.LeftGridStartDate = CalendarLayout.WeekStart(leftFirst);
 
         var rightFirst = new DateOnly(rightYear, rightMonth, 1);
-        int rightStartDow = (int)rightFirst.DayOfWeek;
-        drp.RightGridStartDate = rightFirst.AddDays(-rightStartDow);
+        drp.RightGridStartDate = CalendarLayout.WeekStart(rightFirst);
 
         // Determine the effective range for highlighting
         DateOnly? rangeStart = drp.StartBind.Value;
@@ -3540,7 +3537,7 @@ internal sealed partial class NodePainter
 
         // ── Day-of-week headers ──
         float dayHeaderY = contentY + headerHeight;
-        string[] dayNames = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+        string[] dayNames = CalendarLayout.ShortDayNames(); // the culture's week
         for (int i = 0; i < 7; i++)
         {
             float dx = contentX + i * cellSize;
@@ -3556,8 +3553,7 @@ internal sealed partial class NodePainter
 
         // Compute first day in grid (start on Sunday before the 1st)
         var firstOfMonth = new DateOnly(dtp.DisplayedYear, dtp.DisplayedMonth, 1);
-        int startOffset = (int)firstOfMonth.DayOfWeek;
-        var gridStart = firstOfMonth.AddDays(-startOffset);
+        var gridStart = CalendarLayout.WeekStart(firstOfMonth);
         dtp.CalendarGridStartDate = gridStart;
 
         DateOnly today = DateOnly.FromDateTime(DateTime.Today);
@@ -10027,13 +10023,14 @@ internal sealed partial class NodePainter
         // Focus ring
         if (!disabled && anim.Focus.Current > 0.01f)
         {
-            // Draw focus ring around the entire track area
+            // The ring goes round the thumb the keyboard moves (Tab switches between them).
             float focusT2 = anim.Focus.Current;
             float ringOffset = 3f;
+            float ringThumbX = rs.FocusedThumb == 1 ? maxThumbX : minThumbX;
             var ringRect = new Rect(
-                bounds.X - ringOffset,
+                ringThumbX - ringOffset,
                 thumbY - ringOffset,
-                bounds.Width + ringOffset * 2,
+                thumbW + ringOffset * 2,
                 thumbH + ringOffset * 2);
             ctx.DrawRect(ringRect,
                 stroke: new Stroke(theme.Colors.Focus.Opacity(focusT2), 2f),

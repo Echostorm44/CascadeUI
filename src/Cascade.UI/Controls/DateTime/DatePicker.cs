@@ -131,6 +131,29 @@ public sealed class DatePicker : Node
         DisplayedYear = reference.Year;
     }
 
+    /// <summary>The day the keyboard is on in the popup.</summary>
+    internal DateOnly KeyboardDate { get; set; }
+
+    /// <summary>Puts the keyboard on a day: shows its month and highlights it.</summary>
+    internal void MoveKeyboardTo(DateOnly day)
+    {
+        if (Min is { } min && day < min)
+        {
+            day = min;
+        }
+        if (Max is { } max && day > max)
+        {
+            day = max;
+        }
+        KeyboardDate = day;
+        DisplayedMonth = day.Month;
+        DisplayedYear = day.Year;
+        HighlightedDay = day.DayNumber - CalendarLayout.WeekStart(new DateOnly(day.Year, day.Month, 1)).DayNumber;
+    }
+
+    internal bool IsDateDisabled(DateOnly date) =>
+        (Min.HasValue && date < Min.Value) || (Max.HasValue && date > Max.Value) || DisabledDatesPredicate?.Invoke(date) == true;
+
     internal void CloseCalendar()
     {
         IsCalendarOpen = false;

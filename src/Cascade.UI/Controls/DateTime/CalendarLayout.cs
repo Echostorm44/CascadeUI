@@ -80,6 +80,14 @@ internal sealed class CalendarLayout
 
     internal static DayOfWeek FirstDayOfWeek => CultureInfo.CurrentCulture.DateTimeFormat.FirstDayOfWeek;
 
+    /// <summary>The culture's shortest day names ("Su", "Mo" …), starting on its first day of the week.</summary>
+    internal static string[] ShortDayNames()
+    {
+        var names = CultureInfo.CurrentCulture.DateTimeFormat.ShortestDayNames;
+        int first = (int)FirstDayOfWeek;
+        return [.. Enumerable.Range(0, 7).Select(i => names[(first + i) % 7])];
+    }
+
     internal static DateOnly WeekStart(DateOnly day)
     {
         int back = ((int)day.DayOfWeek - (int)FirstDayOfWeek + 7) % 7;

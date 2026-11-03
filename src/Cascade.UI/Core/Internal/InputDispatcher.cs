@@ -2258,8 +2258,8 @@ internal sealed partial class InputDispatcher
             sliderDragStartX = evt.X;
             float trackRange = rs.Max - rs.Min;
             float thumbW = 20f;
-            // Use AbsoluteBounds (set by painter) for correct window-coordinate math
-            var absBounds = rs.AbsoluteBounds;
+            // Where layout has it now (the painter's stamp lags a frame and is stale in a scrolled layer).
+            var absBounds = TryGetAbsoluteBounds(rs, out var liveRange) ? liveRange : rs.AbsoluteBounds;
             float trackW = Math.Max(1f, absBounds.Width - thumbW);
             float relX = evt.X - absBounds.X - thumbW / 2f;
             float clickFrac = Math.Clamp(relX / trackW, 0f, 1f);
@@ -2268,6 +2268,7 @@ internal sealed partial class InputDispatcher
             float distMin = MathF.Abs(clickVal - rs.MinBind.Value);
             float distMax = MathF.Abs(clickVal - rs.MaxBind.Value);
             rangeSliderDragIsMax = distMax <= distMin;
+            rs.FocusedThumb = rangeSliderDragIsMax ? 1 : 0;
             rangeSliderDragStartValue = rangeSliderDragIsMax ? rs.MaxBind.Value : rs.MinBind.Value;
         }
 
@@ -3316,6 +3317,39 @@ internal sealed partial class InputDispatcher
             return;
         }
 
+        // A focused date picker opens from the keyboard, on its date (or today).
+        if (evt.Type == NativeKeyEventType.KeyDown && openDatePicker is null && FocusManager.FocusedElement is DatePicker { IsCalendarOpen: false } focusedDate
+            && evt.Key is Key.Enter or Key.Space or Key.Down)
+        {
+            focusedDate.OpenCalendar();
+            focusedDate.MoveKeyboardTo(focusedDate.Value.Value ?? DateOnly.FromDateTime(DateTime.Today));
+            openDatePicker = focusedDate;
+            RequestRepaint?.Invoke();
+            return;
+        }
+
+        if (evt.Type == NativeKeyEventType.KeyDown && FocusManager.FocusedElement is RangeSlider { IsDisabled: false } focusedRange
+            && HandleRangeSliderKey(focusedRange, evt))
+        {
+            if (rootNode is not null)
+            {
+                MarkScrollViewLayersDirty(rootNode, focusedRange);
+            }
+            RequestRepaint?.Invoke();
+            return;
+        }
+
+        if (evt.Type == NativeKeyEventType.KeyDown && FocusManager.FocusedElement is IRadioButton and Node focusedRadio
+            && evt.Modifiers == ModifierKeys.None && HandleRadioKey(focusedRadio, evt))
+        {
+            if (rootNode is not null)
+            {
+                MarkScrollViewLayersDirty(rootNode, focusedRadio);
+            }
+            RequestRepaint?.Invoke();
+            return;
+        }
+
         if (activeEyeDropper is { } dropping && evt.Key == Key.Escape)
         {
             FinishEyeDropper(dropping, take: false);
@@ -3841,17 +3875,108 @@ internal sealed partial class InputDispatcher
     /// Walks the tree in document (paint) order, appending every enabled keyboard tab
     /// stop to <paramref name="result"/>.
     /// </summary>
-    private static void CollectTabStops(Node node, List<Node> result)
+    private static void CollectTabStops(Node node, List<Node> result) => CollectTabStops(node, result, null);
+
+    // A radio group is one tab stop: its selected option (or its first); the arrows move within it.
+    private static void CollectTabStops(Node node, List<Node> result, HashSet<Node>? notStops)
     {
-        if (IsTabStop(node))
+        if (node is IRadioGroup group)
+        {
+            var radios = RadiosIn(group.Content);
+            var chosen = radios.FirstOrDefault(r => ((IRadioButton)r).IsSelected) ?? radios.FirstOrDefault();
+            notStops = [.. (notStops ?? []), .. radios.Where(r => !ReferenceEquals(r, chosen))];
+        }
+
+        if (IsTabStop(node) && notStops?.Contains(node) != true)
         {
             result.Add(node);
         }
 
         foreach (var child in NodeDiffer.GetChildren(node))
         {
-            CollectTabStops(child, result);
+            CollectTabStops(child, result, notStops);
         }
+    }
+
+    /// <summary>The radio buttons inside a group's content, in order.</summary>
+    private static List<Node> RadiosIn(Node content)
+    {
+        var radios = new List<Node>();
+        void Walk(Node n)
+        {
+            if (n is IRadioButton)
+            {
+                radios.Add(n);
+                return;
+            }
+            foreach (var child in NodeDiffer.GetChildren(n))
+            {
+                Walk(child);
+            }
+        }
+        Walk(content);
+        return radios;
+    }
+
+    /// <summary>The radio group a radio button is in (searched from the root: nodes have no parent link).</summary>
+    private IRadioGroup? GroupOf(Node radio)
+    {
+        IRadioGroup? found = null;
+        void Walk(Node n)
+        {
+            if (found is not null)
+            {
+                return;
+            }
+            if (n is IRadioGroup group && RadiosIn(group.Content).Contains(radio))
+            {
+                found = group;
+                return;
+            }
+            foreach (var child in NodeDiffer.GetChildren(n))
+            {
+                Walk(child);
+            }
+        }
+        if (rootNode is not null)
+        {
+            Walk(rootNode);
+        }
+        return found;
+    }
+
+    /// <summary>
+    /// Keys on a focused radio button: the arrows select the next (Down/Right) or previous
+    /// (Up/Left) option of its group, wrapping, and focus moves with them; Space selects it.
+    /// </summary>
+    private bool HandleRadioKey(Node radio, NativeKeyEvent evt)
+    {
+        if (evt.Key == Key.Space || evt.Character == ' ')
+        {
+            ((IRadioButton)radio).Select();
+            return true;
+        }
+        int step = evt.Key switch
+        {
+            Key.Down or Key.Right => 1,
+            Key.Up or Key.Left => -1,
+            _ => 0,
+        };
+        if (step == 0 || GroupOf(radio) is not { IsGroupDisabled: false } group)
+        {
+            return false;
+        }
+        var radios = RadiosIn(group.Content);
+        int at = radios.IndexOf(radio);
+        if (at < 0 || radios.Count == 0)
+        {
+            return false;
+        }
+        var next = radios[(at + step + radios.Count) % radios.Count];
+        ((IRadioButton)next).Select();
+        FocusManager.RequestFocus(next);
+        FocusManager.LastFocusWasKeyboard = true;
+        return true;
     }
 
     /// <summary>
@@ -7577,6 +7702,55 @@ internal sealed partial class InputDispatcher
                 RequestRepaint?.Invoke();
                 break;
 
+            // Days: the keyboard moves a day at a time (a week up or down), pages by month (Shift:
+            // year), Home/End to the week's ends, and Enter or Space chooses.
+            case Key.Left or Key.Right or Key.Up or Key.Down or Key.PageUp or Key.PageDown or Key.Home or Key.End or Key.Space
+                when dp.ViewMode == CalendarViewMode.Days:
+            {
+                var from = dp.KeyboardDate == default ? dp.Value.Value ?? DateOnly.FromDateTime(DateTime.Today) : dp.KeyboardDate;
+                bool shift = evt.Modifiers.HasFlag(ModifierKeys.Shift);
+                if (evt.Key == Key.Space)
+                {
+                    if (!dp.IsDateDisabled(from))
+                    {
+                        dp.SelectDate(from);
+                        openDatePicker = null;
+                    }
+                    RequestRepaint?.Invoke();
+                    break;
+                }
+                var to = evt.Key switch
+                {
+                    Key.Left => from.AddDays(-1),
+                    Key.Right => from.AddDays(1),
+                    Key.Up => from.AddDays(-7),
+                    Key.Down => from.AddDays(7),
+                    Key.PageUp => shift ? from.AddYears(-1) : from.AddMonths(-1),
+                    Key.PageDown => shift ? from.AddYears(1) : from.AddMonths(1),
+                    Key.Home => CalendarLayout.WeekStart(from),
+                    _ => CalendarLayout.WeekStart(from).AddDays(6),
+                };
+                dp.MoveKeyboardTo(to);
+                RequestRepaint?.Invoke();
+                break;
+            }
+
+            // Months and years: the arrows move round the 4 × 3 grid.
+            case Key.Up or Key.Down when dp.ViewMode != CalendarViewMode.Days:
+                dp.HighlightedDay = Math.Clamp((dp.HighlightedDay < 0 ? 0 : dp.HighlightedDay) + (evt.Key == Key.Down ? 4 : -4), 0, 11);
+                RequestRepaint?.Invoke();
+                break;
+
+            case Key.Left when dp.ViewMode != CalendarViewMode.Days && dp.HighlightedDay > 0:
+                dp.HighlightedDay--;
+                RequestRepaint?.Invoke();
+                break;
+
+            case Key.Right when dp.ViewMode != CalendarViewMode.Days && dp.HighlightedDay is >= 0 and < 11:
+                dp.HighlightedDay++;
+                RequestRepaint?.Invoke();
+                break;
+
             case Key.Left:
                 switch (dp.ViewMode)
                 {
@@ -7624,7 +7798,9 @@ internal sealed partial class InputDispatcher
                     {
                         if (dp.HighlightedDay < dp.CalendarGridCellCount)
                         {
-                            var date = dp.CalendarGridStartDate.AddDays(dp.HighlightedDay);
+                            // The keyboard's day if it has one (the painter's grid can lag a month change).
+                            var date = dp.KeyboardDate != default && dp.KeyboardDate.Month == dp.DisplayedMonth
+                                ? dp.KeyboardDate : dp.CalendarGridStartDate.AddDays(dp.HighlightedDay);
                             if (date.Month == dp.DisplayedMonth && date.Year == dp.DisplayedYear)
                             {
                                 bool disabled = (dp.Min.HasValue && date < dp.Min.Value)
@@ -9191,7 +9367,7 @@ internal sealed partial class InputDispatcher
     private static bool IsFocusableControl(Node node) =>
         node is Button or LinkButton or IconButton
             or TextInput or TextArea or PasswordInput or PinInput
-            or MentionInput or TagInput or ColorPicker or Calendar or TimePicker or NavItem { Enabled: true }
+            or MentionInput or TagInput or ColorPicker or Calendar or TimePicker or NavItem { Enabled: true } or IRadioButton or RangeSlider or DatePicker
             or Checkbox or Toggle or Slider or HotkeyPicker or TabBar
             or ISelectNode or IMultiSelectNode or IComboboxNode
             or IToggleGroup or ISegmentedControl
@@ -9246,6 +9422,53 @@ internal sealed partial class InputDispatcher
         {
             slider.Bind.OnChange(next);
         }
+        return true;
+    }
+
+    /// <summary>
+    /// Keys on a focused range slider: Tab goes from the low thumb to the high one (Shift+Tab back)
+    /// before leaving the control; the arrows step the focused thumb, Page Up/Down by a tenth,
+    /// Home and End to its limit. A thumb never crosses the other.
+    /// </summary>
+    private static bool HandleRangeSliderKey(RangeSlider rs, NativeKeyEvent evt)
+    {
+        bool shift = evt.Modifiers.HasFlag(ModifierKeys.Shift);
+        if (evt.Key == Key.Tab && (evt.Modifiers & ~ModifierKeys.Shift) == ModifierKeys.None)
+        {
+            if (!shift && rs.FocusedThumb == 0)
+            {
+                rs.FocusedThumb = 1;
+                return true;
+            }
+            if (shift && rs.FocusedThumb == 1)
+            {
+                rs.FocusedThumb = 0;
+                return true;
+            }
+            return false;
+        }
+        if (evt.Modifiers != ModifierKeys.None || rs.IsReadOnly)
+        {
+            return false;
+        }
+        int thumb = rs.FocusedThumb;
+        float value = thumb == 0 ? rs.MinBind.Value : rs.MaxBind.Value;
+        float page = Math.Max(rs.KeyboardStep, (rs.Max - rs.Min) / 10f);
+        float? target = evt.Key switch
+        {
+            Key.Right or Key.Up => value + rs.KeyboardStep,
+            Key.Left or Key.Down => value - rs.KeyboardStep,
+            Key.PageUp => value + page,
+            Key.PageDown => value - page,
+            Key.Home => rs.Min,
+            Key.End => rs.Max,
+            _ => null,
+        };
+        if (target is not { } next)
+        {
+            return false;
+        }
+        rs.MoveThumb(thumb, next);
         return true;
     }
 

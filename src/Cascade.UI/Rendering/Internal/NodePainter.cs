@@ -6555,7 +6555,7 @@ internal sealed partial class NodePainter
         var iconColor = iv.ColorOverride ?? theme.Colors.Text;
         float strokeWidth = iv.StrokeOverride ?? Math.Max(1.5f, drawSize / 12f);
 
-        PaintIconBitmap(icon, iconCx, iconCy, drawSize, 1f, iconColor, strokeWidth);
+        PaintIconBitmap(icon, iconCx, iconCy, drawSize, 1f, iconColor, strokeWidth, iv.IsFilled);
     }
 
     // ── Icon bitmap cache (Apple/Flutter-style: rasterize once, blit) ──────────
@@ -6563,7 +6563,7 @@ internal sealed partial class NodePainter
     // Cached anti-aliased icon bitmaps keyed by (icon content, device px, quantized
     // stroke, color). Static so it survives across frames/components; entries are tiny
     // (px²·4 bytes). The cache is what makes this zero-per-frame, unlike re-stroking.
-    private static readonly Dictionary<(int Icon, int Px, int Stroke, int Color), ImageSource> iconImageCache = new();
+    private static readonly Dictionary<(int Icon, int Px, int Stroke, int Color, bool Fill), ImageSource> iconImageCache = new();
 
     /// <summary>
     /// Draws <paramref name="icon"/> centered at (<paramref name="centerX"/>,
@@ -6574,7 +6574,7 @@ internal sealed partial class NodePainter
     /// </summary>
     private void PaintIconBitmap(
         Icon icon, float centerX, float centerY, float baseDrawSize,
-        float renderScale, ColorValue color, float strokeWidthLogical)
+        float renderScale, ColorValue color, float strokeWidthLogical, bool fill = false)
     {
         if (icon.Paths.Length == 0 || baseDrawSize <= 0f)
         {
@@ -6585,7 +6585,7 @@ internal sealed partial class NodePainter
         int devicePx = Math.Clamp((int)MathF.Round(baseDrawSize * ratio), 1, 1024);
         float strokeDevice = MathF.Max(0.75f, strokeWidthLogical * ratio);
 
-        var image = GetOrCreateIconImage(icon, devicePx, strokeDevice, color, out int margin);
+        var image = GetOrCreateIconImage(icon, devicePx, strokeDevice, color, out int margin, fill);
 
         // The bitmap is the icon's box plus a stroke margin on each side; blit it that much larger
         // so the box itself lands at baseDrawSize.
@@ -6593,13 +6593,13 @@ internal sealed partial class NodePainter
         ctx.DrawImage(image, new Rect(centerX - drawn * 0.5f, centerY - drawn * 0.5f, drawn, drawn));
     }
 
-    private static ImageSource GetOrCreateIconImage(Icon icon, int devicePx, float strokeDevice, ColorValue color, out int margin)
+    private static ImageSource GetOrCreateIconImage(Icon icon, int devicePx, float strokeDevice, ColorValue color, out int margin, bool fill = false)
     {
         // Half the stroke plus a pixel of AA fringe around the box (not inside it).
         margin = IconRasterizer.MarginFor(strokeDevice);
         int strokeKey = (int)MathF.Round(strokeDevice * 4f);
         int colorKey = HashCode.Combine(color.R, color.G, color.B, color.A);
-        var key = (icon.GetHashCode(), devicePx, strokeKey, colorKey);
+        var key = (icon.GetHashCode(), devicePx, strokeKey, colorKey, fill);
         if (iconImageCache.TryGetValue(key, out var cached))
         {
             return cached;
@@ -6607,7 +6607,7 @@ internal sealed partial class NodePainter
 
         float viewW = icon.ViewBox.Width > 0 ? icon.ViewBox.Width : 24f;
         float viewH = icon.ViewBox.Height > 0 ? icon.ViewBox.Height : 24f;
-        byte[] rgba = IconRasterizer.Rasterize(icon.Paths, viewW, viewH, devicePx, strokeDevice, color, margin);
+        byte[] rgba = IconRasterizer.Rasterize(icon.Paths, viewW, viewH, devicePx, strokeDevice, color, margin, fill);
         int size = devicePx + (2 * margin);
         var image = ImageSource.FromBytes(rgba, size, size);
         iconImageCache[key] = image;
@@ -8409,15 +8409,16 @@ internal sealed partial class NodePainter
             }
         }
 
-        // Colors
+        // Colors. A selected pill is filled with the accent itself (Apple's selected filter chip): a
+        // translucent tint over a dark surface read as a muddy brown rather than the app's colour.
         var bgColor = isSelected
-            ? theme.Colors.Primary.Opacity(0.2f)
+            ? theme.Colors.Primary
             : theme.Colors.SurfaceAlt;
         var textColor = isSelected
-            ? theme.Colors.PrimaryText
+            ? theme.Colors.TextOnPrimary
             : theme.Colors.Text;
         var borderColor = isSelected
-            ? theme.Colors.Primary.Opacity(0.5f)
+            ? theme.Colors.Primary
             : theme.Colors.Border;
         if (tag.TagColorOverride is { } tagColor)
         {
@@ -8433,14 +8434,14 @@ internal sealed partial class NodePainter
             if (pressT > 0.01f)
             {
                 var pressColor = isSelected
-                    ? theme.Colors.Primary.Opacity(0.35f)
+                    ? ColorValue.Lerp(theme.Colors.Primary, new ColorValue("#000000"), 0.15f)
                     : theme.Colors.Text.Opacity(0.12f);
                 bgColor = ColorValue.Lerp(bgColor, pressColor, pressT);
             }
             else if (hoverT > 0.01f)
             {
                 var hoverColor = isSelected
-                    ? theme.Colors.Primary.Opacity(0.28f)
+                    ? ColorValue.Lerp(theme.Colors.Primary, new ColorValue("#FFFFFF"), 0.12f)
                     : theme.Colors.Text.Opacity(0.06f);
                 bgColor = ColorValue.Lerp(bgColor, hoverColor, hoverT);
             }
@@ -15173,8 +15174,31 @@ internal sealed partial class NodePainter
         float fontSize = theme.Typography.Scale.Body.Size;
         float toggleBtnW = pwd.ShowToggleButton ? 32f : 0f;
         float toggleMargin = pwd.ShowToggleButton ? 4f : 0f;
-        float scrollX = focused ? InputDispatcher.PasswordScrollOffsetX : 0f;
         float availableTextWidth = inputBounds.Width - t.PaddingH * 2 - toggleBtnW - toggleMargin;
+        string displayText = masked ? new string('●', text.Length) : text;
+        int caretIndex = Math.Clamp(InputDispatcher.PasswordCaretIndex, 0, text.Length);
+        int anchorIndex = Math.Clamp(InputDispatcher.PasswordSelectionAnchor, 0, text.Length);
+        float AdvanceTo(int index) => index <= 0 ? 0f : ctx.MeasureTextAdvance(displayText[..index], fontSize).Width;
+
+        // Scroll only as far as needed to show the caret, and never past the end of the text: a
+        // stale offset (from the wider mask glyphs, or a longer value) used to cut off the start.
+        float scrollX = 0f;
+        if (focused)
+        {
+            float caretRel = AdvanceTo(caretIndex);
+            float textWidth = AdvanceTo(text.Length);
+            scrollX = InputDispatcher.PasswordScrollOffsetX;
+            if (caretRel - scrollX > availableTextWidth)
+            {
+                scrollX = caretRel - availableTextWidth;
+            }
+            else if (caretRel < scrollX)
+            {
+                scrollX = caretRel;
+            }
+            scrollX = Math.Clamp(scrollX, 0f, Math.Max(0f, textWidth - availableTextWidth));
+            InputDispatcher.PasswordScrollOffsetX = scrollX;
+        }
 
         // Clip text content to input area excluding the toggle button
         var textClipBounds = new Rect(
@@ -15197,21 +15221,18 @@ internal sealed partial class NodePainter
             }
         }
 
+        float textX = MathF.Round(inputBounds.X + t.PaddingH - scrollX);
         if (!string.IsNullOrEmpty(text))
         {
-            string displayText = masked ? new string('●', text.Length) : text;
             var textColor = disabled ? t.DisabledTextColor : t.TextColor;
-
-            // Measure full text advance width (no wrapping)
             var textSize = ctx.MeasureTextAdvance(displayText, fontSize);
-            float textY = inputBounds.Y + (inputHeight - textSize.Height) / 2f;
-            textY = MathF.Round(textY);
+            float textY = MathF.Round(inputBounds.Y + (inputHeight - textSize.Height) / 2f);
 
-            // Draw text with infinite maxWidth (never wraps) and apply horizontal scroll
-            float textX = MathF.Round(inputBounds.X + t.PaddingH - scrollX);
-            if (focused && InputDispatcher.PasswordAllSelected)
+            if (focused && anchorIndex != caretIndex)
             {
-                ctx.DrawRect(new Rect(textX, inputBounds.Y + 4f, textSize.Width, inputHeight - 8f), theme.Colors.Primary.Opacity(0.3f));
+                float from = AdvanceTo(Math.Min(anchorIndex, caretIndex));
+                float to = AdvanceTo(Math.Max(anchorIndex, caretIndex));
+                ctx.DrawRect(new Rect(textX + from, inputBounds.Y + 4f, to - from, inputHeight - 8f), theme.Colors.Primary.Opacity(0.3f));
             }
             ctx.DrawText(displayText, textX, textY, fontSize, textColor,
                 maxWidth: float.PositiveInfinity, maxLines: 1);
@@ -15221,26 +15242,9 @@ internal sealed partial class NodePainter
         if (focused && !disabled)
         {
             var caret = theme.Caret;
-            string displayText = masked ? new string('●', text.Length) : text;
-            float caretTextWidth = string.IsNullOrEmpty(displayText)
-                ? 0f
-                : ctx.MeasureTextAdvance(displayText, fontSize).Width;
-            float caretX = inputBounds.X + t.PaddingH + caretTextWidth - scrollX;
+            float caretX = textX + AdvanceTo(caretIndex);
             float caretPadY = 6f;
-            float caretY = inputBounds.Y + caretPadY;
-            float caretH = inputHeight - caretPadY * 2;
-            DrawCaret(new Rect(caretX, caretY, caret.Width, caretH), caret.Color);
-
-            // Auto-scroll horizontally to keep caret visible
-            float caretRelX = caretTextWidth;
-            if (caretRelX - scrollX > availableTextWidth)
-            {
-                InputDispatcher.PasswordScrollOffsetX = caretRelX - availableTextWidth;
-            }
-            else if (caretRelX < scrollX)
-            {
-                InputDispatcher.PasswordScrollOffsetX = caretRelX;
-            }
+            DrawCaret(new Rect(caretX, inputBounds.Y + caretPadY, caret.Width, inputHeight - caretPadY * 2), caret.Color);
         }
 
         // Dispose clip before painting the eye icon (which sits outside the text area)

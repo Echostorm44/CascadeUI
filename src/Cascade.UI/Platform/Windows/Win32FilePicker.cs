@@ -181,10 +181,141 @@ internal static class Win32FilePicker
     }
 
     /// <summary>
-    /// Shows the folder picker dialog using SHBrowseForFolder.
-    /// Must be called on the UI thread.
+    /// Runs a modal shell dialog on its own single-threaded-apartment thread and completes the task
+    /// with its answer.
     /// </summary>
-    internal static string? OpenFolder(nint ownerHwnd, string? title)
+    /// <remarks>
+    /// The shell dialogs are COM objects that need an STA thread pumping messages. Cascade's UI
+    /// thread is not one (the process starts MTA), so a folder dialog shown there hung the whole
+    /// app. On a thread of its own the dialog gets its apartment and its own message loop, stays
+    /// modal to <c>ownerHwnd</c> (Windows disables the owner across threads), and the app keeps
+    /// painting behind it.
+    /// </remarks>
+    internal static Task<T> RunOnDialogThread<T>(Func<T> show)
+    {
+        var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            int initialised = Win32.CoInitializeEx(0, Win32.COINIT_APARTMENTTHREADED);
+            try
+            {
+                completion.SetResult(show());
+            }
+            catch (Exception ex)
+            {
+                completion.SetException(ex);
+            }
+            finally
+            {
+                if (initialised >= 0)
+                {
+                    Win32.CoUninitialize();
+                }
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "Cascade file dialog",
+        };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        return completion.Task;
+    }
+
+    // IFileOpenDialog, driven through its vtable (AOT-safe, no COM interop layer).
+    private static readonly Guid ClsidFileOpenDialog = new("DC1C5A9C-E88A-4DDE-A5A1-60F82A20AEF7");
+    private static readonly Guid IidFileOpenDialog = new("D57C7288-D4AD-4768-BE02-9D969532D960");
+    private static readonly Guid IidShellItem = new("43826D1E-E718-42EE-BC55-A1E261C37BFE");
+    private const int ShowSlot = 3;            // IModalWindow::Show
+    private const int SetOptionsSlot = 9;
+    private const int GetOptionsSlot = 10;
+    private const int SetFolderSlot = 12;
+    private const int SetTitleSlot = 17;
+    private const int GetResultSlot = 20;
+    private const int GetDisplayNameSlot = 5;  // IShellItem::GetDisplayName
+    private const uint FosPickFolders = 0x20;
+    private const uint FosForceFileSystem = 0x40;
+    private const uint FosPathMustExist = 0x800;
+    private const uint SigdnFileSysPath = 0x80058000;
+    private const int ErrorCancelled = unchecked((int)0x800704C7);
+
+    /// <summary>
+    /// Shows the Windows folder picker (the Explorer-style dialog), opened at
+    /// <paramref name="initialDirectory"/> when it exists. Call it on an STA thread
+    /// (<see cref="RunOnDialogThread{T}"/>). Falls back to SHBrowseForFolder if the shell
+    /// dialog can't be created.
+    /// </summary>
+    internal static unsafe string? OpenFolder(nint ownerHwnd, string? title, string? initialDirectory = null)
+    {
+        if (Win32.CoCreateInstance(ClsidFileOpenDialog, 0, Win32.CLSCTX_INPROC_SERVER, IidFileOpenDialog, out nint instance) < 0 || instance == 0)
+        {
+            return BrowseForFolder(ownerHwnd, title);
+        }
+
+        void* dialog = (void*)instance;
+        var vtable = *(void***)dialog;
+        try
+        {
+            uint options = 0;
+            _ = ((delegate* unmanaged[Stdcall]<void*, uint*, int>)vtable[GetOptionsSlot])(dialog, &options);
+            _ = ((delegate* unmanaged[Stdcall]<void*, uint, int>)vtable[SetOptionsSlot])(
+                dialog, options | FosPickFolders | FosForceFileSystem | FosPathMustExist);
+
+            if (title is not null)
+            {
+                fixed (char* pTitle = title)
+                {
+                    _ = ((delegate* unmanaged[Stdcall]<void*, char*, int>)vtable[SetTitleSlot])(dialog, pTitle);
+                }
+            }
+
+            if (!string.IsNullOrEmpty(initialDirectory) && Directory.Exists(initialDirectory)
+                && Win32.SHCreateItemFromParsingName(initialDirectory, 0, IidShellItem, out nint folder) >= 0 && folder != 0)
+            {
+                _ = ((delegate* unmanaged[Stdcall]<void*, void*, int>)vtable[SetFolderSlot])(dialog, (void*)folder);
+                Release((void*)folder);
+            }
+
+            int shown = ((delegate* unmanaged[Stdcall]<void*, nint, int>)vtable[ShowSlot])(dialog, ownerHwnd);
+            if (shown == ErrorCancelled || shown < 0)
+            {
+                return null;
+            }
+
+            void* item = null;
+            if (((delegate* unmanaged[Stdcall]<void*, void**, int>)vtable[GetResultSlot])(dialog, &item) < 0 || item == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                var itemVtable = *(void***)item;
+                char* path = null;
+                if (((delegate* unmanaged[Stdcall]<void*, uint, char**, int>)itemVtable[GetDisplayNameSlot])(item, SigdnFileSysPath, &path) < 0 || path == null)
+                {
+                    return null;
+                }
+                string result = new(path);
+                Win32.CoTaskMemFree((nint)path);
+                return result;
+            }
+            finally
+            {
+                Release(item);
+            }
+        }
+        finally
+        {
+            Release(dialog);
+        }
+    }
+
+    private static unsafe void Release(void* unknown) =>
+        _ = ((delegate* unmanaged[Stdcall]<void*, uint>)(*(void***)unknown)[2])(unknown);
+
+    /// <summary>The legacy tree-view folder dialog, used only if the shell dialog is unavailable.</summary>
+    private static string? BrowseForFolder(nint ownerHwnd, string? title)
     {
         nint titlePtr = 0;
         try

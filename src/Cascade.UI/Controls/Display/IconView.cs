@@ -29,6 +29,7 @@ public sealed class IconView : Node
 
     internal ColorValue? ColorOverride { get; set; }
     internal float? StrokeOverride { get; set; }
+    internal bool IsFilled { get; set; }
 }
 
 /// <summary>
@@ -52,6 +53,16 @@ public static class IconViewExtensions
     public static IconView IconStroke(this IconView view, float width)
     {
         view.StrokeOverride = width;
+        return view;
+    }
+
+    /// <summary>
+    /// Fills the inside of the icon's closed shapes with its colour (a solid star, heart or circle)
+    /// rather than drawing only the outline. Open strokes are unaffected.
+    /// </summary>
+    public static IconView Filled(this IconView view, bool filled = true)
+    {
+        view.IsFilled = filled;
         return view;
     }
 

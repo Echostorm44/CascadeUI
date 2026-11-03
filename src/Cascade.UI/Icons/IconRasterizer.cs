@@ -39,7 +39,7 @@ internal static class IconRasterizer
     /// </remarks>
     public static byte[] Rasterize(
         ReadOnlySpan<string> paths, float viewW, float viewH,
-        int boxPx, float strokeWidthPx, ColorValue color, int marginPx)
+        int boxPx, float strokeWidthPx, ColorValue color, int marginPx, bool fill = false)
     {
         int pxSize = boxPx + (2 * Math.Max(0, marginPx));
         var rgba = new byte[pxSize * pxSize * 4];
@@ -55,26 +55,41 @@ internal static class IconRasterizer
 
         int curveSegments = Math.Clamp((int)MathF.Ceiling(scale * 24f), 12, 64);
 
-        // Flatten every subpath to line segments in pixel space (4 floats per segment).
+        // Flatten every subpath to line segments in pixel space (4 floats per segment). For a filled
+        // icon each subpath is also closed back to its start, into the edges the fill is wound from.
         var seg = new List<float>(256);
-        float cx = 0, cy = 0;
+        var edges = fill ? new List<float>(256) : null;
+        float cx = 0, cy = 0, startX = 0, startY = 0;
         bool have = false;
+        void CloseSubpath()
+        {
+            if (edges is not null && have && (cx != startX || cy != startY))
+            {
+                edges.Add(cx); edges.Add(cy); edges.Add(startX); edges.Add(startY);
+            }
+        }
         foreach (var p in paths)
         {
             have = false;
             SvgPathFlattener.Flatten(
                 p, curveSegments,
-                moveTo: (x, y) => { cx = offX + x * scale; cy = offY + y * scale; have = true; },
+                moveTo: (x, y) =>
+                {
+                    CloseSubpath();
+                    cx = startX = offX + x * scale; cy = startY = offY + y * scale; have = true;
+                },
                 lineTo: (x, y) =>
                 {
                     float nx = offX + x * scale, ny = offY + y * scale;
                     if (have)
                     {
                         seg.Add(cx); seg.Add(cy); seg.Add(nx); seg.Add(ny);
+                        edges?.Add(cx); edges?.Add(cy); edges?.Add(nx); edges?.Add(ny);
                     }
                     cx = nx; cy = ny;
                     have = true;
                 });
+            CloseSubpath();
         }
 
         int segCount = seg.Count / 4;
@@ -93,6 +108,7 @@ internal static class IconRasterizer
         float lo = half - 0.5f;
 
         var s = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(seg);
+        var e = edges is null ? default : System.Runtime.InteropServices.CollectionsMarshal.AsSpan(edges);
         for (int y = 0; y < pxSize; y++)
         {
             float py = y + 0.5f;
@@ -115,6 +131,10 @@ internal static class IconRasterizer
                 }
 
                 float cov = Math.Clamp(lo + 1f - best, 0f, 1f); // 1px linear AA band
+                if (cov < 1f && e.Length > 0 && Winding(e, px, py) != 0)
+                {
+                    cov = 1f; // inside a filled shape; the stroke over its outline gives the edge its AA
+                }
                 if (cov <= 0f)
                 {
                     continue;
@@ -129,6 +149,28 @@ internal static class IconRasterizer
         }
 
         return rgba;
+    }
+
+    // Non-zero winding number of (px, py) against closed edges (4 floats each).
+    private static int Winding(ReadOnlySpan<float> e, float px, float py)
+    {
+        int winding = 0;
+        for (int k = 0; k < e.Length; k += 4)
+        {
+            float ax = e[k], ay = e[k + 1], bx = e[k + 2], by = e[k + 3];
+            if (ay <= py)
+            {
+                if (by > py && (bx - ax) * (py - ay) - (px - ax) * (by - ay) > 0f)
+                {
+                    winding++;
+                }
+            }
+            else if (by <= py && (bx - ax) * (py - ay) - (px - ax) * (by - ay) < 0f)
+            {
+                winding--;
+            }
+        }
+        return winding;
     }
 
     private static float DistToSegment(float px, float py, float ax, float ay, float bx, float by)

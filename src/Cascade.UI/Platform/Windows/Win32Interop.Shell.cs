@@ -228,6 +228,9 @@ internal static partial class Win32
 
     internal const uint COINIT_APARTMENTTHREADED = 0x2;
 
+    [LibraryImport("ole32", EntryPoint = "CoUninitialize")]
+    internal static partial void CoUninitialize();
+
     // ── Shell item icons ────────────────────────────────────────────
 
     [LibraryImport("shell32", EntryPoint = "SHCreateItemFromParsingName", StringMarshalling = StringMarshalling.Utf16)]

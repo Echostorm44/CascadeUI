@@ -22,13 +22,7 @@ public static class FilePicker
         if (OperatingSystem.IsWindows())
         {
             nint hwnd = App.nativeWindow?.Handle ?? 0;
-
-            if (Dispatcher.Loop is not null && !Dispatcher.IsOnUiThread)
-            {
-                return Dispatcher.InvokeAsync(() => Win32FilePicker.OpenFile(hwnd, title, filters, initialDirectory));
-            }
-
-            return Task.FromResult(Win32FilePicker.OpenFile(hwnd, title, filters, initialDirectory));
+            return Win32FilePicker.RunOnDialogThread(() => Win32FilePicker.OpenFile(hwnd, title, filters, initialDirectory));
         }
         else if (OperatingSystem.IsMacOS())
         {
@@ -69,15 +63,8 @@ public static class FilePicker
         if (OperatingSystem.IsWindows())
         {
             nint hwnd = App.nativeWindow?.Handle ?? 0;
-
-            if (Dispatcher.Loop is not null && !Dispatcher.IsOnUiThread)
-            {
-                return Dispatcher.InvokeAsync<IReadOnlyList<FilePickerResult>>(
-                    () => Win32FilePicker.OpenMultipleFiles(hwnd, title, filters, initialDirectory));
-            }
-
-            return Task.FromResult<IReadOnlyList<FilePickerResult>>(
-                Win32FilePicker.OpenMultipleFiles(hwnd, title, filters, initialDirectory));
+            return Win32FilePicker.RunOnDialogThread<IReadOnlyList<FilePickerResult>>(
+                () => Win32FilePicker.OpenMultipleFiles(hwnd, title, filters, initialDirectory));
         }
         else if (OperatingSystem.IsMacOS())
         {
@@ -123,14 +110,7 @@ public static class FilePicker
         if (OperatingSystem.IsWindows())
         {
             nint hwnd = App.nativeWindow?.Handle ?? 0;
-
-            if (Dispatcher.Loop is not null && !Dispatcher.IsOnUiThread)
-            {
-                return Dispatcher.InvokeAsync(
-                    () => Win32FilePicker.SaveFile(hwnd, title, suggestedName, filters, initialDirectory));
-            }
-
-            return Task.FromResult(Win32FilePicker.SaveFile(hwnd, title, suggestedName, filters, initialDirectory));
+            return Win32FilePicker.RunOnDialogThread(() => Win32FilePicker.SaveFile(hwnd, title, suggestedName, filters, initialDirectory));
         }
         else if (OperatingSystem.IsMacOS())
         {

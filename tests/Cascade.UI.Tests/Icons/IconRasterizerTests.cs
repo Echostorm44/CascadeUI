@@ -28,6 +28,21 @@ public class IconRasterizerTests
     }
 
     [Test]
+    public async Task Rasterize_Filled_PaintsTheInsideOfTheShape_OutlineDoesNot()
+    {
+        string[] star = Icons.Star.Paths.ToArray();
+        const int px = 48;
+        byte[] outline = IconRasterizer.Rasterize(star, 24, 24, px, 2f, White, marginPx: 0);
+        byte[] filled = IconRasterizer.Rasterize(star, 24, 24, px, 2f, White, marginPx: 0, fill: true);
+
+        int centre = ((px / 2) * px + (px / 2)) * 4 + 3;
+        int corner = 3; // top-left pixel: outside the star either way
+        await Assert.That(outline[centre]).IsEqualTo((byte)0);
+        await Assert.That(filled[centre]).IsEqualTo((byte)255);
+        await Assert.That(filled[corner]).IsEqualTo((byte)0);
+    }
+
+    [Test]
     public async Task Rasterize_ProducesAntiAliasedAndSolidPixels()
     {
         // A bold-style curved stroke: must have both a solid core (alpha 255) and an

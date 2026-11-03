@@ -265,27 +265,29 @@ internal sealed partial class InputDispatcher
     /// <summary>True when a PasswordInput has focus and the caret should be animating.</summary>
     internal static bool IsPasswordCaretActive => FocusManager.FocusedElement is PasswordInput;
 
-    /// <summary>The current PasswordInput editing buffer, or null when not editing. Leaving the field clears its selection.</summary>
+    /// <summary>
+    /// The current PasswordInput editing buffer, or null when not editing. Setting it (focusing the
+    /// field, or automation writing a value) puts the caret at the end with nothing selected; key
+    /// edits go through <see cref="SetPasswordText"/>, which keeps the caret where the edit left it.
+    /// </summary>
     internal static string? PasswordEditBuffer
     {
         get => passwordEditBuffer;
         private set
         {
             passwordEditBuffer = value;
-            if (value is null)
-            {
-                PasswordAllSelected = false;
-            }
+            PasswordCaretIndex = value?.Length ?? 0;
+            PasswordSelectionAnchor = PasswordCaretIndex;
         }
     }
 
     private static string? passwordEditBuffer;
 
-    /// <summary>
-    /// Ctrl+A selected the whole password: the next character, paste or Backspace replaces it. A password
-    /// field's caret stays at the end (its characters are hidden), so all-or-nothing is the only selection.
-    /// </summary>
-    internal static bool PasswordAllSelected { get; private set; }
+    /// <summary>Character index of the caret within <see cref="PasswordEditBuffer"/>.</summary>
+    internal static int PasswordCaretIndex { get; private set; }
+
+    /// <summary>Selection anchor for the password field; text between it and the caret is selected.</summary>
+    internal static int PasswordSelectionAnchor { get; private set; }
 
     /// <summary>Whether the password is currently revealed (show/hide toggle).</summary>
     internal static bool PasswordRevealed { get; private set; }
@@ -1374,6 +1376,13 @@ internal sealed partial class InputDispatcher
             CaretResetTimestamp = Stopwatch.GetTimestamp();
             RequestRepaint?.Invoke();
         }
+        else if (isMouseDown && FocusManager.FocusedElement is PasswordInput pwdDrag && PasswordEditBuffer != null)
+        {
+            // Drag to extend the selection in a password field
+            PasswordCaretIndex = PasswordCaretIndexAt(pwdDrag, PasswordEditBuffer, evt.X);
+            CaretResetTimestamp = Stopwatch.GetTimestamp();
+            RequestRepaint?.Invoke();
+        }
         else if (isMouseDown && FocusManager.FocusedElement is TextInput tiDrag && textInputBuffer != null)
         {
             // Drag to extend text selection in TextInput
@@ -2161,13 +2170,20 @@ internal sealed partial class InputDispatcher
             else if (focusTarget is PasswordInput pwdFocus)
             {
                 // Only initialize buffer on first focus, not on re-click
-                if (PasswordEditBuffer == null)
+                bool wasEditing = PasswordEditBuffer != null;
+                if (!wasEditing)
                 {
                     PasswordEditBuffer = pwdFocus.Value.Value ?? string.Empty;
                     PasswordRevealed = false;
                     PasswordScrollOffsetX = 0f;
                 }
                 CaretResetTimestamp = Stopwatch.GetTimestamp();
+                // The click places the caret (Shift extends the selection), like a TextInput.
+                PasswordCaretIndex = PasswordCaretIndexAt(pwdFocus, PasswordEditBuffer!, evt.X);
+                if (!evt.Modifiers.HasFlag(ModifierKeys.Shift) || !wasEditing)
+                {
+                    PasswordSelectionAnchor = PasswordCaretIndex;
+                }
                 textInputBuffer = null;
                 ActiveEditBuffer = null;
                 PinEditBuffer = null;
@@ -3720,6 +3736,12 @@ internal sealed partial class InputDispatcher
             return true;
         }
 
+        // A password-type field's text is a secret: copy and cut never put it on the clipboard.
+        if (ctrl && evt.Key is Key.C or Key.X && textInput.InputType == InputType.Password)
+        {
+            return true;
+        }
+
         // Ctrl+C — copy selection
         if (ctrl && evt.Key == Key.C)
         {
@@ -3864,24 +3886,29 @@ internal sealed partial class InputDispatcher
     }
 
     /// <summary>
-    /// Handles keyboard input for a focused PasswordInput. Similar to TextInput
-    /// but uses a separate buffer and updates PasswordEditBuffer.
+    /// Handles keyboard input for a focused PasswordInput: the same single-line editing as a
+    /// TextInput (caret, Shift-selection, Home/End, Backspace/Delete at the caret, paste replacing
+    /// the selection) except that the text never leaves the field: copy and cut do nothing, and
+    /// Ctrl+Left/Right jump to the ends rather than revealing where the words break.
     /// </summary>
     private static bool HandlePasswordInputKey(PasswordInput pwd, NativeKeyEvent evt)
     {
         PasswordEditBuffer ??= pwd.Value.Value ?? string.Empty;
+        string buffer = PasswordEditBuffer;
+        PasswordCaretIndex = Math.Clamp(PasswordCaretIndex, 0, buffer.Length);
+        PasswordSelectionAnchor = Math.Clamp(PasswordSelectionAnchor, 0, buffer.Length);
         CaretResetTimestamp = Stopwatch.GetTimestamp();
         bool ctrl = evt.Modifiers.HasFlag(ModifierKeys.Ctrl);
         bool shift = evt.Modifiers.HasFlag(ModifierKeys.Shift);
+        bool hasSelection = PasswordSelectionAnchor != PasswordCaretIndex;
 
-        // Ctrl+A selects the whole password, so typing or pasting replaces it.
         if (ctrl && evt.Key == Key.A)
         {
-            PasswordAllSelected = PasswordEditBuffer.Length > 0;
+            PasswordSelectionAnchor = 0;
+            PasswordCaretIndex = buffer.Length;
             return true;
         }
 
-        // Ctrl+V / Shift+Insert paste. Copy and cut are deliberately absent: the text is a secret.
         if ((ctrl && evt.Key == Key.V) || (shift && evt.Key == Key.Insert))
         {
             var content = Clipboard.GetContentAsync().GetAwaiter().GetResult();
@@ -3889,62 +3916,129 @@ internal sealed partial class InputDispatcher
             if (!string.IsNullOrEmpty(pasted))
             {
                 // One line: a key copied from a web page often brings a line break with it.
-                InsertIntoPassword(pwd, pasted.Replace("\r", "", StringComparison.Ordinal).Replace("\n", "", StringComparison.Ordinal));
+                ReplacePasswordSelection(pwd, pasted.Replace("\r", "", StringComparison.Ordinal).Replace("\n", "", StringComparison.Ordinal));
             }
             return true;
         }
 
-        if (ctrl && evt.Key is Key.C or Key.X)
+        // The text is a secret: copy and cut are swallowed rather than passed on.
+        if ((ctrl && evt.Key is Key.C or Key.X or Key.Insert) || (shift && evt.Key == Key.Delete))
         {
             return true;
         }
 
-        // Printable characters
+        if (evt.Key is Key.Left or Key.Right or Key.Home or Key.End)
+        {
+            int target = evt.Key switch
+            {
+                Key.Home => 0,
+                Key.End => buffer.Length,
+                Key.Left when ctrl => 0,
+                Key.Right when ctrl => buffer.Length,
+                // Without Shift, an arrow collapses a selection to the side it points at.
+                Key.Left when hasSelection && !shift => Math.Min(PasswordSelectionAnchor, PasswordCaretIndex),
+                Key.Right when hasSelection && !shift => Math.Max(PasswordSelectionAnchor, PasswordCaretIndex),
+                Key.Left => Math.Max(0, PasswordCaretIndex - 1),
+                _ => Math.Min(buffer.Length, PasswordCaretIndex + 1),
+            };
+            PasswordCaretIndex = target;
+            if (!shift)
+            {
+                PasswordSelectionAnchor = target;
+            }
+            return true;
+        }
+
         if (evt.Character is { } typed && typed >= ' ' && typed != 127 && !ctrl)
         {
-            InsertIntoPassword(pwd, typed.ToString());
+            ReplacePasswordSelection(pwd, typed.ToString());
             return true;
         }
 
-        // Backspace removes the last character, or everything when it is all selected.
-        if (evt.Character == '\b')
+        // Backspace / Delete: the selection, else one character (Ctrl: everything on that side).
+        // (Windows sends Ctrl+Backspace as character 127.)
+        if (evt.Character is '\b' or (char)127 || evt.Key == Key.Delete)
         {
-            if (PasswordEditBuffer.Length > 0)
+            bool forward = evt.Key == Key.Delete;
+            ctrl |= evt.Character == (char)127;
+            if (!hasSelection)
             {
-                PasswordEditBuffer = PasswordAllSelected ? string.Empty : PasswordEditBuffer[..^1];
-                PasswordAllSelected = false;
-                pwd.Value.OnChange(PasswordEditBuffer);
+                int caret = PasswordCaretIndex;
+                PasswordSelectionAnchor = forward
+                    ? (ctrl ? buffer.Length : Math.Min(buffer.Length, caret + 1))
+                    : (ctrl ? 0 : Math.Max(0, caret - 1));
             }
-            return true;
-        }
-
-        // Delete key clears all
-        if (evt.Key == Key.Delete)
-        {
-            PasswordAllSelected = false;
-            if (PasswordEditBuffer.Length > 0)
-            {
-                PasswordEditBuffer = string.Empty;
-                pwd.Value.OnChange(PasswordEditBuffer);
-            }
+            ReplacePasswordSelection(pwd, string.Empty);
             return true;
         }
 
         return false;
     }
 
-    // Appends (or, with everything selected, replaces) and keeps within MaxLength.
-    private static void InsertIntoPassword(PasswordInput pwd, string text)
+    // Replaces the selection (or inserts at the caret) with text, kept within MaxLength.
+    private static void ReplacePasswordSelection(PasswordInput pwd, string text)
     {
-        string current = PasswordAllSelected ? string.Empty : PasswordEditBuffer ?? string.Empty;
-        PasswordAllSelected = false;
-        string next = current + text;
-        if (pwd.MaxLengthValue is { } max && next.Length > max)
+        string buffer = PasswordEditBuffer ?? string.Empty;
+        int start = Math.Min(PasswordSelectionAnchor, PasswordCaretIndex);
+        int end = Math.Max(PasswordSelectionAnchor, PasswordCaretIndex);
+        string kept = buffer[..start] + buffer[end..];
+        if (pwd.MaxLengthValue is { } max && kept.Length + text.Length > max)
         {
-            next = next[..Math.Max(max, current.Length)];
+            text = text[..Math.Max(0, max - kept.Length)];
         }
-        PasswordEditBuffer = next;
-        pwd.Value.OnChange(next);
+        if (text.Length == 0 && start == end)
+        {
+            return;
+        }
+        SetPasswordText(pwd, kept.Insert(start, text), start + text.Length);
+    }
+
+    private static void SetPasswordText(PasswordInput pwd, string text, int caret)
+    {
+        passwordEditBuffer = text;
+        PasswordCaretIndex = caret;
+        PasswordSelectionAnchor = caret;
+        pwd.Value.OnChange(text);
+    }
+
+    /// <summary>
+    /// The caret index for a click at window x on a password field: measured against the text as the
+    /// painter draws it (masked or revealed, same font, padding and scroll).
+    /// </summary>
+    internal static int PasswordCaretIndexAt(PasswordInput pwd, string buffer, float x)
+    {
+        if (buffer.Length == 0 || pwd.AbsoluteBounds.Width <= 0)
+        {
+            return 0;
+        }
+        var theme = ThemeSwitcher.Current;
+        float scrollX = ReferenceEquals(FocusManager.FocusedElement, pwd) ? PasswordScrollOffsetX : 0f;
+        float relX = x - pwd.AbsoluteBounds.X - theme.TextInput.PaddingH + scrollX;
+        if (relX <= 0)
+        {
+            return 0;
+        }
+        string? fontPath = LayoutSolver.DefaultFontPath;
+        if (string.IsNullOrEmpty(fontPath))
+        {
+            return buffer.Length;
+        }
+        string drawn = PasswordRevealed ? buffer : new string('●', buffer.Length);
+        var layout = TextLayoutEngine.Layout(drawn, new TextLayoutOptions
+        {
+            FontPath = fontPath,
+            FontSize = theme.Typography.Scale.Body.Size,
+            MaxWidth = float.PositiveInfinity,
+            MaxLines = 1,
+            Overflow = TextOverflow.Clip,
+        });
+        if (layout.Lines.Count == 0)
+        {
+            return buffer.Length;
+        }
+        var line = layout.Lines[0];
+        var hit = layout.HitTest(relX, line.Y + line.Height / 2f);
+        return Math.Clamp(hit.Offset + (hit.IsTrailingEdge ? 1 : 0), 0, buffer.Length);
     }
     /// <summary>
     /// Handles keyboard input for a focused TextArea.

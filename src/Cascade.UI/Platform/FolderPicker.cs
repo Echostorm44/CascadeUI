@@ -18,13 +18,7 @@ public static class FolderPicker
         if (OperatingSystem.IsWindows())
         {
             nint hwnd = App.nativeWindow?.Handle ?? 0;
-
-            if (Dispatcher.Loop is not null && !Dispatcher.IsOnUiThread)
-            {
-                return Dispatcher.InvokeAsync(() => Win32FilePicker.OpenFolder(hwnd, title));
-            }
-
-            return Task.FromResult(Win32FilePicker.OpenFolder(hwnd, title));
+            return Win32FilePicker.RunOnDialogThread(() => Win32FilePicker.OpenFolder(hwnd, title, initialDirectory));
         }
         else if (OperatingSystem.IsMacOS())
         {

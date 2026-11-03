@@ -298,6 +298,94 @@ public class ModifierRenderTests
     }
 
     [Test]
+    public async Task PasswordInput_EditsAtTheCaret_LikeATextBox()
+    {
+        string value = "abcd";
+        var field = new PasswordInput(new Bindable<string>("abcd", v => value = v));
+        using var app = new RenderHarness(() => field.Width(240));
+        app.Frame();
+        FocusManager.RequestFocus(field);
+
+        // Arrows move the caret; typing and Backspace act there, not at the end.
+        app.Press(Key.Left);
+        app.Press(Key.Left);
+        app.Press(Key.X, character: 'X');
+        await Assert.That(value).IsEqualTo("abXcd");
+        app.Press(Key.Backspace, character: '\b');
+        await Assert.That(value).IsEqualTo("abcd");
+
+        // Home, then Delete removes the first character only.
+        app.Press(Key.Home);
+        app.Press(Key.Delete);
+        await Assert.That(value).IsEqualTo("bcd");
+
+        // Shift+Right selects; typing replaces just the selection.
+        app.Press(Key.Right, ModifierKeys.Shift);
+        app.Press(Key.Right, ModifierKeys.Shift);
+        app.Press(Key.Z, character: 'Z');
+        await Assert.That(value).IsEqualTo("Zd");
+
+        // End puts the caret after the last character.
+        app.Press(Key.End);
+        app.Press(Key.Q, character: 'q');
+        await Assert.That(value).IsEqualTo("Zdq");
+    }
+
+    [Test]
+    public async Task PasswordInput_ClickPlacesTheCaret_AndAShortValueIsNeverScrolledAway()
+    {
+        string value = "";
+        var field = new PasswordInput(new Bindable<string>("", v => value = v));
+        using var app = new RenderHarness(() => field.Width(240));
+        app.Frame();
+
+        // Click at the field's left edge, then fill it well past its width: it scrolls to the caret.
+        app.Click(4, 18);
+        foreach (char c in new string('k', 60))
+        {
+            app.Press(Key.K, character: c);
+        }
+        app.Frame();
+        await Assert.That(InputDispatcher.PasswordScrollOffsetX).IsGreaterThan(0f);
+
+        // Select everything and type one character: the text fits again, so nothing is scrolled off.
+        app.Press(Key.A, ModifierKeys.Ctrl);
+        app.Press(Key.M, character: 'm');
+        app.Frame();
+        await Assert.That(value).IsEqualTo("m");
+        await Assert.That(InputDispatcher.PasswordScrollOffsetX).IsEqualTo(0f);
+
+        // A click at the left padding puts the caret before the first character.
+        app.Click(4, 18);
+        app.Press(Key.N, character: 'n');
+        await Assert.That(value).IsEqualTo("nm");
+    }
+
+    [Test]
+    public async Task PasswordTypeTextInput_NeverCopiesToTheClipboard()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        string value = "secret";
+        var field = new TextInput(new Bindable<string>("secret", v => value = v), inputType: InputType.Password);
+        using var app = new RenderHarness(() => field.Width(240));
+        app.Frame();
+        FocusManager.RequestFocus(field);
+        await Clipboard.WriteTextAsync("before");
+
+        app.Press(Key.A, ModifierKeys.Ctrl);
+        app.Press(Key.C, ModifierKeys.Ctrl);
+        app.Press(Key.X, ModifierKeys.Ctrl);
+
+        var content = await Clipboard.GetContentAsync();
+        await Assert.That(await content.GetTextAsync()).IsEqualTo("before");
+        await Assert.That(value).IsEqualTo("secret");
+    }
+
+    [Test]
     public async Task SelectableTag_WithOnlyABinding_TogglesOnClick()
     {
         var seen = new List<bool>();

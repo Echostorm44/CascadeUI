@@ -6376,11 +6376,24 @@ internal sealed partial class NodePainter
 
     private void PaintImage(Image img, Rect bounds)
     {
-        ImageSource? source = img.ResolveSource();
+        img.AbsoluteBounds = new Rect(absoluteX, absoluteY, bounds.Width, bounds.Height);
+
+        // A lazily loaded image starts loading once it is within a screen's height of the view.
+        bool nearView = absoluteY + bounds.Height > -ViewportLogicalHeight && absoluteY < ViewportLogicalHeight * 2f;
+        ImageSource? source = img.ResolveSource(start: !img.LazyLoadEnabled || nearView);
         if (source is not null)
         {
             float opacity = img.LayoutData.Opacity;
-            var dest = Image.FitRect(img.FitMode, source.Width, source.Height, bounds);
+
+            // .FadeIn: a picture that has just arrived fades in.
+            float fade = ControlStateAnimator.ReducedMotion ? 1f : img.FadeOpacityAt(Stopwatch.GetTimestamp());
+            if (fade < 1f)
+            {
+                opacity *= fade;
+                ControlStateAnimator.SignalActiveTransition();
+            }
+
+            var dest = img.ZoomedRect(Image.FitRect(img.FitMode, source.Width, source.Height, bounds), bounds);
             if (dest.X < bounds.X - 0.01f || dest.Y < bounds.Y - 0.01f
                 || dest.Right > bounds.Right + 0.01f || dest.Bottom > bounds.Bottom + 0.01f)
             {
@@ -6391,6 +6404,14 @@ internal sealed partial class NodePainter
             {
                 ctx.DrawImage(source, dest, opacity);
             }
+        }
+        else if (img.LoadState == Imaging.ImageLoadState.Failed && !img.ErrorNode.IsLayoutEmpty)
+        {
+            PaintRecursive(img.ErrorNode);
+        }
+        else if (img.LoadState != Imaging.ImageLoadState.Failed && !img.PlaceholderNode.IsLayoutEmpty)
+        {
+            PaintRecursive(img.PlaceholderNode);
         }
         else
         {
@@ -16580,6 +16601,19 @@ internal sealed partial class NodePainter
                     }
                 }
             }
+        }
+
+        // The logo (.Logo) over the middle, on a square of the background colour unless asked not to.
+        if (qr.HasLogo && !qr.LogoNode.IsLayoutEmpty)
+        {
+            var logo = qr.LogoNode.LayoutData.Bounds;
+            if (qr.LogoBackgroundEnabled)
+            {
+                float margin = Math.Max(2f, moduleSize);
+                ctx.DrawRect(new Rect(bounds.X + logo.X - margin, bounds.Y + logo.Y - margin, logo.Width + margin * 2f, logo.Height + margin * 2f),
+                    bg, radius: margin);
+            }
+            PaintRecursive(qr.LogoNode);
         }
     }
 

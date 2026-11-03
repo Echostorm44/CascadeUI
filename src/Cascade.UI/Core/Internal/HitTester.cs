@@ -314,6 +314,7 @@ internal static class HitTester
                Checkbox or Toggle or Slider or RangeSlider or Rating or HotkeyPicker or
                IRadioButton or
                SplitView or
+               Image { ZoomPanEnabled: true } or
                Expander or
                ISegmentedControl or
                IToggleGroup or
@@ -345,6 +346,8 @@ internal static class HitTester
             Grid grid => grid.Children,
             Accordion acc => acc.Sections,
             ToolBar tb => tb.ShownCustomNodes,
+            Image { LoadState: Imaging.ImageLoadState.Failed, ErrorNode.IsLayoutEmpty: false } failed => [failed.ErrorNode],
+            Image { LoadState: not Imaging.ImageLoadState.Loaded and not Imaging.ImageLoadState.Failed, PlaceholderNode.IsLayoutEmpty: false } waiting => [waiting.PlaceholderNode],
             TextInput adorned when !adorned.PrefixNode.IsLayoutEmpty || !adorned.SuffixNode.IsLayoutEmpty => NodeDiffer.Adornments(adorned.PrefixNode, adorned.SuffixNode),
             INumberInput number when !number.PrefixContent.IsLayoutEmpty || !number.SuffixContent.IsLayoutEmpty => NodeDiffer.Adornments(number.PrefixContent, number.SuffixContent),
             TextArea area when !area.PrefixNode.IsLayoutEmpty || !area.SuffixNode.IsLayoutEmpty => NodeDiffer.Adornments(area.PrefixNode, area.SuffixNode),

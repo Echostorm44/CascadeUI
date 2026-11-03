@@ -14,7 +14,7 @@ namespace Cascade.UI;
 /// <see cref="ImageSource"/>.
 /// </summary>
 [SuppressMessage("Naming", "CA1724", Justification = "SharpImage.Image namespace conflict is acceptable; type is fully qualified where needed.")]
-public sealed class Image : Node
+public sealed class Image : Node, IPumpedNode
 {
     /// <summary>Creates an image from a file path.</summary>
     /// <param name="path">Local file path to the image.</param>
@@ -135,94 +135,167 @@ public sealed class Image : Node
 
     // ── Source resolution ──────────────────────────────────────────────
 
-    // Decoded file paths are cached so a per-frame `new Image(path)` in Render()
-    // decodes once, not every frame. A null entry marks a path that failed to
-    // decode (so we don't re-read a missing/invalid file each frame). Keyed by
-    // path only — assumes app image files don't change at runtime.
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, ImageSource?> PathCache = new(StringComparer.Ordinal);
+    /// <summary>Where the picture is (set by <see cref="ResolveSource"/>).</summary>
+    internal Imaging.ImageLoadState LoadState { get; private set; }
 
-    // Paths whose decode is currently running on a background thread. Decoding a (possibly
-    // multi-megapixel) file is real work and must NEVER run on the UI thread — it would freeze the
-    // app (a large drag-dropped photo stalled the UI for seconds). We kick the decode to the thread
-    // pool, show the placeholder meanwhile, and request a repaint (marshalled to the UI thread) when
-    // it lands. This set stops us starting the same decode twice.
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> DecodingPaths = new(StringComparer.Ordinal);
+    /// <summary>When the picture arrived (Stopwatch ticks), for the fade-in; 0 when it was already there.</summary>
+    internal long ArrivedTimestamp { get; private set; }
+
+    // Decoded byte arrays, per array instance (the app's own buffer) and decode options.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<object, Dictionary<string, ImageSource?>> DataCache = new();
+
+    private ImageProcessingContext? processing;
+
+    /// <summary>The decode options this image asks for.</summary>
+    internal Imaging.ImageDecodeOptions DecodeOptions
+    {
+        get
+        {
+            if (processing is null && ProcessingPipeline is { } pipeline)
+            {
+                processing = new ImageProcessingContext();
+                pipeline(processing);
+            }
+            return new Imaging.ImageDecodeOptions(
+                AutoRotateEnabled,
+                SvgColorOverride,
+                SvgColorMapOverride,
+                processing?.Steps ?? [],
+                processing?.CornerRadius ?? 0f,
+                string.Join(';', ProcessingOperations));
+        }
+    }
 
     /// <summary>
-    /// Returns the decoded image to render, resolving lazily from the file
-    /// <see cref="Path"/> or raw <see cref="Data"/> the first time it is needed
-    /// (path results are cached process-wide). Returns null when there is nothing
-    /// to show yet — a decode failure, or a URL (async URL loading is not
-    /// implemented; use <see cref="ImageSource"/> or a byte array instead).
+    /// Returns the decoded image to render, or null while it loads or after it failed (see
+    /// <see cref="LoadState"/>). Files and URLs decode off the UI thread and are cached process-wide by
+    /// source and options; a byte array decodes once per array. <paramref name="start"/> false only
+    /// looks without starting a load (a lazily loaded image that is off screen).
     /// </summary>
-    internal ImageSource? ResolveSource()
+    internal ImageSource? ResolveSource(bool start = true)
     {
         if (Source is not null)
         {
+            LoadState = Imaging.ImageLoadState.Loaded;
             return Source;
         }
 
-        if (Path is not null)
+        ImageSource? source = null;
+        Imaging.ImageLoadState state;
+        long arrived;
+        if (Path is { } path)
         {
-            // Already decoded (a null entry marks a decode that failed — don't retry it).
-            if (PathCache.TryGetValue(Path, out var cached))
+            source = Imaging.ImageLoader.Get("file:" + path, () => File.ReadAllBytesAsync(path), DecodeOptions, start, out state, out arrived);
+        }
+        else if (Url is { } url)
+        {
+            source = Imaging.ImageLoader.Get("url:" + url, () => Imaging.ImageLoader.FetchUrl(url), DecodeOptions, start, out state, out arrived);
+        }
+        else if (Data is { } data)
+        {
+            // Keyed by the app's buffer, so re-rendering with the same bytes doesn't decode again.
+            object identity = System.Runtime.InteropServices.MemoryMarshal.TryGetArray(data, out var segment) && segment.Array is { } array
+                ? array
+                : data.ToArray();
+            var perOptions = DataCache.GetValue(identity, static _ => new Dictionary<string, ImageSource?>(StringComparer.Ordinal));
+            string key = DecodeOptions.Key + "@" + (segment.Array is null ? 0 : segment.Offset) + ":" + data.Length;
+            if (!perOptions.TryGetValue(key, out source))
             {
-                Source = cached;
-                return Source;
+                source = Imaging.ImageLoader.GetNow("data", data.ToArray(), DecodeOptions, out _, out _);
+                perOptions[key] = source;
             }
-
-            // Not decoded yet — decode OFF the UI thread. Return null now so the caller shows the
-            // placeholder; the image appears on the next frame after the decode finishes.
-            if (DecodingPaths.TryAdd(Path, 0))
-            {
-                string path = Path;
-                var uiContext = System.Threading.SynchronizationContext.Current;
-                _ = System.Threading.Tasks.Task.Run(() =>
-                {
-                    ImageSource? decoded;
-                    try
-                    {
-                        decoded = ImageSource.FromFile(path);
-                    }
-                    catch (Exception ex) when (ex is IOException or NotSupportedException or FormatException or UnauthorizedAccessException)
-                    {
-                        decoded = null;
-                    }
-
-                    PathCache[path] = decoded;
-                    DecodingPaths.TryRemove(path, out _);
-
-                    // Frame scheduling is UI-thread affine — marshal the repaint request back.
-                    if (uiContext is not null)
-                    {
-                        uiContext.Post(static _ => SharedScheduler.Instance.RequestFrame(), null);
-                    }
-                    else
-                    {
-                        SharedScheduler.Instance.RequestFrame();
-                    }
-                });
-            }
-
-            return null;
+            state = source is null ? Imaging.ImageLoadState.Failed : Imaging.ImageLoadState.Loaded;
+            arrived = 0;
+        }
+        else
+        {
+            state = Imaging.ImageLoadState.Failed;
+            arrived = 0;
         }
 
-        if (Data is { } bytes)
+        LoadState = state;
+        ArrivedTimestamp = arrived;
+        return source;
+    }
+
+    /// <summary>How long a newly arrived picture takes to fade in (.FadeIn).</summary>
+    internal static readonly TimeSpan FadeDuration = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>The fade-in's opacity at <paramref name="now"/> (Stopwatch ticks): 1 when fading is off or done.</summary>
+    internal float FadeOpacityAt(long now)
+    {
+        if (!FadeInEnabled || ArrivedTimestamp == 0)
         {
-            try
-            {
-                using var ms = new MemoryStream(bytes.ToArray());
-                Source = ImageSource.FromStream(ms);
-            }
-            catch (Exception ex) when (ex is IOException or NotSupportedException or FormatException)
-            {
-                Source = null;
-            }
-
-            return Source;
+            return 1f;
         }
+        double elapsed = (now - ArrivedTimestamp) / (double)System.Diagnostics.Stopwatch.Frequency;
+        return (float)Math.Clamp(elapsed / FadeDuration.TotalSeconds, 0.0, 1.0);
+    }
 
-        return null;
+    // ── Zoom and pan state (.ZoomPan), kept across re-renders ─────────
+
+    /// <summary>The zoom factor (1 = fitted).</summary>
+    internal float Zoom { get; set; } = 1f;
+
+    /// <summary>The pan offset from centre, in pixels.</summary>
+    internal Point Pan { get; set; }
+
+    /// <summary>Window-space bounds from the last paint, for pointer math.</summary>
+    internal Rect AbsoluteBounds { get; set; }
+
+    /// <summary>
+    /// The picture's rectangle with zoom and pan applied: the fitted rectangle scaled about the centre
+    /// of <paramref name="bounds"/>, shifted by the pan, which is held so a zoomed picture never leaves
+    /// a gap at an edge.
+    /// </summary>
+    internal Rect ZoomedRect(Rect fitted, Rect bounds)
+    {
+        if (!ZoomPanEnabled || (Zoom == 1f && Pan == default))
+        {
+            return fitted;
+        }
+        float w = fitted.Width * Zoom, h = fitted.Height * Zoom;
+        float cx = bounds.X + bounds.Width / 2f, cy = bounds.Y + bounds.Height / 2f;
+        Pan = ClampPan(Pan, w, h, bounds);
+        return new Rect(cx - w / 2f + Pan.X, cy - h / 2f + Pan.Y, w, h);
+    }
+
+    /// <summary>Holds a pan to the overflow of a <paramref name="width"/> × <paramref name="height"/> picture over the bounds.</summary>
+    internal static Point ClampPan(Point pan, float width, float height, Rect bounds)
+    {
+        float ox = Math.Max(0f, (width - bounds.Width) / 2f);
+        float oy = Math.Max(0f, (height - bounds.Height) / 2f);
+        return new Point(Math.Clamp(pan.X, -ox, ox), Math.Clamp(pan.Y, -oy, oy));
+    }
+
+    /// <summary>Zooms to <paramref name="zoom"/> (within MinZoom..MaxZoom) keeping the point under (<paramref name="x"/>, <paramref name="y"/>) (window coordinates) still.</summary>
+    internal void ZoomAbout(float zoom, float x, float y)
+    {
+        float next = Math.Clamp(zoom, Math.Max(0.1f, MinZoom), Math.Max(MinZoom, MaxZoom));
+        var b = AbsoluteBounds;
+        float cx = b.X + b.Width / 2f, cy = b.Y + b.Height / 2f;
+        float ratio = next / Zoom;
+        // A screen point s shows image point q at s = c + pan + (q - c) * zoom: keep s for the pointer.
+        Pan = new Point(x - cx - (x - cx - Pan.X) * ratio, y - cy - (y - cy - Pan.Y) * ratio);
+        Zoom = next;
+        if (Math.Abs(Zoom - 1f) < 0.001f && MinZoom <= 1f)
+        {
+            Zoom = 1f;
+            Pan = default;
+        }
+    }
+
+    void IPumpedNode.Pump()
+    {
+    }
+
+    void IPumpedNode.AdoptFrom(Node previous)
+    {
+        if (previous is Image old)
+        {
+            Zoom = old.Zoom;
+            Pan = old.Pan;
+        }
     }
 
     // ── Fit ───────────────────────────────────────────────────────────
@@ -310,6 +383,7 @@ public sealed class Image : Node
         var context = new ImageProcessingContext();
         pipeline(context);
         ProcessingOperations = context.Operations;
+        processing = context;
         return this;
     }
 
@@ -324,9 +398,12 @@ public sealed class Image : Node
     public static Task<ImageFrame> LoadAsync(string path)
     {
         ArgumentNullException.ThrowIfNull(path);
-        var frame = new ImageFrame(0, 0);
-        frame.SourcePath = path;
-        return Task.FromResult(frame);
+        // Decoded off the calling thread, upright (EXIF orientation applied).
+        return Task.Run(() =>
+        {
+            (byte[] rgba, int width, int height) = Imaging.ImageCodec.DecodeToRgba(File.ReadAllBytes(path), autoOrient: true, svgColorMap: null, steps: []);
+            return new ImageFrame(rgba, width, height) { SourcePath = path };
+        });
     }
 }
 
@@ -403,33 +480,55 @@ public enum ImageFormat
 public sealed class ImageProcessingContext
 {
     private readonly List<string> operations = [];
+    private readonly List<Func<SharpImage.Image.ImageFrame, SharpImage.Image.ImageFrame>> steps = [];
 
     internal ImageProcessingContext() { }
 
+    /// <summary>The steps, described (they also key the decoded-image cache).</summary>
     internal IReadOnlyList<string> Operations => operations;
+
+    /// <summary>The steps themselves, run in order on the decoded frame.</summary>
+    internal IReadOnlyList<Func<SharpImage.Image.ImageFrame, SharpImage.Image.ImageFrame>> Steps => steps;
+
+    /// <summary>The corner radius (pixels) to round the result to, or 0.</summary>
+    internal float CornerRadius { get; private set; }
 
     /// <summary>Applies EXIF orientation correction.</summary>
     public void AutoOrient()
     {
         operations.Add(nameof(AutoOrient));
+        steps.Add(SharpImage.Transform.Geometry.AutoOrient);
     }
 
     /// <summary>Resizes the image to fit within the specified dimensions.</summary>
     public void Resize(int width, int height, bool preserveAspect = true)
     {
         operations.Add($"{nameof(Resize)}:{width}x{height}:{preserveAspect}");
+        steps.Add(frame =>
+        {
+            int w = width, h = height;
+            if (preserveAspect)
+            {
+                double scale = Math.Min(width / (double)frame.Columns, height / (double)frame.Rows);
+                w = Math.Max(1, (int)Math.Round(frame.Columns * scale));
+                h = Math.Max(1, (int)Math.Round(frame.Rows * scale));
+            }
+            return SharpImage.Transform.Resize.Apply(frame, w, h);
+        });
     }
 
     /// <summary>Rounds the corners of the image.</summary>
     public void RoundCorners(float radius)
     {
         operations.Add($"{nameof(RoundCorners)}:{radius}");
+        CornerRadius = Math.Max(0f, radius);
     }
 
     /// <summary>Sharpens the image.</summary>
     public void Sharpen(float radius, float amount)
     {
         operations.Add($"{nameof(Sharpen)}:{radius}:{amount}");
+        steps.Add(frame => SharpImage.Effects.ConvolutionFilters.Sharpen(frame, radius, amount));
     }
 }
 
@@ -438,13 +537,15 @@ public sealed class ImageProcessingContext
 /// </summary>
 public sealed class ImageFrame
 {
+    private byte[] pixels;
     private int width;
     private int height;
 
-    internal ImageFrame() { }
+    internal ImageFrame() : this([], 0, 0) { }
 
-    internal ImageFrame(int width, int height)
+    internal ImageFrame(byte[] rgba, int width, int height)
     {
+        pixels = rgba;
         this.width = width;
         this.height = height;
     }
@@ -453,33 +554,92 @@ public sealed class ImageFrame
 
     internal string? SourcePath { get; set; }
 
-    /// <summary>Image width in pixels.</summary>
+    /// <summary>The RGBA8 pixels.</summary>
+    internal ReadOnlySpan<byte> Pixels => pixels;
+
     public int Width
     {
         get { return width; }
     }
 
-    /// <summary>Image height in pixels.</summary>
     public int Height
     {
         get { return height; }
     }
 
-    /// <summary>Resizes the frame.</summary>
+    /// <summary>
+    /// Resizes to <paramref name="width"/> × <paramref name="height"/>: <see cref="ResizeMode.Fit"/> keeps
+    /// the aspect ratio within the box, <see cref="ResizeMode.Crop"/> fills the box and trims the
+    /// overflow evenly, <see cref="ResizeMode.Stretch"/> takes the box's exact size.
+    /// </summary>
     public void Resize(int width, int height, ResizeMode mode = ResizeMode.Fit)
     {
-        this.width = width;
-        this.height = height;
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
         LastResizeMode = mode;
+        if (this.width == 0 || this.height == 0)
+        {
+            return;
+        }
+
+        double fit = Math.Min(width / (double)this.width, height / (double)this.height);
+        double cover = Math.Max(width / (double)this.width, height / (double)this.height);
+        (int w, int h) = mode switch
+        {
+            ResizeMode.Stretch => (width, height),
+            ResizeMode.Crop => (Math.Max(width, (int)Math.Ceiling(this.width * cover)), Math.Max(height, (int)Math.Ceiling(this.height * cover))),
+            _ => (Math.Max(1, (int)Math.Round(this.width * fit)), Math.Max(1, (int)Math.Round(this.height * fit))),
+        };
+        byte[] resized = Imaging.ImageCodec.ResizeRgba(pixels, this.width, this.height, w, h);
+
+        if (mode == ResizeMode.Crop && (w > width || h > height))
+        {
+            // Trim the overflow evenly from both sides.
+            int x0 = (w - width) / 2, y0 = (h - height) / 2;
+            var cropped = new byte[width * height * 4];
+            for (int y = 0; y < height; y++)
+            {
+                Array.Copy(resized, ((y + y0) * w + x0) * 4, cropped, y * width * 4, width * 4);
+            }
+            (resized, w, h) = (cropped, width, height);
+        }
+
+        pixels = resized;
+        this.width = w;
+        this.height = h;
     }
 
-    /// <summary>Saves the frame to a file.</summary>
-    [SuppressMessage("Performance", "CA1822", Justification = "Instance method to align with future stateful save pipeline.")]
+    /// <summary>
+    /// Saves the frame. The format comes from <paramref name="path"/>'s extension when it names one,
+    /// else <paramref name="format"/>; <paramref name="quality"/> (1-100) applies to lossy formats.
+    /// </summary>
     public Task SaveAsync(string path, ImageFormat format = default, int quality = 85)
     {
         ArgumentNullException.ThrowIfNull(path);
-        return Task.CompletedTask;
+        if (width == 0 || height == 0)
+        {
+            throw new InvalidOperationException("The frame has no pixels to save.");
+        }
+        var target = SharpImage.Formats.FormatRegistry.DetectFromExtension(path) is var byExtension
+            && byExtension != SharpImage.Formats.ImageFileFormat.Unknown
+                ? byExtension
+                : ToFileFormat(format);
+        byte[] snapshot = pixels;
+        int w = width, h = height;
+        return Task.Run(() => Imaging.ImageCodec.Save(snapshot, w, h, path, target, Math.Clamp(quality, 1, 100)));
     }
+
+    private static SharpImage.Formats.ImageFileFormat ToFileFormat(ImageFormat format) => format switch
+    {
+        ImageFormat.Jpeg => SharpImage.Formats.ImageFileFormat.Jpeg,
+        ImageFormat.WebP => SharpImage.Formats.ImageFileFormat.WebP,
+        ImageFormat.Avif => SharpImage.Formats.ImageFileFormat.Avif,
+        ImageFormat.Gif => SharpImage.Formats.ImageFileFormat.Gif,
+        ImageFormat.Tiff => SharpImage.Formats.ImageFileFormat.Tiff,
+        ImageFormat.Bmp => SharpImage.Formats.ImageFileFormat.Bmp,
+        ImageFormat.Svg => SharpImage.Formats.ImageFileFormat.Svg,
+        _ => SharpImage.Formats.ImageFileFormat.Png,
+    };
 }
 
 /// <summary>

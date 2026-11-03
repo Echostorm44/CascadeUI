@@ -30,6 +30,11 @@ internal sealed partial class InputDispatcher
     private float sliderDragStartX;
     private float sliderDragStartY;
 
+    // A zoomable Image being panned: where the pointer and the pan were when the drag began.
+    private Image? imagePanTarget;
+    private Point imagePanOrigin;
+    private Point imagePanStart;
+
     // A TextArea being resized by its grip, and the pointer and size when the drag began.
     private TextArea? textAreaResizeTarget;
     private Rect textAreaResizeStart;
@@ -548,6 +553,11 @@ internal sealed partial class InputDispatcher
             self.dragDropCurrentTarget = newNode;
         }
 
+        if (ReferenceEquals(self.imagePanTarget, oldNode) && newNode is Image newPanTarget)
+        {
+            self.imagePanTarget = newPanTarget;
+        }
+
         if (ReferenceEquals(self.textAreaResizeTarget, oldNode) && newNode is TextArea newResizeTarget)
         {
             self.textAreaResizeTarget = newResizeTarget;
@@ -649,6 +659,43 @@ internal sealed partial class InputDispatcher
     {
         if (rootNode is null)
         {
+            return;
+        }
+
+        // A zoomable image (.ZoomPan): dragging pans it, a double-click zooms in (or back out).
+        if (imagePanTarget is { } panning)
+        {
+            if (evt.Type == NativeMouseEventType.MouseMove)
+            {
+                panning.Pan = new Point(imagePanStart.X + evt.X - imagePanOrigin.X, imagePanStart.Y + evt.Y - imagePanOrigin.Y);
+                RequestRepaint?.Invoke();
+            }
+            else if (evt.Type == NativeMouseEventType.MouseUp)
+            {
+                imagePanTarget = null;
+            }
+            return;
+        }
+        if (evt.Type == NativeMouseEventType.MouseDown && evt.Button == NativeMouseButton.Left
+            && HitTester.HitTest(rootNode, evt.X, evt.Y) is Image { ZoomPanEnabled: true } zoomable)
+        {
+            if (evt.ClickCount >= 2)
+            {
+                if (Math.Abs(zoomable.Zoom - 1f) > 0.001f)
+                {
+                    zoomable.Zoom = 1f;
+                    zoomable.Pan = default;
+                }
+                else
+                {
+                    zoomable.ZoomAbout(zoomable.DoubleTapZoom, evt.X, evt.Y);
+                }
+                RequestRepaint?.Invoke();
+                return;
+            }
+            imagePanTarget = zoomable;
+            imagePanOrigin = new Point(evt.X, evt.Y);
+            imagePanStart = zoomable.Pan;
             return;
         }
 
@@ -2914,6 +2961,14 @@ internal sealed partial class InputDispatcher
                 LastScroll = new ScrollOutcome(ScrollTargetKind.TextArea, FocusManager.FocusedElement, newOffset, TextAreaMaxScrollY, moved);
                 return;
             }
+        }
+
+        // A zoomable image zooms about the pointer.
+        if (HitTester.HitTest(rootNode, evt.X, evt.Y) is Image { ZoomPanEnabled: true } zoomImage && evt.DeltaY != 0)
+        {
+            zoomImage.ZoomAbout(zoomImage.Zoom * (evt.DeltaY > 0 ? 1.2f : 1f / 1.2f), evt.X, evt.Y);
+            RequestRepaint?.Invoke();
+            return;
         }
 
         // An emoji picker scrolls its grid.

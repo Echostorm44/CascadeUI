@@ -111,11 +111,20 @@ public class ImageTests
     [Test]
     public async Task LoadAsync_TracksSourcePath()
     {
-        var path = "sample.png";
+        // (LoadAsync used to "load" any path, existing or not, into an empty frame.)
+        string path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"cascade-{Guid.NewGuid():N}.png");
+        await File.WriteAllBytesAsync(path, Cascade.UI.Imaging.ImageCodec.EncodePng(new byte[3 * 2 * 4], 3, 2));
         var frame = await Image.LoadAsync(path);
 
-        string? actual = frame.SourcePath;
-        await Assert.That(actual).IsEqualTo(path);
+        await Assert.That(frame.SourcePath).IsEqualTo(path);
+        await Assert.That((frame.Width, frame.Height)).IsEqualTo((3, 2));
+    }
+
+    [Test]
+    public async Task LoadAsync_OfAMissingFile_Throws()
+    {
+        string missing = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"cascade-missing-{Guid.NewGuid():N}.png");
+        await Assert.That(async () => await Image.LoadAsync(missing)).Throws<FileNotFoundException>();
     }
 
     [Test]

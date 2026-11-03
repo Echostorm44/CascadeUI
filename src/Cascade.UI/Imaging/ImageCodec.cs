@@ -25,7 +25,107 @@ internal static class ImageCodec
         ArgumentNullException.ThrowIfNull(fileData);
 
         using SharpImageFrame frame = DecodeFrame(fileData);
+        return ToRgba(frame);
+    }
 
+    /// <summary>
+    /// Decodes with an <see cref="Image"/>'s options: the EXIF orientation applied (photos come off
+    /// cameras and phones stored sideways with a tag saying so), an SVG's colours replaced before it
+    /// is drawn, then the app's processing steps, in order.
+    /// </summary>
+    public static (byte[] Rgba, int Width, int Height) DecodeToRgba(
+        byte[] fileData, bool autoOrient, IReadOnlyDictionary<string, ColorValue>? svgColorMap,
+        IReadOnlyList<Func<SharpImageFrame, SharpImageFrame>> steps)
+    {
+        ArgumentNullException.ThrowIfNull(fileData);
+        ArgumentNullException.ThrowIfNull(steps);
+
+        if (svgColorMap is { Count: > 0 } && FormatRegistry.DetectFormat(fileData) == ImageFileFormat.Svg)
+        {
+            // Recolour in the SVG source, so edges stay anti-aliased in the new colours.
+            string svg = System.Text.Encoding.UTF8.GetString(fileData);
+            foreach (var (from, to) in svgColorMap)
+            {
+                svg = svg.Replace(from, ToHex(to), StringComparison.OrdinalIgnoreCase);
+            }
+            fileData = System.Text.Encoding.UTF8.GetBytes(svg);
+        }
+
+        SharpImageFrame frame = DecodeFrame(fileData);
+        try
+        {
+            if (autoOrient)
+            {
+                frame = Replace(frame, SharpImage.Transform.Geometry.AutoOrient(frame));
+            }
+            foreach (var step in steps)
+            {
+                frame = Replace(frame, step(frame));
+            }
+            return ToRgba(frame);
+        }
+        finally
+        {
+            frame.Dispose();
+        }
+    }
+
+    // Swaps a frame for the result of an operation on it, disposing the old one.
+    private static SharpImageFrame Replace(SharpImageFrame old, SharpImageFrame result)
+    {
+        if (!ReferenceEquals(old, result))
+        {
+            old.Dispose();
+        }
+        return result;
+    }
+
+    /// <summary>A colour as #RRGGBB (sRGB), as SVG writes it.</summary>
+    internal static string ToHex(ColorValue color)
+    {
+        (byte r, byte g, byte b) = color.ToSrgbBytes();
+        return $"#{r:X2}{g:X2}{b:X2}";
+    }
+
+    /// <summary>Resizes RGBA8 pixels with SharpImage (Lanczos).</summary>
+    public static byte[] ResizeRgba(byte[] rgba, int width, int height, int newWidth, int newHeight)
+    {
+        using var frame = FromRgba(rgba, width, height);
+        using var resized = SharpImage.Transform.Resize.Apply(frame, newWidth, newHeight);
+        return ToRgba(resized).Rgba;
+    }
+
+    /// <summary>Writes RGBA8 pixels to a file in <paramref name="format"/> (JPEG/WebP use <paramref name="quality"/>).</summary>
+    public static void Save(byte[] rgba, int width, int height, string path, ImageFileFormat format, int quality)
+    {
+        using var frame = FromRgba(rgba, width, height);
+        if (FormatRegistry.DetectFromExtension(path) == format)
+        {
+            FormatRegistry.Write(frame, path, quality);
+        }
+        else
+        {
+            File.WriteAllBytes(path, FormatRegistry.Encode(frame, format));
+        }
+    }
+
+    private static SharpImageFrame FromRgba(byte[] rgba, int width, int height)
+    {
+        var frame = new SharpImageFrame();
+        frame.Initialize(width, height, ColorspaceType.SRGB, hasAlpha: true);
+        for (int y = 0; y < height; y++)
+        {
+            Span<ushort> row = frame.GetPixelRowForWrite(y);
+            for (int i = 0; i < width * 4; i++)
+            {
+                row[i] = Quantum.ScaleFromByte(rgba[(y * width * 4) + i]);
+            }
+        }
+        return frame;
+    }
+
+    private static (byte[] Rgba, int Width, int Height) ToRgba(SharpImageFrame frame)
+    {
         int width = (int)frame.Columns;
         int height = (int)frame.Rows;
         int channels = frame.NumberOfChannels;

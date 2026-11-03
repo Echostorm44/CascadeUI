@@ -390,7 +390,7 @@ internal static class LayoutSolver
             PropertyGrid pg => MeasurePropertyGrid(pg, constraints),
             NotificationBell => new Size(constraints.ConstrainWidth(36f), constraints.ConstrainHeight(36f)),
             EmojiPicker => MeasureEmojiPicker(constraints),
-            QrCode qr => new Size(constraints.ConstrainWidth(qr.QrSize), constraints.ConstrainHeight(qr.QrSize)),
+            QrCode qr => MeasureQrCode(qr, constraints),
             Barcode bc => new Size(constraints.ConstrainWidth(bc.BarcodeWidth), constraints.ConstrainHeight(bc.BarcodeHeight)),
 
             BarChart barChart => MeasureBarChart(barChart, constraints),
@@ -2450,6 +2450,19 @@ internal static class LayoutSolver
             constraints.ConstrainHeight(totalHeight));
     }
 
+    private static Size MeasureQrCode(QrCode qr, LayoutConstraints constraints)
+    {
+        var size = new Size(constraints.ConstrainWidth(qr.QrSize), constraints.ConstrainHeight(qr.QrSize));
+        // The logo (.Logo) fits a centred square that fraction of the code.
+        if (qr.HasLogo && !qr.LogoNode.IsLayoutEmpty)
+        {
+            float side = Math.Min(size.Width, size.Height) * Math.Clamp(qr.LogoSizeFraction, 0.05f, 0.4f);
+            var logo = MeasureChild(qr.LogoNode, new LayoutConstraints(0f, side, 0f, side));
+            PositionChild(qr.LogoNode, (size.Width - logo.Width) / 2f, (size.Height - logo.Height) / 2f);
+        }
+        return size;
+    }
+
     private static Size MeasureEmojiPicker(LayoutConstraints constraints)
     {
         const float cellSize = 36f;
@@ -2692,8 +2705,10 @@ internal static class LayoutSolver
 
     private static Size MeasureImage(Image img, LayoutConstraints constraints)
     {
-        // If the image has (or can resolve) a decoded source, use its intrinsic dimensions
-        ImageSource? source = img.ResolveSource();
+        // If the image has (or can resolve) a decoded source, use its intrinsic dimensions. A lazily
+        // loaded image doesn't start loading here: the painter starts it once it is near the screen.
+        ImageSource? source = img.ResolveSource(start: !img.LazyLoadEnabled);
+        Size size;
         if (source is not null)
         {
             float intrinsicW = source.Width;
@@ -2708,16 +2723,29 @@ internal static class LayoutSolver
                 scale = 1f;
             }
 
-            return new Size(
+            size = new Size(
                 constraints.ConstrainWidth(intrinsicW * scale),
                 constraints.ConstrainHeight(intrinsicH * scale));
         }
+        else
+        {
+            // No source yet — use a reasonable placeholder size
+            const float defaultSize = 200f;
+            size = new Size(
+                constraints.ConstrainWidth(defaultSize),
+                constraints.ConstrainHeight(defaultSize));
+        }
 
-        // No source yet — use a reasonable placeholder size
-        const float defaultSize = 200f;
-        return new Size(
-            constraints.ConstrainWidth(defaultSize),
-            constraints.ConstrainHeight(defaultSize));
+        // The placeholder and error content fill the image's box.
+        foreach (var stand_in in new[] { img.PlaceholderNode, img.ErrorNode })
+        {
+            if (!stand_in.IsLayoutEmpty)
+            {
+                MeasureChild(stand_in, LayoutConstraints.Tight(size));
+                PositionChild(stand_in, 0f, 0f);
+            }
+        }
+        return size;
     }
 
     private static Size MeasureSplitView(SplitView sv, LayoutConstraints constraints)

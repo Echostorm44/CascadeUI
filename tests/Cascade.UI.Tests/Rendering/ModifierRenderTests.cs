@@ -1385,6 +1385,20 @@ public class ModifierRenderTests
         await Assert.That(bell.IsOpen).IsFalse();
     }
 
+    [Test]
+    public async Task QrCodeLogo_IsDrawnInTheMiddle_OnACleanSquare()
+    {
+        var logo = new IconView(Icons.Star, 40).Color(Red).Filled();
+        var qr = new QrCode("https://example.com/cascade", size: 160).Logo(logo, size: 0.25f);
+        using var app = new RenderHarness(() => qr);
+        var frame = app.Frame();
+
+        var b = logo.LayoutData.Bounds;
+        await Assert.That(Math.Abs(b.X + b.Width / 2 - 80f)).IsLessThan(1f);
+        await Assert.That(Math.Abs(b.Y + b.Height / 2 - 80f)).IsLessThan(1f);
+        await Assert.That(frame.Count(p => Math.Abs(p.X - 80) < 20 && Math.Abs(p.Y - 80) < 20 && IsRedPixel(p))).IsGreaterThan(50);
+    }
+
     // Six buttons recording their index when clicked.
     private static ToolBarItem[] SixButtons(List<int> clicks) =>
         [.. Enumerable.Range(0, 6).Select(i => ToolBarItem.Button(Icons.Star, $"Item {i}", () => clicks.Add(i)))];

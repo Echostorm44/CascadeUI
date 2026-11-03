@@ -204,6 +204,8 @@ internal static class NodeDiffer
             IRadioButton rb when !rb.NodeLabel.IsLayoutEmpty => [rb.NodeLabel],
             IToggleGroup tg => SegmentLayout.ToggleOptionNodes(tg),
             ToolBar tb => tb.CustomNodes,
+            Image picture when !picture.PlaceholderNode.IsLayoutEmpty || !picture.ErrorNode.IsLayoutEmpty => Adornments(picture.PlaceholderNode, picture.ErrorNode),
+            QrCode { HasLogo: true, LogoNode.IsLayoutEmpty: false } qrLogo => [qrLogo.LogoNode],
             TextInput adorned when !adorned.PrefixNode.IsLayoutEmpty || !adorned.SuffixNode.IsLayoutEmpty => Adornments(adorned.PrefixNode, adorned.SuffixNode),
             INumberInput number when !number.PrefixContent.IsLayoutEmpty || !number.SuffixContent.IsLayoutEmpty => Adornments(number.PrefixContent, number.SuffixContent),
             TextArea area when !area.PrefixNode.IsLayoutEmpty || !area.SuffixNode.IsLayoutEmpty => Adornments(area.PrefixNode, area.SuffixNode),

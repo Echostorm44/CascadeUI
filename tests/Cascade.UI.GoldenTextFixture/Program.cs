@@ -20,6 +20,10 @@ App.Run<SpecimenView>(config =>
     config.UseEtch();
     config.Theme = new AppleTheme(ThemeMode.Dark);
 
+    // Hundreds of these open during a test run; taking activation each time closed the menus and
+    // popovers other tests had open in their own windows (menus close when their window deactivates).
+    config.ActivateOnStartup = false;
+
     // Logical size = sheet × scale so the device-pixel capture region
     // (sheet × scale) fits the swapchain even on a 100 % DPI machine. On
     // high-DPI machines the window is physically larger than the capture

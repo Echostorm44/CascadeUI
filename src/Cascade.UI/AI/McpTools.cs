@@ -3032,7 +3032,10 @@ internal static class McpTools
         sb.Append($"{{\"title\":\"{EscapeJson(title)}\"");
         sb.Append($",\"width\":{bounds.Width},\"height\":{bounds.Height}");
         sb.Append($",\"x\":{bounds.X},\"y\":{bounds.Y}");
-        sb.Append($",\"focused\":true,\"maximized\":{BoolStr(isMaximized)}");
+        // Whether the window has activation (it was always reported true). Only Windows can say;
+        // elsewhere it stays true. An open menu closes when its window loses activation.
+        bool focused = !OperatingSystem.IsWindows() || App.nativeWindow is not { } win32 || Win32.GetForegroundWindow() == win32.Handle;
+        sb.Append($",\"focused\":{BoolStr(focused)},\"maximized\":{BoolStr(isMaximized)}");
         sb.Append($",\"can_undo\":{BoolStr(canUndo)},\"can_redo\":{BoolStr(canRedo)}");
 #if CASCADE_DEVTOOLS
         sb.Append(",\"build_mode\":\"debug\"");

@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text.Json.Nodes;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
@@ -14,7 +16,7 @@ namespace Cascade.UI.Integration;
 /// menu, and the context-menu key opens the selected row's menu from the keyboard.
 /// </summary>
 [NotInParallel("CliIntegration")]
-public class GridContextMenuCliTests
+public partial class GridContextMenuCliTests
 {
     // Grid geometry: header band = row height (28) + 4, each group header 32, rows 28.
     private const float HeaderHeight = 32f;
@@ -46,7 +48,7 @@ public class GridContextMenuCliTests
                 // Say what the app was showing, so a failure explains itself.
                 string tree = (await Run(appId, "accessibility", "--depth", "12")).StdOut;
                 throw new InvalidOperationException(
-                    $"No batch menu after the right-click at y={Format(LinkRow(1))} (grid y={Format(gridY)}).\nLabels:\n{await Labels(appId)}\nTree:\n{tree}");
+                    $"No batch menu after the right-click at y={Format(LinkRow(1))} (grid y={Format(gridY)}). {Foreground(fixture.Id)}\nLabels:\n{await Labels(appId)}\nTree:\n{tree}");
             }
             var batchItems = batchMenu!["children"]!.AsArray();
             await Assert.That(string.Join("|", batchItems.Select(i => i!["label"]!.GetValue<string>()))).IsEqualTo("Copy 3 clips|Delete 3 clips");
@@ -91,6 +93,40 @@ public class GridContextMenuCliTests
             fixture.Kill();
         }
     }
+
+    // Which process has the active window: an open menu closes when its window loses activation,
+    // which another test's window can take during a full run.
+    private static string Foreground(int fixturePid)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return string.Empty;
+        }
+        nint window = GetForegroundWindow();
+        _ = GetWindowThreadProcessId(window, out uint pid);
+        if (pid == (uint)fixturePid)
+        {
+            return "The fixture's window is active.";
+        }
+        string name;
+        try
+        {
+            name = Process.GetProcessById((int)pid).ProcessName;
+        }
+        catch (ArgumentException)
+        {
+            name = "?";
+        }
+        return $"The fixture's window is NOT active: {name} ({pid}) has activation.";
+    }
+
+    [LibraryImport("user32")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static partial nint GetForegroundWindow();
+
+    [LibraryImport("user32")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static partial uint GetWindowThreadProcessId(nint window, out uint processId);
 
     private static async Task<(string Id, float Y)> FindGrid(string appId)
     {

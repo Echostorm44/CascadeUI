@@ -472,7 +472,7 @@ public static class App
         }
         else
         {
-            window.Show();
+            window.Show(activate: config.ActivateOnStartup);
         }
 
         loop.Run();
@@ -1686,6 +1686,14 @@ public sealed class AppConfig
 
     /// <summary>Whether to start the window minimized.</summary>
     public bool StartMinimized { get; set; }
+
+    /// <summary>
+    /// Whether the window takes activation (keyboard focus, the front) when it first appears.
+    /// Default true. Set false for a window that should open behind the app the user is in: a
+    /// tool started in the background, or a render or test fixture that must not take focus
+    /// from the window someone is working in. Windows only; elsewhere the window manager decides.
+    /// </summary>
+    public bool ActivateOnStartup { get; set; } = true;
 
     /// <summary>Initial window size in logical pixels (DIP). Defaults to 1280×720. Automatically scaled by system DPI.</summary>
     public Size? WindowSize { get; set; }

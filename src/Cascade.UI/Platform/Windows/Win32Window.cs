@@ -452,14 +452,15 @@ internal sealed class Win32Window : IDisposable
             ref value, (uint)sizeof(int));
     }
 
-    internal void Show()
+    internal void Show(bool activate = true)
     {
         if (handle == 0)
         {
             return;
         }
 
-        Win32.ShowWindow(handle, maximizeOnShow ? Win32.SW_SHOWMAXIMIZED : Win32.SW_SHOWNORMAL);
+        // Without activation the window opens behind the active one (AppConfig.ActivateOnStartup).
+        Win32.ShowWindow(handle, maximizeOnShow ? Win32.SW_SHOWMAXIMIZED : activate ? Win32.SW_SHOWNORMAL : Win32.SW_SHOWNOACTIVATE);
         maximizeOnShow = false;
         shown = true;
         Win32.UpdateWindow(handle);

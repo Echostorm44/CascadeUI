@@ -808,10 +808,12 @@ public class ModifierRenderTests
         IComboboxNode node = combo;
         using var app = new RenderHarness(() => combo.Width(200));
         app.Frame();
+        // The rows fade in one after another on the open animation's clock and are drawn once they show.
         node.ToggleOpen();
-        for (int i = 0; i < 20; i++)
+        for (int i = 0; i < 100 && rendered.Distinct().Count() < 3; i++)
         {
             app.Frame();
+            await Task.Delay(10);
         }
 
         await Assert.That(rendered.Distinct().Order().ToList()).IsEquivalentTo(["a", "b", "c"]);
@@ -893,10 +895,13 @@ public class ModifierRenderTests
         app.Frame();
         await Assert.That(selected.Distinct().ToList()).IsEquivalentTo(["b"]);
 
+        // The options fade in one after another on the open animation's clock, and a row is drawn only once
+        // it shows: frame until all three have been drawn (a fast machine runs many frames in no time at all).
         ((ISelectNode)select).ToggleOpen();
-        for (int i = 0; i < 20; i++)
+        for (int i = 0; i < 100 && options.Distinct().Count() < 3; i++)
         {
             app.Frame();
+            await Task.Delay(10);
         }
         await Assert.That(options.Distinct().Order().ToList()).IsEquivalentTo(["a", "b", "c"]);
     }

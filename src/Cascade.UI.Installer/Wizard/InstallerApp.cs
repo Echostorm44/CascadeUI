@@ -81,8 +81,9 @@ public static class InstallerApp
     }
 
     /// <summary>
-    /// Schedules deletion of the install directory after this process exits — needed on uninstall
-    /// because the copied-in <c>uninstall.exe</c> is running and cannot delete itself.
+    /// Schedules removal of the install directory after this process exits, once whatever still held it
+    /// open has let go. Only an empty directory is removed (<c>rmdir</c> without <c>/s</c>): files the app
+    /// saved in its own folder were never installed, and uninstalling must not delete them.
     /// </summary>
     internal static void ScheduleSelfDelete(string installDir)
     {
@@ -95,7 +96,7 @@ public static class InstallerApp
             var startInfo = new ProcessStartInfo
             {
                 FileName = "cmd.exe",
-                Arguments = $"/c ping 127.0.0.1 -n 3 > nul & rmdir /s /q \"{installDir}\"",
+                Arguments = $"/c ping 127.0.0.1 -n 3 > nul & rmdir \"{installDir.TrimEnd('\\', '/')}\"",
                 CreateNoWindow = true,
                 UseShellExecute = false,
             };

@@ -544,6 +544,7 @@ internal static class InstallerPackaging
     // PascalCase JSON; manifest file is ".cascade-install"; registry keys are "HKEY_CURRENT_USER\...").
     private static string UninstallerProgram() => """
         using System.Diagnostics;
+        using System.Runtime.InteropServices;
         using System.Text.Json.Nodes;
         using Microsoft.Win32;
 
@@ -570,6 +571,10 @@ internal static class InstallerPackaging
                 if (manifest is null)
                 {
                     return 20;
+                }
+                if (!Confirmed(args, manifest, installDir))
+                {
+                    return 1602; // ERROR_INSTALL_USEREXIT: the user said no.
                 }
 
                 // Stop + delete services first so their binaries unlock before file removal.
@@ -615,14 +620,24 @@ internal static class InstallerPackaging
                 }
                 TryDelete(manifestPath);
 
-                // This exe is running from installDir and cannot delete itself: hand off to a detached
-                // cmd that waits, then removes the whole dir.
+                // Folders the install made go once they are empty. Anything else in them (an app's own saved
+                // files) was never installed and stays, and so do the folders that hold it.
+                string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(installDir));
+                foreach (string dir in Strings(manifest["InstalledFiles"]).Select(Path.GetDirectoryName).OfType<string>()
+                    .Distinct(StringComparer.OrdinalIgnoreCase).OrderByDescending(d => d.Length))
+                {
+                    RemoveEmptyDirsUpTo(dir, root);
+                }
+
+                // This exe is running from installDir and cannot delete itself: hand off to a detached cmd that
+                // waits, deletes it, then removes the folder only if nothing is left in it (rmdir without /s).
+                string self = Environment.ProcessPath ?? Path.Combine(root, "uninstall.exe");
                 try
                 {
                     Process.Start(new ProcessStartInfo
                     {
                         FileName = "cmd.exe",
-                        Arguments = "/c ping 127.0.0.1 -n 3 > nul & rmdir /s /q \"" + installDir + "\"",
+                        Arguments = "/c ping 127.0.0.1 -n 3 > nul & del /f /q \"" + self + "\" & rmdir \"" + root + "\"",
                         CreateNoWindow = true,
                         UseShellExecute = false,
                     });
@@ -630,6 +645,70 @@ internal static class InstallerPackaging
                 catch (Exception) { }
                 return 0;
             }
+
+            // The Apps list's Uninstall button runs this with no flags and a script passes /silent. Anything else,
+            // a mistyped flag or --help, still asks first: nothing is removed without the user's say-so.
+            private static bool Confirmed(string[] args, JsonNode manifest, string installDir)
+            {
+                foreach (string arg in args)
+                {
+                    if (arg.Equals("/silent", StringComparison.OrdinalIgnoreCase) || arg.Equals("--silent", StringComparison.OrdinalIgnoreCase)
+                        || arg.Equals("/quiet", StringComparison.OrdinalIgnoreCase) || arg.Equals("--quiet", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+                string name = DisplayName(manifest) ?? Path.GetFileName(Path.TrimEndingDirectorySeparator(installDir));
+                const uint YesNoQuestion = 0x04 | 0x20;
+                const int Yes = 6;
+                return MessageBoxW(0, "Remove " + name + " from this PC?\n\nFiles it saved in its own folder are kept.", "Uninstall " + name, YesNoQuestion) == Yes;
+            }
+
+            // The name the Apps list shows, from the uninstall entry the installer registered.
+            private static string? DisplayName(JsonNode manifest)
+            {
+                foreach (string key in Strings(manifest["RegistryKeys"]))
+                {
+                    if (key.StartsWith(HkcuPrefix, StringComparison.OrdinalIgnoreCase)
+                        && key.Contains(@"\Uninstall\", StringComparison.OrdinalIgnoreCase))
+                    {
+                        try
+                        {
+                            using RegistryKey? entry = Registry.CurrentUser.OpenSubKey(key[HkcuPrefix.Length..]);
+                            if (entry?.GetValue("DisplayName") is string { Length: > 0 } name)
+                            {
+                                return name;
+                            }
+                        }
+                        catch (Exception) { }
+                    }
+                }
+                return null;
+            }
+
+            private static void RemoveEmptyDirsUpTo(string dir, string root)
+            {
+                string current = Path.TrimEndingDirectorySeparator(Path.GetFullPath(dir));
+                while (current.Length > root.Length && current.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        if (!Directory.Exists(current) || Directory.EnumerateFileSystemEntries(current).Any())
+                        {
+                            return;
+                        }
+                        Directory.Delete(current);
+                    }
+                    catch (Exception)
+                    {
+                        return;
+                    }
+                    current = Path.GetDirectoryName(current) ?? root;
+                }
+            }
+
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+            private static extern int MessageBoxW(nint owner, string text, string caption, uint type);
 
             private static IEnumerable<string> Strings(JsonNode? array)
             {

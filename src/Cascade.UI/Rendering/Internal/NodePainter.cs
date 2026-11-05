@@ -13392,6 +13392,13 @@ internal sealed partial class NodePainter
             decoration: decoration);
     }
 
+    /// <summary>
+    /// How far, in logical pixels, text may overrun the box it is painted in and still count as
+    /// fitting: float error from summing and subtracting a control's padding, never a real overflow.
+    /// A hundredth of a pixel is far below anything visible.
+    /// </summary>
+    internal const float TextFitTolerance = 0.01f;
+
     /// <summary>Where <see cref="PaintText"/> puts a text block: its origin and how it was laid out.</summary>
     internal readonly record struct TextPlacement(float X, float Y, bool SingleLine, float AvailableWidth, float SingleLineWidth)
     {
@@ -13441,6 +13448,17 @@ internal sealed partial class NodePainter
             FontSize = fontSize,
             MaxWidth = float.PositiveInfinity,
         }).BoundingBox;
+
+        // A box sized to its text can come back a few millionths of a pixel narrower than that
+        // text: layout adds the text's width to the padding and icon, and the painter subtracts
+        // them again in float. An icon Button measured "Copy" at 56.312504, was laid out
+        // 113.3125 wide, handed the label a 56.3125 slot, and the layout ellipsised it to "Co…".
+        // Text that overflows by less than TextFitTolerance fits.
+        if (singleLineSize.Width > availableWidth && singleLineSize.Width - availableWidth <= TextFitTolerance)
+        {
+            availableWidth = singleLineSize.Width;
+        }
+
         bool singleLine = (noWrap && !text.Contains('\n', StringComparison.Ordinal))
             || ShouldCenterAsSingleLine(maxLines, text, singleLineSize.Width, availableWidth);
 

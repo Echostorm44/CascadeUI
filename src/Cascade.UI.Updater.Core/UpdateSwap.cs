@@ -68,9 +68,11 @@ public static class UpdateSwap
     }
 
     /// <summary>
-    /// Swaps the staged tree into place: the previous live files move to the backup directory, the
+    /// Swaps the staged tree into place: the previous version's files move to the backup directory, the
     /// staged files move into the install dir, the install manifest is rewritten to the staged
     /// version with the new file list, and a rollback marker is written. Restores on failure.
+    /// Only what the install owns moves: the entries its manifest lists, and any the update replaces.
+    /// Anything else in the folder (an app that keeps its data beside its exe) is left where it is.
     /// </summary>
     public static void ApplyStaged(string installDir)
     {
@@ -94,12 +96,20 @@ public static class UpdateSwap
         }
         Directory.CreateDirectory(backup);
 
+        List<string> stagedNames = [.. Directory.GetFileSystemEntries(staging).Select(Path.GetFileName).OfType<string>()];
+        HashSet<string> owned = OwnedTopLevelNames(installDir);
+        owned.UnionWith(stagedNames);
+
         var moved = new List<(string name, bool isDir)>();
         try
         {
             foreach (string entry in TopLevelEntries(installDir))
             {
                 string name = Path.GetFileName(entry);
+                if (!owned.Contains(name))
+                {
+                    continue;
+                }
                 bool isDir = Directory.Exists(entry);
                 MoveEntry(entry, Path.Combine(backup, name), isDir);
                 moved.Add((name, isDir));
@@ -119,7 +129,7 @@ public static class UpdateSwap
         Directory.Delete(staging, recursive: true);
         DeleteQuietly(Path.Combine(installDir, UpdateLayout.PendingMarkerName));
 
-        RewriteManifest(installDir, newVersion);
+        RewriteManifest(installDir, newVersion, stagedNames);
         WriteMarker(installDir, UpdateLayout.RollbackMarkerName, "previousVersion", previousVersion, "appliedAt");
     }
 
@@ -144,11 +154,19 @@ public static class UpdateSwap
 
         // Move the current (superseded) tree aside by RENAME, not delete: the running shim executes
         // from this directory, so its own files are locked against deletion but can still be renamed.
+        // Only the update's own entries, and any the backup is about to take back, move aside: the app's data
+        // beside them stays put.
+        List<string> restoredNames = [.. Directory.GetFileSystemEntries(backup).Select(Path.GetFileName).OfType<string>()];
+        HashSet<string> current = OwnedTopLevelNames(installDir);
+        current.UnionWith(restoredNames);
         TryDeleteDir(discard);
         Directory.CreateDirectory(discard);
         foreach (string entry in TopLevelEntries(installDir))
         {
-            MoveEntry(entry, Path.Combine(discard, Path.GetFileName(entry)), Directory.Exists(entry));
+            if (current.Contains(Path.GetFileName(entry)))
+            {
+                MoveEntry(entry, Path.Combine(discard, Path.GetFileName(entry)), Directory.Exists(entry));
+            }
         }
 
         foreach (string entry in Directory.GetFileSystemEntries(backup))
@@ -162,10 +180,7 @@ public static class UpdateSwap
         TryDeleteDir(discard);
 
         string? previousVersion = ReadMarkerString(Path.Combine(installDir, UpdateLayout.RollbackMarkerName), "previousVersion");
-        if (!string.IsNullOrEmpty(previousVersion))
-        {
-            RewriteManifest(installDir, previousVersion);
-        }
+        RewriteManifest(installDir, string.IsNullOrEmpty(previousVersion) ? null : previousVersion, restoredNames);
         DeleteQuietly(Path.Combine(installDir, UpdateLayout.RollbackMarkerName));
         return true;
     }
@@ -288,8 +303,55 @@ public static class UpdateSwap
         return ReadMarkerString(Path.Combine(installDir, UpdateLayout.ManifestFileName), "Version");
     }
 
-    /// <summary>Rewrites the install manifest's version and file list to reflect the swapped contents.</summary>
-    private static void RewriteManifest(string installDir, string newVersion)
+    /// <summary>
+    /// The top-level names (files and folders) the install manifest lists files under, minus the reserved
+    /// bookkeeping. Empty when there is no readable manifest, so nothing unknown is ever treated as owned.
+    /// </summary>
+    internal static HashSet<string> OwnedTopLevelNames(string installDir)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        string path = Path.Combine(installDir, UpdateLayout.ManifestFileName);
+        if (!File.Exists(path))
+        {
+            return names;
+        }
+
+        JsonArray? files;
+        try
+        {
+            files = (JsonNode.Parse(File.ReadAllText(path)) as JsonObject)?["InstalledFiles"] as JsonArray;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return names;
+        }
+
+        foreach (JsonNode? file in files ?? [])
+        {
+            if (file?.GetValue<string>() is not { Length: > 0 } fullPath)
+            {
+                continue;
+            }
+            string relative = Path.GetRelativePath(installDir, fullPath);
+            if (Path.IsPathRooted(relative) || relative.StartsWith("..", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            string top = TopSegment(installDir, fullPath);
+            if (!UpdateLayout.IsReserved(top))
+            {
+                names.Add(top);
+            }
+        }
+        return names;
+    }
+
+    /// <summary>
+    /// Rewrites the install manifest's version (unless null) and its file list: the reserved tools it already
+    /// lists, plus every file now under <paramref name="topLevelNames"/>. Files the app keeps beside its exe are
+    /// never listed, so the uninstaller never deletes them.
+    /// </summary>
+    private static void RewriteManifest(string installDir, string? newVersion, IReadOnlyCollection<string> topLevelNames)
     {
         string path = Path.Combine(installDir, UpdateLayout.ManifestFileName);
         if (!File.Exists(path))
@@ -307,14 +369,33 @@ public static class UpdateSwap
             return;
         }
 
-        root["Version"] = newVersion;
+        if (newVersion is not null)
+        {
+            root["Version"] = newVersion;
+        }
 
         var files = new JsonArray();
-        foreach (string file in Directory.GetFiles(installDir, "*", SearchOption.AllDirectories))
+        // The installer's own tools (the update shim, the uninstaller) are reserved and never swapped: keep them listed.
+        if (root["InstalledFiles"] is JsonArray previous)
         {
-            if (!UpdateLayout.IsReserved(Path.GetFileName(file)) && !UpdateLayout.IsReserved(TopSegment(installDir, file)))
+            foreach (JsonNode? file in previous)
             {
-                JsonNode value = file; // implicit string -> JsonNode (AOT-safe, unlike JsonArray.Add<T>)
+                if (file?.GetValue<string>() is { Length: > 0 } fullPath && UpdateLayout.IsReserved(TopSegment(installDir, fullPath)))
+                {
+                    JsonNode value = fullPath; // implicit string -> JsonNode (AOT-safe, unlike JsonArray.Add<T>)
+                    files.Add(value);
+                }
+            }
+        }
+        foreach (string name in topLevelNames)
+        {
+            string entry = Path.Combine(installDir, name);
+            IEnumerable<string> under = Directory.Exists(entry)
+                ? Directory.GetFiles(entry, "*", SearchOption.AllDirectories)
+                : File.Exists(entry) ? [entry] : [];
+            foreach (string file in under)
+            {
+                JsonNode value = file;
                 files.Add(value);
             }
         }

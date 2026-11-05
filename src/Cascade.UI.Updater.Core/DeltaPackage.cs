@@ -119,9 +119,16 @@ public static class DeltaPackage
         }
         Directory.CreateDirectory(stagingDir);
 
-        // Start from a copy of the current app files (unchanged files are carried over for free).
+        // Start from a copy of the current app files (unchanged files are carried over for free). When the install
+        // manifest says what the install owns, only that is copied: an app's own data beside its exe is not part
+        // of the app, and copying it into the staged tree would make the swap claim it.
+        HashSet<string> owned = UpdateSwap.OwnedTopLevelNames(currentDir);
         foreach ((string rel, string full) in RelativeFiles(currentDir))
         {
+            if (owned.Count > 0 && !owned.Contains(TopSegment(rel)))
+            {
+                continue;
+            }
             string dest = Path.Combine(stagingDir, rel);
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
             File.Copy(full, dest, overwrite: true);

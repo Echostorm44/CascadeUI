@@ -15,6 +15,13 @@
            3-letter-language satellite support; the SDK in use is newer than the 9.0.200 it
            suggests, so the warning is a false positive. -->
     <MSBuildWarningsNotAsErrors>MSB3277;ICU4N_IDE_0002</MSBuildWarningsNotAsErrors>
+
+    <!-- Target framework for everything that RUNS here: examples, tests, test fixtures and internal
+         tools. Shipped libraries under src/ stay on the LTS (net10.0) regardless, so NuGet consumers
+         on .NET 10 can use them. Moving the runnable projects to .NET 11 is a one-line change here
+         (plus SDK 11 locally and in CI) — see TOOLING-005. Overridable (environment variable or -p:)
+         for same-tree A/B runs. -->
+    <CascadeAppTargetFramework Condition="'$(CascadeAppTargetFramework)' == ''">net10.0</CascadeAppTargetFramework>
   </PropertyGroup>
 
   <!-- UseEtchPackage=true (release packing; building against the published Etch) restores a

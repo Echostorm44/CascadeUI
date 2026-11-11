@@ -59,8 +59,13 @@ internal static class GoldenHarness
         RepoRoot, "src", "Cascade.UI.Tools", "bin", Configuration, "net10.0",
         OperatingSystem.IsWindows() ? "cascade.exe" : "cascade");
 
+    // Fixture and test project share $(CascadeAppTargetFramework): use this assembly's own
+    // bin/<Configuration>/<tfm>/ folder name. The CLI under src/ ships on the LTS (net10.0).
+    private static string TestTargetFramework { get; } =
+        IOPath.GetFileName(AppContext.BaseDirectory.TrimEnd(IOPath.DirectorySeparatorChar, IOPath.AltDirectorySeparatorChar));
+
     public static string FixtureExePath => IOPath.Combine(
-        RepoRoot, "tests", "Cascade.UI.GoldenTextFixture", "bin", Configuration, "net10.0",
+        RepoRoot, "tests", "Cascade.UI.GoldenTextFixture", "bin", Configuration, TestTargetFramework,
         OperatingSystem.IsWindows() ? "Cascade.UI.GoldenTextFixture.exe" : "Cascade.UI.GoldenTextFixture");
 
     public static string GoldensDirectory => IOPath.Combine(

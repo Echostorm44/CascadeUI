@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>$(CascadeAppTargetFramework)</TargetFramework>
     <RootNamespace>Cascade.UI.McpBridge.Tests</RootNamespace>
     <AssemblyName>Cascade.UI.McpBridge.Tests</AssemblyName>
     <IsTestProject>true</IsTestProject>

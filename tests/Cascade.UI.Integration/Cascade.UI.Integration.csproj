@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>$(CascadeAppTargetFramework)</TargetFramework>
     <RootNamespace>Cascade.UI.Integration</RootNamespace>
     <AssemblyName>Cascade.UI.Integration</AssemblyName>
     <IsTestProject>true</IsTestProject>

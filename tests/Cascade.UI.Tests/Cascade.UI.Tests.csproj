@@ -4,7 +4,7 @@
     <!-- Cascade.Generators runs here so route tests use real generated factories; its accessibility
          analyzer would flag the unlabeled controls tests build on purpose. -->
     <NoWarn>$(NoWarn);CASCADEA11Y001</NoWarn>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>$(CascadeAppTargetFramework)</TargetFramework>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>Cascade.UI.Tests</RootNamespace>
     <AssemblyName>Cascade.UI.Tests</AssemblyName>

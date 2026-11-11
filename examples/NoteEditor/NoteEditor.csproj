@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>$(CascadeAppTargetFramework)</TargetFramework>
     <AssemblyName>NoteEditor</AssemblyName>
     <RootNamespace>NoteEditor</RootNamespace>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>

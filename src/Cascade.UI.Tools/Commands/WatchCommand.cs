@@ -516,34 +516,42 @@ internal static class WatchCommand
     {
         string projectDir = System.IO.Path.GetDirectoryName(projectPath) ?? ".";
 
-        // Try common output paths
-        string[] candidates =
-        [
-            System.IO.Path.Combine(projectDir, "bin", "Debug", "net10.0"),
-            System.IO.Path.Combine(projectDir, "bin", "Debug", "net9.0"),
-            System.IO.Path.Combine(projectDir, "bin", "Debug", "net8.0"),
-        ];
-
-        foreach (string candidate in candidates)
+        // Ask MSBuild where the Debug build lands: it knows the target framework, runtime
+        // identifier and any OutputPath/ArtifactsPath customisation. Guessing a fixed list of
+        // bin/Debug/<tfm> folders picked a stale folder after a retarget (net10.0 left behind when
+        // the app moved to net11.0) and launched the old build.
+        int exitCode = RunDotnet(
+            $"msbuild \"{projectPath}\" -getProperty:TargetDir -p:Configuration=Debug", out string output);
+        if (exitCode == 0)
         {
-            if (Directory.Exists(candidate))
+            string targetDir = LastNonEmptyLine(output);
+            if (targetDir.Length > 0 && Directory.Exists(targetDir))
             {
-                return candidate;
+                return targetDir;
             }
         }
 
-        // Fall back to first bin/Debug/net* directory found
+        // A multi-targeted project has no single TargetDir. Take the most recently built
+        // bin/Debug/net* folder — the one the preceding build just wrote.
         string debugDir = System.IO.Path.Combine(projectDir, "bin", "Debug");
         if (Directory.Exists(debugDir))
         {
-            var tfms = Directory.GetDirectories(debugDir, "net*");
-            if (tfms.Length > 0)
+            string? newest = Directory.GetDirectories(debugDir, "net*")
+                .OrderByDescending(Directory.GetLastWriteTimeUtc)
+                .FirstOrDefault();
+            if (newest is not null)
             {
-                return tfms[0];
+                return newest;
             }
         }
 
-        return System.IO.Path.Combine(projectDir, "bin", "Debug", "net10.0");
+        return System.IO.Path.Combine(projectDir, "bin", "Debug");
+    }
+
+    private static string LastNonEmptyLine(string text)
+    {
+        string[] lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return lines.Length == 0 ? "" : lines[^1];
     }
 
     private static int RunDotnet(string arguments)

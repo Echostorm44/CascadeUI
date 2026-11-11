@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>$(CascadeAppTargetFramework)</TargetFramework>
     <AssemblyName>Cascade.UI.WatchFixture</AssemblyName>
     <RootNamespace>Cascade.UI.WatchFixture</RootNamespace>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>

@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>$(CascadeAppTargetFramework)</TargetFramework>
     <AssemblyName>ResponsiveMedia</AssemblyName>
     <RootNamespace>ResponsiveMedia</RootNamespace>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>

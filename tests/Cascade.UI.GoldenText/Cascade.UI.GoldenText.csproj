@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>$(CascadeAppTargetFramework)</TargetFramework>
     <RootNamespace>Cascade.UI.GoldenText</RootNamespace>
     <AssemblyName>Cascade.UI.GoldenText</AssemblyName>
     <IsTestProject>true</IsTestProject>

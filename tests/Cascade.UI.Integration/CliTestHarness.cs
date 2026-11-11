@@ -61,9 +61,17 @@ internal static class CliTestHarness
         RepoRoot, "src", "Cascade.UI.Tools", "bin", Configuration, "net10.0",
         OperatingSystem.IsWindows() ? "cascade.exe" : "cascade");
 
+    /// <summary>
+    /// Target-framework folder the test fixtures build into. Fixtures and test projects share
+    /// <c>$(CascadeAppTargetFramework)</c>, so it is this test assembly's own output folder name
+    /// (bin/&lt;Configuration&gt;/&lt;tfm&gt;/). The CLI and bridge under src/ ship on the LTS and stay net10.0.
+    /// </summary>
+    internal static string TestTargetFramework { get; } =
+        System.IO.Path.GetFileName(AppContext.BaseDirectory.TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar));
+
     /// <summary>Full path to the built fixture app executable.</summary>
     public static string FixtureExePath => System.IO.Path.Combine(
-        RepoRoot, "tests", "Cascade.UI.CliFixture", "bin", Configuration, "net10.0",
+        RepoRoot, "tests", "Cascade.UI.CliFixture", "bin", Configuration, TestTargetFramework,
         OperatingSystem.IsWindows() ? "Cascade.UI.CliFixture.exe" : "Cascade.UI.CliFixture");
 
     /// <summary>Full path to the built cascade-mcp bridge executable.</summary>

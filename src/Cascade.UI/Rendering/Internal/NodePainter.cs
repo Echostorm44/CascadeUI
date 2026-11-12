@@ -9452,19 +9452,29 @@ internal sealed partial class NodePainter
             valueBounds = new Rect(valueBounds.X, valueBounds.Y, Math.Max(0f, valueBounds.Width - suffixWidth - TextInputMetrics.AdornmentGap), valueBounds.Height);
         }
 
-        PaintText(text, valueBounds, paddingH, textColor, fontSize: fontSize, alignment: align);
-
         if (!editing)
         {
+            PaintText(text, valueBounds, paddingH, textColor, fontSize: fontSize, alignment: align);
             return;
         }
 
-        // Caret: position it after the substring left of the caret index.
-        int caretIdx = Math.Clamp(InputDispatcher.NumberInputCaretIndex, 0, text.Length);
         float fullW = text.Length == 0 ? 0f : ctx.MeasureTextAdvance(text, fontSize).Width;
         float startX = align == TextAlignment.Center
             ? valueBounds.X + Math.Max(paddingH, (valueBounds.Width - fullW) / 2f)
             : valueBounds.X + paddingH;
+
+        // Select-all (Ctrl+A) highlights the whole value, as a text box does.
+        if (InputDispatcher.NumberInputSelectAll && fullW > 0f)
+        {
+            float hlPadY = 4f;
+            ctx.DrawRect(new Rect(startX, valueBounds.Y + hlPadY, fullW, valueBounds.Height - hlPadY * 2),
+                theme.Colors.Primary.Opacity(0.3f));
+        }
+
+        PaintText(text, valueBounds, paddingH, textColor, fontSize: fontSize, alignment: align);
+
+        // Caret: position it after the substring left of the caret index.
+        int caretIdx = Math.Clamp(InputDispatcher.NumberInputCaretIndex, 0, text.Length);
         string before = text[..caretIdx];
         float beforeW = before.Length == 0 ? 0f : ctx.MeasureTextAdvance(before, fontSize).Width;
         float caretH = fontSize * 1.15f;

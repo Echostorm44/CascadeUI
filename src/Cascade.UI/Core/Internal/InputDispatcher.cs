@@ -414,6 +414,12 @@ internal sealed partial class InputDispatcher
     /// <summary>Caret index within <see cref="NumberEditBuffer"/>.</summary>
     internal static int NumberInputCaretIndex { get; private set; }
 
+    /// <summary>
+    /// Whether all of <see cref="NumberEditBuffer"/> is selected (Ctrl+A): the next typed character,
+    /// paste, Backspace or Delete replaces the whole value.
+    /// </summary>
+    internal static bool NumberInputSelectAll { get; private set; }
+
     /// <summary>Current horizontal scroll offset for the focused PasswordInput (logical pixels).</summary>
     internal static float PasswordScrollOffsetX { get; set; }
 
@@ -4091,6 +4097,18 @@ internal sealed partial class InputDispatcher
 
         CaretResetTimestamp = Stopwatch.GetTimestamp();
 
+        // A number typed into the field being left is saved (whatever moved focus: Tab, a click, the
+        // app), and the shared typing buffer never carries over into the next NumberInput.
+        if (!ReferenceEquals(previousFocus, newFocus))
+        {
+            if (previousFocus is INumberInput leavingNumber)
+            {
+                CommitNumberInputEdit(leavingNumber);
+            }
+            NumberEditBuffer = null;
+            NumberInputSelectAll = false;
+        }
+
         // A debounced change in the field being left is delivered now.
         FlushPendingChange(now: true);
 
@@ -6792,13 +6810,14 @@ internal sealed partial class InputDispatcher
     /// <summary>Commits a pending typing buffer to the control's value (if any) and clears it.</summary>
     private static void CommitNumberInputEdit(INumberInput ni)
     {
+        NumberInputSelectAll = false;
         if (NumberEditBuffer is { } buf)
         {
+            NumberEditBuffer = null;
             if (buf.Trim().Length > 0)
             {
                 ni.TryCommitText(buf); // invalid text leaves the value unchanged
             }
-            NumberEditBuffer = null;
         }
     }
 
@@ -6811,6 +6830,7 @@ internal sealed partial class InputDispatcher
     private bool HandleNumberInputKey(INumberInput ni, NativeKeyEvent evt)
     {
         bool ctrl = evt.Modifiers.HasFlag(ModifierKeys.Ctrl);
+        bool shift = evt.Modifiers.HasFlag(ModifierKeys.Shift);
 
         // Commit / revert / step — valid whether or not a buffer exists yet.
         if (evt.Key == Key.Enter)
@@ -6821,18 +6841,21 @@ internal sealed partial class InputDispatcher
         if (evt.Key == Key.Escape)
         {
             NumberEditBuffer = null; // discard edits, fall back to the bound value
+            NumberInputSelectAll = false;
             RequestRepaint?.Invoke();
             return true;
         }
         if (evt.Key == Key.Up)
         {
             NumberEditBuffer = null;
+            NumberInputSelectAll = false;
             ni.Increment();
             return true;
         }
         if (evt.Key == Key.Down)
         {
             NumberEditBuffer = null;
+            NumberInputSelectAll = false;
             ni.Decrement();
             return true;
         }
@@ -6842,12 +6865,13 @@ internal sealed partial class InputDispatcher
         // Printable character: begin a FRESH edit from empty so the first digit replaces the
         // displayed value (the common "click and type a new number" flow). Subsequent characters
         // append/insert normally.
-        if (evt.Character is char ch && ch >= ' ')
+        if (evt.Character is char ch && ch >= ' ' && !ctrl)
         {
-            if (NumberEditBuffer is null)
+            if (NumberEditBuffer is null || NumberInputSelectAll)
             {
                 NumberEditBuffer = string.Empty;
                 NumberInputCaretIndex = 0;
+                NumberInputSelectAll = false;
             }
             NumberInputCaretIndex = Math.Clamp(NumberInputCaretIndex, 0, NumberEditBuffer.Length);
             if (IsValidNumberChar(ni, ch, NumberEditBuffer, NumberInputCaretIndex))
@@ -6869,26 +6893,82 @@ internal sealed partial class InputDispatcher
         if (ctrl && evt.Key == Key.A)
         {
             NumberInputCaretIndex = NumberEditBuffer.Length;
+            NumberInputSelectAll = NumberEditBuffer.Length > 0;
             return true;
         }
+
+        // Paste inserts the number's characters at the caret (replacing a select-all), dropping
+        // anything else a copied value brings along (spaces, a line break, thousands separators).
+        if ((ctrl && evt.Key == Key.V) || (shift && evt.Key == Key.Insert))
+        {
+            var content = Clipboard.GetContentAsync().GetAwaiter().GetResult();
+            string? pasted = content.HasText ? content.GetTextAsync().GetAwaiter().GetResult() : null;
+            if (!string.IsNullOrEmpty(pasted))
+            {
+                if (NumberInputSelectAll)
+                {
+                    NumberEditBuffer = string.Empty;
+                    NumberInputCaretIndex = 0;
+                    NumberInputSelectAll = false;
+                }
+                foreach (char pc in pasted)
+                {
+                    if (IsValidNumberChar(ni, pc, NumberEditBuffer, NumberInputCaretIndex))
+                    {
+                        NumberEditBuffer = NumberEditBuffer.Insert(NumberInputCaretIndex, pc.ToString());
+                        NumberInputCaretIndex++;
+                    }
+                }
+            }
+            return true;
+        }
+
+        // Copy / cut act on a select-all (there is no partial selection).
+        if ((ctrl && evt.Key is Key.C or Key.X or Key.Insert) || (shift && evt.Key == Key.Delete))
+        {
+            if (NumberInputSelectAll)
+            {
+                _ = Clipboard.WriteTextAsync(NumberEditBuffer);
+                if (evt.Key is Key.X || (shift && evt.Key == Key.Delete))
+                {
+                    NumberEditBuffer = string.Empty;
+                    NumberInputCaretIndex = 0;
+                    NumberInputSelectAll = false;
+                }
+            }
+            return true;
+        }
+
         if (evt.Key == Key.Left)
         {
-            if (NumberInputCaretIndex > 0) { NumberInputCaretIndex--; }
+            // An arrow collapses a select-all to the side it points at.
+            if (NumberInputSelectAll) { NumberInputSelectAll = false; NumberInputCaretIndex = 0; }
+            else if (NumberInputCaretIndex > 0) { NumberInputCaretIndex--; }
             return true;
         }
         if (evt.Key == Key.Right)
         {
-            if (NumberInputCaretIndex < NumberEditBuffer.Length) { NumberInputCaretIndex++; }
+            if (NumberInputSelectAll) { NumberInputSelectAll = false; NumberInputCaretIndex = NumberEditBuffer.Length; }
+            else if (NumberInputCaretIndex < NumberEditBuffer.Length) { NumberInputCaretIndex++; }
             return true;
         }
         if (evt.Key == Key.Home)
         {
+            NumberInputSelectAll = false;
             NumberInputCaretIndex = 0;
             return true;
         }
         if (evt.Key == Key.End)
         {
+            NumberInputSelectAll = false;
             NumberInputCaretIndex = NumberEditBuffer.Length;
+            return true;
+        }
+        if (NumberInputSelectAll && evt.Key is Key.Backspace or Key.Delete)
+        {
+            NumberEditBuffer = string.Empty;
+            NumberInputCaretIndex = 0;
+            NumberInputSelectAll = false;
             return true;
         }
         if (evt.Key == Key.Backspace)
@@ -6933,6 +7013,7 @@ internal sealed partial class InputDispatcher
     {
         // A stepper/scroll interaction cancels any in-progress typing (its value wins).
         NumberEditBuffer = null;
+        NumberInputSelectAll = false;
 
         var bounds = Live(ni, ni.AbsoluteBounds);
         float relX = lastMousePosition.X - bounds.X;

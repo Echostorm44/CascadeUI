@@ -105,6 +105,10 @@ public static class FocusManager
         }
 
         NotifyFocusChanged(previous, false);
+        if (previous is not null)
+        {
+            InputDispatcher.NotifyFocusMoved(previous, null);
+        }
     }
 
     /// <summary>

@@ -3,6 +3,7 @@ name: Commit Pipeline
 on:
   push:
     branches: ['**']
+  workflow_dispatch:
   schedule:
     - cron: '0 2 * * 0'
 

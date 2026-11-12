@@ -38,6 +38,13 @@ public class NumberInputKeyboardTests
         return (app, page);
     }
 
+    // A key Windows also reports as a character message (WM_CHAR arrives as its own Key.None event).
+    private static void PressWithChar(RenderHarness app, Key key, char ch, ModifierKeys modifiers = ModifierKeys.None)
+    {
+        app.Press(key, modifiers);
+        app.Press(Key.None, character: ch);
+    }
+
     private static void Type(RenderHarness app, string text)
     {
         foreach (char c in text)
@@ -53,17 +60,44 @@ public class NumberInputKeyboardTests
         using (app)
         {
             Type(app, "3840");
-            app.Press(Key.Tab);
+            PressWithChar(app, Key.Tab, '\t');
             app.Frame();
             await Assert.That(page.Width).IsEqualTo(3840);
             await Assert.That(InputDispatcher.NumberEditBuffer).IsNull();
 
             // Typing in the second field edits its own value, and Shift+Tab saves that too.
             Type(app, "2160");
-            app.Press(Key.Tab, ModifierKeys.Shift);
+            PressWithChar(app, Key.Tab, '\t', ModifierKeys.Shift);
             app.Frame();
             await Assert.That(page.Height).IsEqualTo(2160);
             await Assert.That(page.Width).IsEqualTo(3840);
+        }
+    }
+
+    [Test]
+    public async Task TypingAfterEnterOrEscape_ReplacesTheValue()
+    {
+        var (app, page) = Open();
+        using (app)
+        {
+            Type(app, "500");
+            PressWithChar(app, Key.Enter, '\r');
+            await Assert.That(page.Width).IsEqualTo(500);
+            Type(app, "600");
+            PressWithChar(app, Key.Enter, '\r');
+            await Assert.That(page.Width).IsEqualTo(600);
+
+            // Escape reverts the typed digit and leaves the field; Tab comes back to it.
+            Type(app, "9");
+            PressWithChar(app, Key.Escape, (char)27);
+            app.Frame();
+            await Assert.That(page.Width).IsEqualTo(600);
+            await Assert.That(InputDispatcher.NumberEditBuffer).IsNull();
+            PressWithChar(app, Key.Tab, '\t');
+            app.Frame();
+            Type(app, "700");
+            PressWithChar(app, Key.Enter, '\r');
+            await Assert.That(page.Width).IsEqualTo(700);
         }
     }
 

@@ -3520,6 +3520,9 @@ internal sealed partial class InputDispatcher
                 return;
             }
 
+            // Escape reverts a number being typed (ClearFocus would save it).
+            NumberEditBuffer = null;
+            NumberInputSelectAll = false;
             FocusManager.ClearFocus();
             textInputBuffer = null;
             ActiveEditBuffer = null;
@@ -6882,7 +6885,17 @@ internal sealed partial class InputDispatcher
             return true; // swallow non-numeric printable keys too
         }
 
-        // Navigation / deletion edit the EXISTING value — seed the buffer from it if needed.
+        // Navigation / deletion edit the EXISTING value — seed the buffer from it if needed. Nothing
+        // else may: Windows follows Tab, Enter, Escape and Backspace with a character message (Key.None,
+        // carrying tab, carriage return, escape or backspace), and seeding on it left the field "editing"
+        // its old value, so the next typed digit was appended to it instead of replacing it.
+        bool editKey = evt.Key is Key.Left or Key.Right or Key.Home or Key.End or Key.Backspace or Key.Delete
+            || (ctrl && evt.Key is Key.A or Key.V or Key.C or Key.X or Key.Insert)
+            || (shift && evt.Key is Key.Insert or Key.Delete);
+        if (!editKey)
+        {
+            return false;
+        }
         if (NumberEditBuffer is null)
         {
             NumberEditBuffer = ni.EditableText;
